@@ -1,0 +1,18 @@
+# Planning and reference documents
+PLAN.md
+
+# macOS
+.DS_Store
+
+# Xcode
+build/
+DerivedData/
+xcuserdata/
+*.xcuserstate
+
+# SPM
+.build/
+.swiftpm/
+
+# Dev logger output lives outside the repo, but just in case
+dictation-dev/
