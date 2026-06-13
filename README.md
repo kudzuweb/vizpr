@@ -1,8 +1,38 @@
 # vizpr
 
-A local, on-device, streaming dictation app for macOS. Hold or tap the Fn key, speak, watch a live transcript in a floating glass HUD, and on release the text is injected into the focused app.
+A local, on-device, streaming dictation app for macOS. Hold or tap the Fn key,
+speak, watch a live transcript in a floating glass HUD, and on release the text
+is injected into the focused app. You proofread as you speak — what the overlay
+shows at the moment you stop is exactly what gets injected.
 
 - ASR: Parakeet TDT 0.6B v2 (CoreML / Apple Neural Engine) via FluidAudio
-- Cleanup: local LLM (Qwen3.5-4B) via mlx-swift
+- Cleanup: local LLM (Qwen3-4B-Instruct-2507) via mlx-swift-lm
 - Menu-bar app, macOS 15+, Swift 6 strict concurrency
-- No network, ever. No telemetry, no transcript persistence.
+- **No network, ever.** No telemetry, no transcript persistence.
+
+## Building
+
+Requirements: macOS 15+, Xcode 26 SDK, [XcodeGen](https://github.com/yonaskolb/XcodeGen)
+(`brew install xcodegen`) and optionally [SwiftLint](https://github.com/realm/SwiftLint)
+(`brew install swiftlint`).
+
+```sh
+./scripts/bootstrap.sh        # generates Vizpr.xcodeproj from project.yml, resolves deps
+open Vizpr.xcodeproj          # or build from the command line:
+xcodebuild -project Vizpr.xcodeproj -scheme Vizpr -configuration Debug build
+```
+
+The Xcode project and `Vizpr/Info.plist` are generated from `project.yml` and are
+gitignored — `project.yml` plus the Swift sources are the source of truth. Run
+`scripts/bootstrap.sh` again whenever `project.yml` changes.
+
+Debug builds include a compile-gated dev transcript logger (`DICT_DEV_LOG`);
+Release builds exclude it entirely.
+
+## Installing (for others)
+
+This app is not notarized. To run a downloaded build, macOS Sequoia requires you
+to allow it once under **System Settings → Privacy & Security → Open Anyway**.
+Because the app requests microphone and Accessibility access (system-wide text
+injection), the most trustworthy path is to **build it yourself** from source as
+above — Xcode signs it with your own local identity and Gatekeeper stays quiet.
