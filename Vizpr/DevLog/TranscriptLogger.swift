@@ -19,5 +19,11 @@ enum VizprTranscriptLogger {
             .expandingTildeInPath
         print("[\(buildMarker)] dev transcript log target: \(path)")
     }
+
+    /// Emit a one-off developer breadcrumb. A stand-in until PR 7's structured
+    /// JSONL records; useful for eyeballing the pipeline during bring-up.
+    static func note(_ message: String) {
+        print("[\(buildMarker)] \(message)")
+    }
 }
 #endif

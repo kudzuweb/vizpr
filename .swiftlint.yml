@@ -30,12 +30,15 @@ line_length:
   ignores_urls: true
 
 identifier_name:
-  min_length: 2          # allow short, meaningful names like "t" for time in pure machines? keep 2
-  excluded:
+  min_length: 2
+  excluded:                # conventional short-lived locals (tests, math, reducers)
     - id
-    - t
+    - t                    # time
     - x
     - y
+    - m                    # machine under test
+    - d                    # decision under test
+    - z                    # SplitMix64 scratch word
 
 type_body_length:
   warning: 400
