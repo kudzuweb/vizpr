@@ -16,3 +16,8 @@ xcuserdata/
 
 # Dev logger output lives outside the repo, but just in case
 dictation-dev/
+
+# Spike workspace: vendored clones, venvs, downloaded models
+spikes/FluidAudio/
+spikes/**/.venv/
+spikes/**/results-*.json
