@@ -1,0 +1,46 @@
+# SwiftLint configuration for Vizpr.
+# Conservative ruleset: catches real problems, stays out of the way of the
+# project's deliberate style (inline "what + why" comments on non-obvious code).
+
+included:
+  - Vizpr
+  - VizprTests
+
+excluded:
+  - spikes
+  - .build
+  - DerivedData
+  - Vizpr.xcodeproj
+
+disabled_rules:
+  - todo                 # PR plan tracks work; TODO/FIXME comments are expected mid-build
+
+opt_in_rules:
+  - empty_count
+  - closure_spacing
+  - explicit_init
+  - first_where
+  - sorted_first_last
+  - unneeded_parentheses_in_closure_argument
+
+line_length:
+  warning: 120
+  error: 160
+  ignores_comments: true
+  ignores_urls: true
+
+identifier_name:
+  min_length: 2          # allow short, meaningful names like "t" for time in pure machines? keep 2
+  excluded:
+    - id
+    - t
+    - x
+    - y
+
+type_body_length:
+  warning: 400
+  error: 600
+
+file_length:
+  warning: 500
+  error: 800

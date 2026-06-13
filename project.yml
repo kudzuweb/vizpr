@@ -1,0 +1,114 @@
+# XcodeGen spec — the source of truth for the Xcode project.
+# Regenerate the project with: scripts/bootstrap.sh  (or: xcodegen generate)
+# The generated Vizpr.xcodeproj and Vizpr/Info.plist are gitignored; this file
+# plus the Swift sources are what is version-controlled.
+
+name: Vizpr
+
+options:
+  bundleIdPrefix: com.kudzuweb
+  deploymentTarget:
+    macOS: "15.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+
+# Two pinned third-party dependencies (invariant 3). FluidAudio is pinned to an
+# immutable commit; the MLX runtime is pinned to an exact tag. The cleanup LLM
+# runtime lives in mlx-swift-lm (a separate package from core mlx-swift, which it
+# pulls transitively) — see spikes/REPORT.md.
+packages:
+  FluidAudio:
+    url: https://github.com/FluidInference/FluidAudio.git
+    revision: 7f963cdc43ba89c5993654f1e138047d517a818d
+  mlx-swift-lm:
+    url: https://github.com/ml-explore/mlx-swift-lm
+    exactVersion: 3.31.3
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"                  # Swift 6 language mode
+    SWIFT_STRICT_CONCURRENCY: complete    # strict concurrency, project-wide (invariant 4)
+    DEVELOPMENT_TEAM: LYZ9DRB744          # stable dev identity; TCC grants are identity-bound
+    CODE_SIGN_STYLE: Automatic
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    # Hardened Runtime + entitlements are written in PR 12, against actual API use.
+    ENABLE_HARDENED_RUNTIME: NO
+  configs:
+    Debug:
+      # DICT_DEV_LOG compiles the dev transcript logger into Debug only; it is
+      # physically absent from Release (invariant 7 / §14).
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG DICT_DEV_LOG
+      SWIFT_OPTIMIZATION_LEVEL: "-Onone"
+      ONLY_ACTIVE_ARCH: YES
+    Release:
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: ""
+      SWIFT_OPTIMIZATION_LEVEL: "-O"
+
+configs:
+  Debug: debug
+  Release: release
+
+targets:
+  Vizpr:
+    type: application
+    platform: macOS
+    sources:
+      - path: Vizpr
+        excludes:
+          - "**/.gitkeep"
+    info:
+      path: Vizpr/Info.plist
+      properties:
+        # Menu-bar agent: no Dock icon, no main window (§14).
+        LSUIElement: true
+        CFBundleName: Vizpr
+        CFBundleDisplayName: Vizpr
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        LSMinimumSystemVersion: "$(MACOSX_DEPLOYMENT_TARGET)"
+        NSHumanReadableCopyright: ""
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kudzuweb.vizpr
+    dependencies:
+      - package: FluidAudio
+      - package: mlx-swift-lm
+        product: MLXLLM
+      - package: mlx-swift-lm
+        product: MLXLMCommon
+    preBuildScripts:
+      - name: SwiftLint
+        basedOnDependencyAnalysis: false
+        script: |
+          if which swiftlint >/dev/null; then
+            swiftlint --quiet
+          else
+            echo "warning: SwiftLint not installed — skipping lint"
+          fi
+
+  VizprTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - VizprTests
+    dependencies:
+      - target: Vizpr
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kudzuweb.vizprTests
+        GENERATE_INFOPLIST_FILE: YES   # test bundle needs a plist; no custom keys required
+
+schemes:
+  Vizpr:
+    build:
+      targets:
+        Vizpr: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - VizprTests
+    archive:
+      config: Release
