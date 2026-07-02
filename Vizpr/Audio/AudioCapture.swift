@@ -13,7 +13,7 @@ final class AtomicCounter: Sendable {
 
 /// Abstraction over the microphone so the pipeline can be tested with synthetic
 /// audio (PLAN.md §8: system APIs behind protocol seams).
-protocol AudioSource: Sendable {
+protocol CaptureSource: Sendable {
     /// Begin capture and return the sample stream: 16 kHz mono Float32, batch
     /// sizes determined by the hardware route. Throws if the mic permission is
     /// missing or the audio engine cannot start.
@@ -33,7 +33,7 @@ enum AudioCaptureError: Error {
 /// Engine/tap lifecycle is MainActor-only; the tap callback owns its converter
 /// exclusively (created per start, captured only by that closure), so the only
 /// cross-thread traffic is the Sendable continuation and an atomic counter.
-final class MicrophoneCapture: AudioSource, @unchecked Sendable {
+final class MicrophoneCapture: CaptureSource, @unchecked Sendable {
     static let sampleRate = 16_000.0
 
     // Touched only from the @MainActor start()/stop() methods (the same
