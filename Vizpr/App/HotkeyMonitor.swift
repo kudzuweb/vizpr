@@ -128,6 +128,14 @@ final class HotkeyMonitor: @unchecked Sendable {
         return CGEvent.tapIsEnabled(tap: port)
     }
 
+    /// Feed a VAD-silence auto-stop into the state machine (PLAN.md §6): the
+    /// same single commit path as a key press — the machine commits only from
+    /// `latched` and ignores this everywhere else. Never a bypass.
+    @MainActor
+    func injectAutoStop() {
+        apply(machine.handle(.autoStop))
+    }
+
     // MARK: Event handling (called from the tap callback, on the main thread)
 
     /// Translate one CGEvent into machine input(s) and return its disposition.
