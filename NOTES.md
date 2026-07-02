@@ -31,6 +31,20 @@ The two edge-tracking bugs lived in the untestable shell, so the fix extracted
 the edge logic into a pure `FlagEdgeTracker` with its own unit tests — turning
 shell logic the property tests couldn't reach into tested value-type code.
 
+## Carried forward to PR 11 (Settings)
+
+From the second-pass review of PR 2 (Fable, 2026-07-02) — two menu/UX nits that
+belong with the Settings work rather than the hotkey PR:
+
+1. **Menu label wrong when capability is ready but the monitor isn't started**:
+   `refreshMenu` falls through to "Grant Accessibility…" even though clicking it
+   just calls `start()`. Needs a distinct "Enable hotkey" label/state.
+2. **Menu goes stale on external grant**: capability is only re-evaluated at
+   launch and after menu actions. If the user grants Accessibility directly in
+   System Settings, the menu keeps showing the grant item until clicked. Fix
+   with `NSMenuDelegate.menuNeedsUpdate` (re-evaluate on menu open) when the
+   menu is rebuilt for Settings.
+
 ## Environment prerequisites discovered
 
 - **Metal Toolchain** is required to build the mlx-swift dependency (it compiles

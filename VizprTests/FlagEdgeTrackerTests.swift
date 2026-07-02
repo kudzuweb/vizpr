@@ -45,15 +45,44 @@ struct FlagEdgeTrackerTests {
         #expect(edges == [.fnDown, .secondaryDown])
     }
 
-    @Test("reset clears state so a missed up-event cannot strand fnDown")
-    func resetClearsStaleState() {
+    @Test("First snapshot after reset seeds the baseline silently")
+    func resetSeedsSilently() {
         var tracker = tracker()
         _ = tracker.edges(for: [.maskSecondaryFn])     // Fn down
         #expect(tracker.fnDown)
-        // Simulate a tap re-enable after the Fn release was missed while disabled.
+        // Tap re-enabled after a blind window; whatever the first snapshot says
+        // is adopted as the baseline without emitting edges.
         tracker.reset()
-        #expect(!tracker.fnDown)
-        // The next real Fn-down is now correctly seen as a fresh down edge.
+        #expect(tracker.edges(for: [.maskSecondaryFn]).isEmpty)   // still held → no edge
+        #expect(tracker.fnDown)                                    // baseline adopted
+        // The real release, observed live, now produces a correct up edge...
+        #expect(tracker.edges(for: []) == [.fnUp])
+        // ...and the next press a correct down edge.
+        #expect(tracker.edges(for: [.maskSecondaryFn]) == [.fnDown])
+    }
+
+    @Test("Ambiguous post-reset packet cannot start a spurious session")
+    func postResetPacketWithOtherModifierEmitsNothing() {
+        var tracker = tracker()
+        _ = tracker.edges(for: [.maskSecondaryFn])     // dictating, Fn held
+        tracker.reset()                                 // secure input killed the tap
+        // User, still holding Fn, presses Shift to type a password character. The
+        // packet {Fn, Shift} must NOT read as an Fn-down edge — the old behavior
+        // started a dictation session here and deleted Shift's transition packet.
+        #expect(tracker.edges(for: [.maskSecondaryFn, .maskShift]).isEmpty)
+        // Follow-up changes are tracked normally from the adopted baseline.
+        #expect(tracker.edges(for: [.maskShift]) == [.fnUp])
+    }
+
+    @Test("A missed trigger is the accepted cost of an ambiguous resync")
+    func freshPressAfterResetIsMissedOnce() {
+        var tracker = tracker()
+        tracker.reset()
+        // If the very first packet after re-enable IS a fresh Fn press, it seeds
+        // silently — the plan prefers a missed trigger over an ambiguous consume.
+        #expect(tracker.edges(for: [.maskSecondaryFn]).isEmpty)
+        // Releasing and pressing again works normally.
+        #expect(tracker.edges(for: []) == [.fnUp])
         #expect(tracker.edges(for: [.maskSecondaryFn]) == [.fnDown])
     }
 
@@ -65,5 +94,13 @@ struct FlagEdgeTrackerTests {
         // identical to the stranded state, so no edge is produced — which is
         // exactly why the shell must call reset() on every re-enable.
         #expect(tracker.edges(for: [.maskSecondaryFn]).isEmpty)
+    }
+
+    @Test("Init is seeded: the first-ever Fn press emits immediately")
+    func initIsSeeded() {
+        var tracker = tracker()
+        // No silent-seed penalty on a fresh launch — dictation works on the very
+        // first press after the tap installs.
+        #expect(tracker.edges(for: [.maskSecondaryFn]) == [.fnDown])
     }
 }

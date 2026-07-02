@@ -111,6 +111,12 @@ final class HotkeyMonitor: @unchecked Sendable {
         runLoopSource = nil
         machPort = nil
         edges.reset()
+        // Discard any in-flight session so a later start() cannot resume a
+        // phantom latched/pressed state and mis-commit on the first press.
+        // tapDisabled has exactly the semantics we want: cancel-from-active,
+        // inert-from-idle, and it routes a .cancel to the pipeline if one is
+        // listening. apply() also tears down the threshold timer via the sync.
+        apply(machine.handle(.tapDisabled(.timeout)))
     }
 
     /// Whether the tap currently reports healthy. The watchdog re-enables a dead
