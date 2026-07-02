@@ -150,6 +150,11 @@ final class HotkeyMonitor: @unchecked Sendable {
             // reset BOTH the machine and the edge tracker: a press whose release
             // was missed while we were disabled must not strand `fnDown` true and
             // swallow the next press's edge.
+            #if DICT_DEV_LOG
+            VizprTranscriptLogger.note(
+                "tap disabled by \(type == .tapDisabledByTimeout ? "timeout" : "userInput") — re-enabling"
+            )
+            #endif
             reEnableTap()
             apply(machine.handle(.tapDisabled(type == .tapDisabledByTimeout ? .timeout : .userInput)))
             return Unmanaged.passUnretained(event)
@@ -240,6 +245,9 @@ final class HotkeyMonitor: @unchecked Sendable {
         let timer = Timer(timeInterval: 2.0, repeats: true) { [weak self] _ in
             guard let self, let port = self.machPort else { return }
             if !CGEvent.tapIsEnabled(tap: port) {
+                #if DICT_DEV_LOG
+                VizprTranscriptLogger.note("tap watchdog: tap found dead — re-enabling")
+                #endif
                 // Reset any in-flight press and edge state: a tap that died
                 // mid-session is already broken, and a clean idle is fail-open.
                 self.reEnableTap()

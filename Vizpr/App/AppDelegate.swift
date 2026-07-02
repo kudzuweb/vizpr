@@ -14,11 +14,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var actionsTask: Task<Void, Never>?
     private var audioPipeline: AudioPipeline?
 
+    /// NSApplication holds its delegate weakly, and a local would be releasable
+    /// by the optimizer after its last use even though app.run() never returns —
+    /// deallocating the delegate (and the hotkey tap with it) mid-flight in
+    /// Release builds. A static keeps ownership unambiguous.
+    private static var retainedDelegate: AppDelegate?
+
     static func main() {
         let app = NSApplication.shared
         let delegate = AppDelegate()
-        // `delegate` is weakly held by NSApplication; the strong reference here
-        // lives for the whole process because app.run() blocks until quit.
+        retainedDelegate = delegate
         app.delegate = delegate
         app.run()
     }

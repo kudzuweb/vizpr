@@ -15,6 +15,8 @@ actor SpeechDetector {
         let event: VadStreamEvent?
         /// Hysteresis speech state after this chunk — drives the silence watchdog.
         let speechActive: Bool
+        /// Raw per-chunk speech probability (diagnostics / dev logging).
+        let probability: Float
     }
 
     static let chunkSize = VadManager.chunkSize   // 4096 samples = 256 ms @ 16 kHz
@@ -59,7 +61,8 @@ actor SpeechDetector {
             updates.append(Update(
                 chunk: chunk,
                 event: result.event,
-                speechActive: result.state.triggered
+                speechActive: result.state.triggered,
+                probability: result.probability
             ))
         }
         streamState = current

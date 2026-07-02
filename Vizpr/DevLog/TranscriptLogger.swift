@@ -21,18 +21,38 @@ enum VizprTranscriptLogger {
 
     private static let log = Logger(subsystem: "com.kudzuweb.vizpr", category: "devlog")
 
+    /// Debug breadcrumbs also land here: unified logging drops debug-level
+    /// lines under load, and a flat file is diagnosable after the fact.
+    private static let debugFileURL: URL = {
+        let dir = ("~/Documents/dictation-dev" as NSString).expandingTildeInPath
+        try? FileManager.default.createDirectory(
+            atPath: dir, withIntermediateDirectories: true
+        )
+        return URL(fileURLWithPath: dir + "/debug.log")
+    }()
+
     /// Placeholder behavior: report where the dev transcript log will be written.
     /// Real append-on-dictation logic arrives in PR 7.
     static func announce() {
         let path = ("~/Documents/dictation-dev/transcripts.jsonl" as NSString)
             .expandingTildeInPath
-        log.debug("[\(buildMarker, privacy: .public)] dev transcript log target: \(path, privacy: .public)")
+        note("dev transcript log target: \(path)")
     }
 
     /// Emit a one-off developer breadcrumb. A stand-in until PR 7's structured
     /// JSONL records; useful for eyeballing the pipeline during bring-up.
+    /// Called from the main thread only (pipeline + monitor are main-isolated).
     static func note(_ message: String) {
         log.debug("[\(buildMarker, privacy: .public)] \(message, privacy: .public)")
+        let line = "\(Date().ISO8601Format()) \(message)\n"
+        guard let data = line.data(using: .utf8) else { return }
+        if let handle = try? FileHandle(forWritingTo: debugFileURL) {
+            defer { try? handle.close() }
+            _ = try? handle.seekToEnd()
+            try? handle.write(contentsOf: data)
+        } else {
+            try? data.write(to: debugFileURL)
+        }
     }
 }
 #endif

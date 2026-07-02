@@ -8,7 +8,7 @@ import Synchronization
 final class AtomicCounter: Sendable {
     private let storage = Atomic<Int>(0)
     func increment() { storage.add(1, ordering: .relaxed) }
-    var count: Int { storage.load(ordering: .relaxed) }
+    var value: Int { storage.load(ordering: .relaxed) }
 }
 
 /// Abstraction over the microphone so the pipeline can be tested with synthetic
@@ -46,10 +46,18 @@ final class MicrophoneCapture: AudioSource, @unchecked Sendable {
     /// the dev logger; a nonzero value means ASR lost audio.
     let droppedBatches = AtomicCounter()
 
+    /// Diagnostics: tap==0 → engine/tap never fired; tap>0 && converted==0 →
+    /// every conversion failed silently. Read at stop() by the dev logger.
+    let tapInvocations = AtomicCounter()
+    let convertedBatches = AtomicCounter()
+
     @MainActor
     func start() async throws -> AsyncStream<[Float]> {
         stop()   // tolerate re-start without leaking a tap
 
+        #if DICT_DEV_LOG
+        VizprTranscriptLogger.note("capture: permission=\(AVAudioApplication.shared.recordPermission.rawValue)")
+        #endif
         guard await Self.ensureMicrophonePermission() else {
             throw AudioCaptureError.microphonePermissionDenied
         }
@@ -57,6 +65,11 @@ final class MicrophoneCapture: AudioSource, @unchecked Sendable {
         let engine = AVAudioEngine()
         let input = engine.inputNode
         let hardwareFormat = input.outputFormat(forBus: 0)
+        #if DICT_DEV_LOG
+        VizprTranscriptLogger.note(
+            "capture: hw format \(hardwareFormat.sampleRate)Hz x\(hardwareFormat.channelCount)ch"
+        )
+        #endif
 
         guard let targetFormat = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
@@ -75,22 +88,79 @@ final class MicrophoneCapture: AudioSource, @unchecked Sendable {
             of: [Float].self, bufferingPolicy: .bufferingNewest(64)
         )
         self.continuation = continuation
-        let dropped = droppedBatches
 
-        input.installTap(onBus: 0, bufferSize: 4096, format: hardwareFormat) { buffer, _ in
-            // Realtime thread: convert, yield, return. No locks, no allocs beyond
-            // the conversion buffer, no waiting (yield with bufferingNewest never
-            // suspends — it drops the oldest batch instead).
-            let ratio = Self.sampleRate / hardwareFormat.sampleRate
+        // The tap block MUST be formed outside any actor context: a closure
+        // created inside this @MainActor method inherits MainActor isolation,
+        // and Swift 6 inserts a dynamic executor assertion that traps (SIGTRAP)
+        // when AVFAudio invokes the tap on its realtime messenger queue. The
+        // nonisolated factory produces an isolation-free closure.
+        let tapBlock = Self.makeTapBlock(context: TapContext(
+            converter: converter,
+            targetFormat: targetFormat,
+            hardwareSampleRate: hardwareFormat.sampleRate,
+            continuation: continuation,
+            taps: tapInvocations,
+            converts: convertedBatches,
+            dropped: droppedBatches
+        ))
+        input.installTap(onBus: 0, bufferSize: 4096, format: hardwareFormat, block: tapBlock)
+
+        engine.prepare()
+        try engine.start()
+        self.engine = engine
+        #if DICT_DEV_LOG
+        VizprTranscriptLogger.note("capture: engine started, isRunning=\(engine.isRunning)")
+        #endif
+        return stream
+    }
+
+    @MainActor
+    func stop() {
+        #if DICT_DEV_LOG
+        if engine != nil {
+            let counters = "taps=\(tapInvocations.value) converted=\(convertedBatches.value)"
+            VizprTranscriptLogger.note("capture: stopping — \(counters) dropped=\(droppedBatches.value)")
+        }
+        #endif
+        engine?.inputNode.removeTap(onBus: 0)
+        engine?.stop()
+        engine = nil
+        continuation?.finish()
+        continuation = nil
+    }
+
+    /// Everything the realtime tap needs, bundled so the nonisolated factory can
+    /// take one argument. @unchecked Sendable: the converter is exclusively owned
+    /// by the tap block after construction (created fresh per start, captured
+    /// nowhere else); everything else is Sendable or immutable.
+    private struct TapContext: @unchecked Sendable {
+        let converter: AVAudioConverter
+        let targetFormat: AVAudioFormat
+        let hardwareSampleRate: Double
+        let continuation: AsyncStream<[Float]>.Continuation
+        let taps: AtomicCounter
+        let converts: AtomicCounter
+        let dropped: AtomicCounter
+    }
+
+    /// Build the tap callback in a nonisolated context so it carries no actor
+    /// isolation (see call site). Runs on AVFAudio's realtime messenger queue:
+    /// convert, yield, return — no locks, no waiting (yield with bufferingNewest
+    /// never suspends; it drops the oldest batch instead).
+    private nonisolated static func makeTapBlock(context: TapContext) -> AVAudioNodeTapBlock {
+        { buffer, _ in
+            context.taps.increment()
+            let ratio = sampleRate / context.hardwareSampleRate
             let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 16
-            guard let converted = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: capacity) else {
-                return
-            }
+            guard let converted = AVAudioPCMBuffer(
+                pcmFormat: context.targetFormat, frameCapacity: capacity
+            ) else { return }
+
             // nonisolated(unsafe): the converter invokes its input block
             // synchronously within this call; nothing escapes the frame.
             nonisolated(unsafe) var pulled = false
             var conversionError: NSError?
-            converter.convert(to: converted, error: &conversionError) { _, status in
+            context.converter.convert(to: converted, error: &conversionError) { _, status in
                 if pulled {
                     status.pointee = .noDataNow
                     return nil
@@ -104,24 +174,11 @@ final class MicrophoneCapture: AudioSource, @unchecked Sendable {
                   let channel = converted.floatChannelData else { return }
 
             let samples = Array(UnsafeBufferPointer(start: channel[0], count: Int(converted.frameLength)))
-            if case .dropped = continuation.yield(samples) {
-                dropped.increment()
+            context.converts.increment()
+            if case .dropped = context.continuation.yield(samples) {
+                context.dropped.increment()
             }
         }
-
-        engine.prepare()
-        try engine.start()
-        self.engine = engine
-        return stream
-    }
-
-    @MainActor
-    func stop() {
-        engine?.inputNode.removeTap(onBus: 0)
-        engine?.stop()
-        engine = nil
-        continuation?.finish()
-        continuation = nil
     }
 
     /// Resolve mic permission, prompting once if undetermined. The prompt only

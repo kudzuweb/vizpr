@@ -52,26 +52,47 @@ final class AudioPipeline {
             )
             await detector.reset()
 
+            #if DICT_DEV_LOG
+            var chunkCount = 0
+            #endif
+
             do {
                 let stream = try await source.start()
                 for await samples in stream {
                     guard !Task.isCancelled else { break }
                     for update in try await detector.process(samples) {
                         #if DICT_DEV_LOG
+                        chunkCount += 1
                         if let event = update.event {
                             VizprTranscriptLogger.note("vad event: \(event.kind) t=\(event.time ?? -1)")
+                        }
+                        // One line per second (4 chunks × 256 ms): raw level +
+                        // VAD probability, to separate capture problems (rms≈0)
+                        // from detection problems (rms healthy, prob low).
+                        if chunkCount % 4 == 0 {
+                            let rms = Self.rms(update.chunk)
+                            VizprTranscriptLogger.note(String(
+                                format: "vad chunk %d: rms=%.4f prob=%.2f active=%d",
+                                chunkCount, rms, update.probability, update.speechActive ? 1 : 0
+                            ))
                         }
                         #endif
                         if watchdog.observe(
                             chunkSampleCount: update.chunk.count,
                             speechActive: update.speechActive
                         ) {
+                            #if DICT_DEV_LOG
+                            VizprTranscriptLogger.note("watchdog fired -> autoStop (chunk \(chunkCount))")
+                            #endif
                             // Routed through the hotkey machine — the single
                             // commit path. Inert unless the session is latched.
                             onAutoStop()
                         }
                     }
                 }
+                #if DICT_DEV_LOG
+                VizprTranscriptLogger.note("audio stream ended after \(chunkCount) chunks")
+                #endif
             } catch {
                 #if DICT_DEV_LOG
                 VizprTranscriptLogger.note("audio pipeline error: \(error)")
@@ -85,5 +106,19 @@ final class AudioPipeline {
         sessionTask = nil
         source.stop()
         Task { await detector.reset() }
+        #if DICT_DEV_LOG
+        if let capture = source as? MicrophoneCapture, capture.droppedBatches.value > 0 {
+            VizprTranscriptLogger.note("dropped audio batches this run: \(capture.droppedBatches.value)")
+        }
+        #endif
     }
+
+    #if DICT_DEV_LOG
+    /// Root-mean-square level of a chunk — diagnostics only.
+    private static func rms(_ samples: [Float]) -> Float {
+        guard !samples.isEmpty else { return 0 }
+        let sumOfSquares = samples.reduce(Float(0)) { $0 + $1 * $1 }
+        return (sumOfSquares / Float(samples.count)).squareRoot()
+    }
+    #endif
 }
