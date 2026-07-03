@@ -79,9 +79,12 @@ struct FluidAudioASRTests {
 
         var drafts: [(windowID: Int, text: String)] = []
         var finals: [Final] = []
+        var draftPrecededFinal = false
         for await event in engine.transcribe(audio) {
             switch event {
-            case let .draft(windowID, text): drafts.append((windowID, text))
+            case let .draft(windowID, text):
+                drafts.append((windowID, text))
+                if finals.isEmpty { draftPrecededFinal = true }
             case let .finalized(text, confidence, tokenConfidences):
                 finals.append(Final(
                     text: text, confidence: confidence, tokenConfidences: tokenConfidences
@@ -89,6 +92,12 @@ struct FluidAudioASRTests {
             }
         }
         feedTask.cancel()
+
+        // The draft track (PR 4.5): live drafts must exist and must arrive
+        // before the first ~12s confirmation — this was the field-measured
+        // "no text for 12 seconds" gap.
+        #expect(!drafts.isEmpty, "draft track produced no drafts")
+        #expect(draftPrecededFinal, "no draft arrived before the first confirmation")
 
         assertGoldenExpectations(finals: finals, drafts: drafts)
     }
