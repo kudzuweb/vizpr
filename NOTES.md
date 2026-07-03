@@ -45,7 +45,10 @@ by the golden corpus.
   observation, 2026-07-03). Exact turn is undetermined — no marker was emitted,
   and the model can't reliably self-detect mid-session. The adversarial-review-
   heavy PR 5/6 work was plausibly Opus, but that's inference, not fact.
-  **On return: confirm the active model with /model.**
+- **2026-07-03 (evening):** Mauria switched back to Fable 5 via /model. Fable
+  re-verified the suite (104 tests), reviewed PRs 3–6a fresh (findings below in
+  session state), and resumed. Also fixed a handoff error: three 6b artifacts
+  had been parked in /tmp (volatile) instead of build/6b-hold — rescued.
 
 ## Model authorship handoff
 
