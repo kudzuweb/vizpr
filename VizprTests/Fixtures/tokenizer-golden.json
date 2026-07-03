@@ -1,0 +1,685 @@
+{
+  "model": "Qwen3-4B-Instruct-2507-4bit",
+  "tokenizer_class": "Qwen2Tokenizer",
+  "eos_token_id": 151645,
+  "cases": [
+    {
+      "text": "hello world",
+      "ids": [
+        14990,
+        1879
+      ],
+      "decoded": "hello world"
+    },
+    {
+      "text": "The quick brown fox.",
+      "ids": [
+        785,
+        3974,
+        13876,
+        38835,
+        13
+      ],
+      "decoded": "The quick brown fox."
+    },
+    {
+      "text": "",
+      "ids": [],
+      "decoded": ""
+    },
+    {
+      "text": "CamelCase",
+      "ids": [
+        25406,
+        301,
+        4207
+      ],
+      "decoded": "CamelCase"
+    },
+    {
+      "text": "camelCase",
+      "ids": [
+        93321,
+        4207
+      ],
+      "decoded": "camelCase"
+    },
+    {
+      "text": "snake_case_name",
+      "ids": [
+        72139,
+        19096,
+        1269
+      ],
+      "decoded": "snake_case_name"
+    },
+    {
+      "text": "HTTPServer",
+      "ids": [
+        9230,
+        5475
+      ],
+      "decoded": "HTTPServer"
+    },
+    {
+      "text": "iOSApp",
+      "ids": [
+        62760,
+        2164
+      ],
+      "decoded": "iOSApp"
+    },
+    {
+      "text": "'The'",
+      "ids": [
+        17323,
+        383,
+        6
+      ],
+      "decoded": "'The'"
+    },
+    {
+      "text": "getURLPath",
+      "ids": [
+        455,
+        3144,
+        1820
+      ],
+      "decoded": "getURLPath"
+    },
+    {
+      "text": "XMLHttpRequest",
+      "ids": [
+        10609,
+        26362
+      ],
+      "decoded": "XMLHttpRequest"
+    },
+    {
+      "text": "it's",
+      "ids": [
+        275,
+        594
+      ],
+      "decoded": "it's"
+    },
+    {
+      "text": "IT'S",
+      "ids": [
+        952,
+        13272
+      ],
+      "decoded": "IT'S"
+    },
+    {
+      "text": "don't",
+      "ids": [
+        15007,
+        944
+      ],
+      "decoded": "don't"
+    },
+    {
+      "text": "DON'T",
+      "ids": [
+        84641,
+        17323
+      ],
+      "decoded": "DON'T"
+    },
+    {
+      "text": "we're",
+      "ids": [
+        896,
+        2299
+      ],
+      "decoded": "we're"
+    },
+    {
+      "text": "they've",
+      "ids": [
+        20069,
+        3003
+      ],
+      "decoded": "they've"
+    },
+    {
+      "text": "I'd",
+      "ids": [
+        40,
+        4172
+      ],
+      "decoded": "I'd"
+    },
+    {
+      "text": "'Does it work?'",
+      "ids": [
+        27705,
+        7072,
+        432,
+        975,
+        20224
+      ],
+      "decoded": "'Does it work?'"
+    },
+    {
+      "text": "y'all can't won't",
+      "ids": [
+        88,
+        64848,
+        646,
+        944,
+        2765,
+        944
+      ],
+      "decoded": "y'all can't won't"
+    },
+    {
+      "text": "12345",
+      "ids": [
+        16,
+        17,
+        18,
+        19,
+        20
+      ],
+      "decoded": "12345"
+    },
+    {
+      "text": "3.14159",
+      "ids": [
+        18,
+        13,
+        16,
+        19,
+        16,
+        20,
+        24
+      ],
+      "decoded": "3.14159"
+    },
+    {
+      "text": "$200",
+      "ids": [
+        3,
+        17,
+        15,
+        15
+      ],
+      "decoded": "$200"
+    },
+    {
+      "text": "1,000,000",
+      "ids": [
+        16,
+        11,
+        15,
+        15,
+        15,
+        11,
+        15,
+        15,
+        15
+      ],
+      "decoded": "1,000,000"
+    },
+    {
+      "text": "version 2.0.1",
+      "ids": [
+        4366,
+        220,
+        17,
+        13,
+        15,
+        13,
+        16
+      ],
+      "decoded": "version 2.0.1"
+    },
+    {
+      "text": "wait... what? yes!",
+      "ids": [
+        11489,
+        1112,
+        1128,
+        30,
+        9834,
+        0
+      ],
+      "decoded": "wait... what? yes!"
+    },
+    {
+      "text": "a.b.c",
+      "ids": [
+        64,
+        948,
+        520
+      ],
+      "decoded": "a.b.c"
+    },
+    {
+      "text": "  leading spaces",
+      "ids": [
+        220,
+        6388,
+        12621
+      ],
+      "decoded": "  leading spaces"
+    },
+    {
+      "text": "trailing spaces  ",
+      "ids": [
+        376,
+        14277,
+        12621,
+        256
+      ],
+      "decoded": "trailing spaces  "
+    },
+    {
+      "text": "tabs\tand\ttabs",
+      "ids": [
+        30993,
+        52477,
+        3244,
+        3435
+      ],
+      "decoded": "tabs\tand\ttabs"
+    },
+    {
+      "text": "line1\nline2",
+      "ids": [
+        1056,
+        16,
+        198,
+        1056,
+        17
+      ],
+      "decoded": "line1\nline2"
+    },
+    {
+      "text": "crlf\r\nnext",
+      "ids": [
+        66,
+        2381,
+        69,
+        319,
+        3600
+      ],
+      "decoded": "crlf\r\nnext"
+    },
+    {
+      "text": "\n ",
+      "ids": [
+        198,
+        220
+      ],
+      "decoded": "\n "
+    },
+    {
+      "text": " \n",
+      "ids": [
+        715
+      ],
+      "decoded": " \n"
+    },
+    {
+      "text": "mixed \r\n  spaces",
+      "ids": [
+        56685,
+        2529,
+        220,
+        12621
+      ],
+      "decoded": "mixed \r\n  spaces"
+    },
+    {
+      "text": "café résumé naïve",
+      "ids": [
+        924,
+        58858,
+        9333,
+        1242,
+        963,
+        94880,
+        586
+      ],
+      "decoded": "café résumé naïve"
+    },
+    {
+      "text": "日本語のテキスト",
+      "ids": [
+        101059,
+        102819,
+        15767,
+        56833,
+        61803,
+        70534
+      ],
+      "decoded": "日本語のテキスト"
+    },
+    {
+      "text": "emoji 🎉 test 👍🏽",
+      "ids": [
+        37523,
+        11162,
+        236,
+        231,
+        1273,
+        61804,
+        235,
+        145375
+      ],
+      "decoded": "emoji 🎉 test 👍🏽"
+    },
+    {
+      "text": "é combining",
+      "ids": [
+        963,
+        34171
+      ],
+      "decoded": "é combining"
+    },
+    {
+      "text": "ͅ ypogegrammeni",
+      "ids": [
+        137,
+        227,
+        75975,
+        538,
+        791,
+        2396,
+        5676,
+        72
+      ],
+      "decoded": "ͅ ypogegrammeni"
+    },
+    {
+      "text": "nbsp here",
+      "ids": [
+        5674,
+        4102,
+        6739
+      ],
+      "decoded": "nbsp here"
+    },
+    {
+      "text": "zwj‍joiner",
+      "ids": [
+        30781,
+        73,
+        378,
+        235,
+        5987,
+        261
+      ],
+      "decoded": "zwj‍joiner"
+    },
+    {
+      "text": "Začnimo kuća međa",
+      "ids": [
+        57,
+        64,
+        13152,
+        77,
+        11366,
+        36600,
+        7730,
+        64,
+        752,
+        50996,
+        64
+      ],
+      "decoded": "Začnimo kuća međa"
+    },
+    {
+      "text": "<|im_end|>",
+      "ids": [
+        151645
+      ],
+      "decoded": "<|im_end|>"
+    },
+    {
+      "text": "say <|im_start|> literally",
+      "ids": [
+        36790,
+        220,
+        151644,
+        15901
+      ],
+      "decoded": "say <|im_start|> literally"
+    },
+    {
+      "text": "<|endoftext|>",
+      "ids": [
+        151643
+      ],
+      "decoded": "<|endoftext|>"
+    },
+    {
+      "text": "<think> not thinking </think>",
+      "ids": [
+        151667,
+        537,
+        7274,
+        220,
+        151668
+      ],
+      "decoded": "<think> not thinking </think>"
+    },
+    {
+      "text": "🥳🥳🥳<|im_end|>",
+      "ids": [
+        145863,
+        145863,
+        145863,
+        151645
+      ],
+      "decoded": "🥳🥳🥳<|im_end|>"
+    },
+    {
+      "text": "text🎉<|endoftext|>more",
+      "ids": [
+        1318,
+        144841,
+        151643,
+        6384
+      ],
+      "decoded": "text🎉<|endoftext|>more"
+    },
+    {
+      "text": "func compute(x: Int) -> Bool { return x > 0 }",
+      "ids": [
+        2830,
+        12564,
+        2075,
+        25,
+        1333,
+        8,
+        1464,
+        12608,
+        314,
+        470,
+        856,
+        861,
+        220,
+        15,
+        335
+      ],
+      "decoded": "func compute(x: Int) -> Bool { return x > 0 }"
+    },
+    {
+      "text": "arr[i] = arr[i] + 1;",
+      "ids": [
+        1118,
+        989,
+        60,
+        284,
+        2890,
+        989,
+        60,
+        488,
+        220,
+        16,
+        26
+      ],
+      "decoded": "arr[i] = arr[i] + 1;"
+    },
+    {
+      "text": "obj.method().chain()",
+      "ids": [
+        2295,
+        12908,
+        1005,
+        8819,
+        368
+      ],
+      "decoded": "obj.method().chain()"
+    },
+    {
+      "text": "a && b || !c",
+      "ids": [
+        64,
+        1009,
+        293,
+        1369,
+        753,
+        66
+      ],
+      "decoded": "a && b || !c"
+    },
+    {
+      "text": "kubernetes GitHub Pydantic API PostgreSQL",
+      "ids": [
+        74,
+        29827,
+        32095,
+        5355,
+        67,
+        8159,
+        5333,
+        73601
+      ],
+      "decoded": "kubernetes GitHub Pydantic API PostgreSQL"
+    },
+    {
+      "text": "Okay, so the first tap ended itself, but the second tap appears to be working.",
+      "ids": [
+        32313,
+        11,
+        773,
+        279,
+        1156,
+        15239,
+        9482,
+        5086,
+        11,
+        714,
+        279,
+        2086,
+        15239,
+        7952,
+        311,
+        387,
+        3238,
+        13
+      ],
+      "decoded": "Okay, so the first tap ended itself, but the second tap appears to be working."
+    },
+    {
+      "text": "We don't say accidental discharge. We say negligent discharge for a reason.",
+      "ids": [
+        1654,
+        1513,
+        944,
+        1977,
+        48916,
+        31543,
+        13,
+        1205,
+        1977,
+        94761,
+        31543,
+        369,
+        264,
+        2874,
+        13
+      ],
+      "decoded": "We don't say accidental discharge. We say negligent discharge for a reason."
+    },
+    {
+      "text": "I think this cadence is pretty good, actually. I like this.",
+      "ids": [
+        40,
+        1744,
+        419,
+        19409,
+        763,
+        374,
+        5020,
+        1661,
+        11,
+        3520,
+        13,
+        358,
+        1075,
+        419,
+        13
+      ],
+      "decoded": "I think this cadence is pretty good, actually. I like this."
+    },
+    {
+      "text": "This is going to translate pretty well into a good UI. Nice. Good work, Fable.",
+      "ids": [
+        1986,
+        374,
+        2087,
+        311,
+        14683,
+        5020,
+        1632,
+        1119,
+        264,
+        1661,
+        3689,
+        13,
+        28859,
+        13,
+        7684,
+        975,
+        11,
+        434,
+        480,
+        13
+      ],
+      "decoded": "This is going to translate pretty well into a good UI. Nice. Good work, Fable."
+    }
+  ],
+  "chat_template_example": {
+    "rendered": "<|im_start|>system\nYou clean up transcripts.<|im_end|>\n<|im_start|>user\nhelo wrld<|im_end|>\n<|im_start|>assistant\n",
+    "ids": [
+      151644,
+      8948,
+      198,
+      2610,
+      4240,
+      705,
+      60312,
+      13,
+      151645,
+      198,
+      151644,
+      872,
+      198,
+      71,
+      20172,
+      3112,
+      507,
+      151645,
+      198,
+      151644,
+      77091,
+      198
+    ]
+  }
+}
