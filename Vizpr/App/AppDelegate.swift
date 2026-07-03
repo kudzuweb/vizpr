@@ -1,4 +1,5 @@
 import AppKit
+import FluidAudio
 
 /// Application entry point and menu-bar lifecycle owner.
 ///
@@ -29,6 +30,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // FIRST, before any FluidAudio API is touched: hard-disable its download
+        // paths. Every fetch/download entry point throws from here on — the
+        // app can only load models that shipped in its bundle (invariant 1).
+        DownloadUtils.enforceOffline = true
+
         // LSUIElement already implies accessory; set it explicitly so the policy
         // is unambiguous regardless of how the process was launched.
         NSApp.setActivationPolicy(.accessory)
@@ -50,20 +56,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotkeyMonitor.stop()
     }
 
-    /// Build the capture→VAD→auto-stop pipeline against the bundled VAD model.
-    /// A load failure means a broken bundle: fail loudly (invariant — never limp
-    /// along without the model).
+    /// Build the capture→VAD→ASR→auto-stop pipeline against the bundled models.
+    /// Load failures mean a broken bundle: fail loudly (invariant — never limp
+    /// along without a model).
     private func setUpAudioPipeline() {
-        audioPipeline = AudioPipeline.makeDefault { [hotkeyMonitor] in
+        let engine = FluidAudioASR()
+        audioPipeline = AudioPipeline.makeDefault(engine: engine) { [hotkeyMonitor] in
             hotkeyMonitor.injectAutoStop()
         }
-        if audioPipeline == nil {
-            let alert = NSAlert()
-            alert.messageText = "Vizpr's bundled voice-detection model failed to load."
-            alert.informativeText = "The app bundle is damaged — rebuild or reinstall Vizpr."
-            alert.runModal()
-            NSApp.terminate(nil)
+        guard audioPipeline != nil else {
+            failLoudly(
+                "Vizpr's bundled voice-detection model failed to load.",
+                detail: "The app bundle is damaged — rebuild or reinstall Vizpr."
+            )
+            return
         }
+
+        // Warm the ASR engine at launch (encoder compilation takes seconds; the
+        // first dictation shouldn't pay it). Missing model = broken build.
+        Task { @MainActor in
+            do {
+                try await engine.prepare()
+                #if DICT_DEV_LOG
+                VizprTranscriptLogger.note("asr engine prepared")
+                #endif
+            } catch {
+                self.failLoudly(
+                    "Vizpr's speech model failed to load.",
+                    detail: "Run scripts/fetch-models.sh and rebuild, or reinstall. (\(error))"
+                )
+            }
+        }
+    }
+
+    private func failLoudly(_ message: String, detail: String) {
+        let alert = NSAlert()
+        alert.messageText = message
+        alert.informativeText = detail
+        alert.runModal()
+        NSApp.terminate(nil)
     }
 
     // MARK: Hotkey wiring

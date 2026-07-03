@@ -10,6 +10,9 @@ if ! which xcodegen >/dev/null; then
   exit 1
 fi
 
+echo "Fetching bundled models (skips if present) ..."
+./scripts/fetch-models.sh
+
 echo "Generating Vizpr.xcodeproj from project.yml ..."
 xcodegen generate
 

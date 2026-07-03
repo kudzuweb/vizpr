@@ -8,12 +8,23 @@ import Synchronization
 final class AtomicCounter: Sendable {
     private let storage = Atomic<Int>(0)
     func increment() { storage.add(1, ordering: .relaxed) }
+    func storeMax(_ candidate: Int) {
+        var current = storage.load(ordering: .relaxed)
+        while candidate > current {
+            let (exchanged, original) = storage.weakCompareExchange(
+                expected: current, desired: candidate,
+                successOrdering: .relaxed, failureOrdering: .relaxed
+            )
+            if exchanged { return }
+            current = original
+        }
+    }
     var value: Int { storage.load(ordering: .relaxed) }
 }
 
 /// Abstraction over the microphone so the pipeline can be tested with synthetic
 /// audio (PLAN.md §8: system APIs behind protocol seams).
-protocol AudioSource: Sendable {
+protocol CaptureSource: Sendable {
     /// Begin capture and return the sample stream: 16 kHz mono Float32, batch
     /// sizes determined by the hardware route. Throws if the mic permission is
     /// missing or the audio engine cannot start.
@@ -33,7 +44,7 @@ enum AudioCaptureError: Error {
 /// Engine/tap lifecycle is MainActor-only; the tap callback owns its converter
 /// exclusively (created per start, captured only by that closure), so the only
 /// cross-thread traffic is the Sendable continuation and an atomic counter.
-final class MicrophoneCapture: AudioSource, @unchecked Sendable {
+final class MicrophoneCapture: CaptureSource, @unchecked Sendable {
     static let sampleRate = 16_000.0
 
     // Touched only from the @MainActor start()/stop() methods (the same
@@ -51,6 +62,12 @@ final class MicrophoneCapture: AudioSource, @unchecked Sendable {
     let tapInvocations = AtomicCounter()
     let convertedBatches = AtomicCounter()
 
+    /// Peak RMS of the RAW hardware buffer (scaled ×1e6), measured before any
+    /// conversion. Distinguishes "the device is delivering silence" (peak≈0)
+    /// from "the converter is zeroing good audio" (raw peak healthy, converted
+    /// rms 0) — the discriminator for silent-capture bugs.
+    let rawPeakLevel = AtomicCounter()
+
     @MainActor
     func start() async throws -> AsyncStream<[Float]> {
         stop()   // tolerate re-start without leaking a tap
@@ -66,8 +83,9 @@ final class MicrophoneCapture: AudioSource, @unchecked Sendable {
         let input = engine.inputNode
         let hardwareFormat = input.outputFormat(forBus: 0)
         #if DICT_DEV_LOG
+        let device = AVCaptureDevice.default(for: .audio)?.localizedName ?? "unknown"
         VizprTranscriptLogger.note(
-            "capture: hw format \(hardwareFormat.sampleRate)Hz x\(hardwareFormat.channelCount)ch"
+            "capture: hw format \(hardwareFormat.sampleRate)Hz x\(hardwareFormat.channelCount)ch device=\(device)"
         )
         #endif
 
@@ -101,7 +119,8 @@ final class MicrophoneCapture: AudioSource, @unchecked Sendable {
             continuation: continuation,
             taps: tapInvocations,
             converts: convertedBatches,
-            dropped: droppedBatches
+            dropped: droppedBatches,
+            rawPeak: rawPeakLevel
         ))
         input.installTap(onBus: 0, bufferSize: 4096, format: hardwareFormat, block: tapBlock)
 
@@ -119,7 +138,10 @@ final class MicrophoneCapture: AudioSource, @unchecked Sendable {
         #if DICT_DEV_LOG
         if engine != nil {
             let counters = "taps=\(tapInvocations.value) converted=\(convertedBatches.value)"
-            VizprTranscriptLogger.note("capture: stopping — \(counters) dropped=\(droppedBatches.value)")
+            let raw = String(format: "rawPeak=%.4f", Double(rawPeakLevel.value) / 1_000_000)
+            VizprTranscriptLogger.note(
+                "capture: stopping — \(counters) dropped=\(droppedBatches.value) \(raw)"
+            )
         }
         #endif
         engine?.inputNode.removeTap(onBus: 0)
@@ -141,6 +163,7 @@ final class MicrophoneCapture: AudioSource, @unchecked Sendable {
         let taps: AtomicCounter
         let converts: AtomicCounter
         let dropped: AtomicCounter
+        let rawPeak: AtomicCounter
     }
 
     /// Build the tap callback in a nonisolated context so it carries no actor
@@ -150,6 +173,17 @@ final class MicrophoneCapture: AudioSource, @unchecked Sendable {
     private nonisolated static func makeTapBlock(context: TapContext) -> AVAudioNodeTapBlock {
         { buffer, _ in
             context.taps.increment()
+
+            // Raw-level probe (every 8th buffer): peak RMS of what the hardware
+            // actually delivered, before conversion touches it.
+            if context.taps.value % 8 == 0, let raw = buffer.floatChannelData {
+                let count = Int(buffer.frameLength)
+                var sum: Float = 0
+                for idx in 0..<count { sum += raw[0][idx] * raw[0][idx] }
+                let rms = count > 0 ? (sum / Float(count)).squareRoot() : 0
+                context.rawPeak.storeMax(Int(rms * 1_000_000))
+            }
+
             let ratio = sampleRate / context.hardwareSampleRate
             let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 16
             guard let converted = AVAudioPCMBuffer(

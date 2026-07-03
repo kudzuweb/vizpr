@@ -111,11 +111,13 @@ enum HotkeyState: Sendable, Hashable {
 /// No system APIs, no clock reads, no I/O — every transition is a value→value
 /// function, exhaustively testable with synthetic inputs and chosen timestamps.
 struct HotkeyStateMachine {
-    /// Tap-vs-hold boundary (~200 ms default). Named, injectable parameter.
+    /// Tap-vs-hold boundary. Named, injectable parameter. Default 280 ms: the
+    /// plan's ~200 ms proved too tight against real fingers (a relaxed human tap
+    /// runs 150-250 ms and was misread as a hold, committing on release).
     let holdThreshold: Duration
     private(set) var state: HotkeyState
 
-    init(holdThreshold: Duration = .milliseconds(200), state: HotkeyState = .idle) {
+    init(holdThreshold: Duration = .milliseconds(280), state: HotkeyState = .idle) {
         self.holdThreshold = holdThreshold
         self.state = state
     }
