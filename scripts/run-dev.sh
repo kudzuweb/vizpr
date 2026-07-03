@@ -16,6 +16,15 @@ if [[ ! -d "$APP" ]]; then
     -derivedDataPath build/dd build >/dev/null
 fi
 
+# Kill any running instance first: `open` would otherwise just activate the
+# old process instead of launching the freshly built binary, silently testing
+# stale code. (Ctrl+C below only stops the log stream, not the app.)
+if pgrep -f "Vizpr.app/Contents/MacOS/Vizpr" >/dev/null; then
+  echo "Quitting running Vizpr instance ..."
+  pkill -f "Vizpr.app/Contents/MacOS/Vizpr"
+  sleep 1
+fi
+
 echo "Launching $APP ..."
 open "$APP"
 
