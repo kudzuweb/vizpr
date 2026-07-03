@@ -33,7 +33,13 @@ actor FluidAudioASR: TranscriptionEngine {
     )
 
     private let modelsDirectory: URL
-    private var manager: SlidingWindowAsrManager?
+    /// Loaded CoreML models, reused across sessions (the expensive part: ~443 MB
+    /// and seconds of load time). The SlidingWindowAsrManager itself is created
+    /// fresh per transcribe() call: its input stream is built once at init and
+    /// finish() terminates it permanently — reset() does NOT recreate it, so a
+    /// reused manager silently ignores all audio after its first session
+    /// (observed live: transcription worked exactly once per launch).
+    private var models: AsrModels?
 
     /// - Parameter modelsDirectory: directory holding the v2 `.mlmodelc` set.
     ///   Defaults to the bundled copy at Resources/Models/parakeet-tdt-0.6b-v2.
@@ -43,7 +49,7 @@ actor FluidAudioASR: TranscriptionEngine {
     }
 
     func prepare() async throws {
-        guard manager == nil else { return }
+        guard models == nil else { return }
 
         // The offline switch must be thrown before any FluidAudio model API is
         // touched (AppDelegate does it at launch); refusing to proceed without
@@ -57,13 +63,19 @@ actor FluidAudioASR: TranscriptionEngine {
 
         // encoderPrecision only affects v3 file naming; v2 uses its fixed
         // Encoder.mlmodelc regardless, so the default is fine.
-        let models = try await AsrModels.load(
+        models = try await AsrModels.load(
             from: modelsDirectory,
             version: .v2
         )
+    }
+
+    /// Build a single-session manager wired to the cached models. Cheap: the
+    /// models are already loaded; this only constructs the windowing state.
+    private func makeSessionManager() async throws -> SlidingWindowAsrManager? {
+        guard let models else { return nil }
         let manager = SlidingWindowAsrManager(config: Self.lockedConfig)
         try await manager.loadModels(models)
-        self.manager = manager
+        return manager
     }
 
     /// nonisolated: builds the event stream synchronously (satisfying the
@@ -72,7 +84,7 @@ actor FluidAudioASR: TranscriptionEngine {
     nonisolated func transcribe(_ audio: AsyncStream<[Float]>) -> AsyncStream<TokenEvent> {
         AsyncStream { continuation in
             let task = Task {
-                guard let manager = await self.manager else {
+                guard let manager = try? await self.makeSessionManager() else {
                     continuation.finish()
                     return
                 }
@@ -119,9 +131,11 @@ actor FluidAudioASR: TranscriptionEngine {
                     _ = try await manager.finish()
                     updatesTask.cancel()
                 } catch {
-                    await self.manager?.cancel()
+                    await manager.cancel()
                 }
-                try? await self.manager?.reset()
+                // Session over: release the single-use manager's model wiring.
+                // The loaded models stay cached on the actor for the next session.
+                await manager.cleanup()
                 continuation.finish()
             }
             continuation.onTermination = { _ in task.cancel() }

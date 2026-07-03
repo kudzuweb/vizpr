@@ -93,6 +93,39 @@ struct FluidAudioASRTests {
         assertGoldenExpectations(finals: finals, drafts: drafts)
     }
 
+    @Test("A second session on the same engine still transcribes")
+    func secondSessionStillTranscribes() async throws {
+        // Field regression: SlidingWindowAsrManager is single-use (finish()
+        // permanently ends its input stream; reset() does not rebuild it), so a
+        // reused manager made every session after the first a silent no-op.
+        // The engine must produce events for BOTH sequential sessions.
+        DownloadUtils.enforceOffline = true
+        let speech = try fixtureSamples()
+        let gap = [Float](repeating: 0, count: Self.sampleRate / 2)
+        var composite: [Float] = gap
+        for _ in 0..<4 { composite += speech + gap }
+        composite += [Float](repeating: 0, count: Self.sampleRate)
+
+        let engine = FluidAudioASR()
+        try await engine.prepare()
+
+        for session in 1...2 {
+            let (audio, feeder) = AsyncStream.makeStream(of: [Float].self)
+            let feedTask = Task {
+                for start in stride(from: 0, to: composite.count, by: 4000) {
+                    feeder.yield(Array(composite[start ..< min(start + 4000, composite.count)]))
+                }
+                feeder.finish()
+            }
+            var sawFinal = false
+            for await event in engine.transcribe(audio) {
+                if case let .finalized(text, _, _) = event, !text.isEmpty { sawFinal = true }
+            }
+            feedTask.cancel()
+            #expect(sawFinal, "session \(session) produced no finalized events")
+        }
+    }
+
     private func assertGoldenExpectations(finals: [Final], drafts: [(windowID: Int, text: String)]) {
         // Golden expectations, tolerant to window-seam nondeterminism AND to
         // Parakeet's inverse text normalization: the fixture says "testing one
