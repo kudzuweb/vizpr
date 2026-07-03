@@ -20,6 +20,10 @@ struct DraftTailTracker {
     /// trailing samples (~12 s) so a long latched session cannot make draft
     /// passes arbitrarily expensive.
     let maxDecodeSamples: Int
+    /// Minimum unconfirmed tail before drafts are emitted (~1.5 s): decoding a
+    /// fraction of a second of a fresh window produces junk ("Just a remark",
+    /// field-observed). Below this, skip the pass entirely.
+    let minTailSamples: Int
 
     /// Absolute sample index where unconfirmed audio begins.
     private(set) var confirmedBoundary = 0
@@ -31,11 +35,13 @@ struct DraftTailTracker {
     init(
         cadenceSamples: Int = 16_000,
         leftContextSamples: Int = 32_000,
-        maxDecodeSamples: Int = 192_000
+        maxDecodeSamples: Int = 192_000,
+        minTailSamples: Int = 24_000
     ) {
         self.cadenceSamples = cadenceSamples
         self.leftContextSamples = leftContextSamples
         self.maxDecodeSamples = maxDecodeSamples
+        self.minTailSamples = minTailSamples
     }
 
     /// The absolute range a draft decode should cover right now, or nil if a
@@ -61,10 +67,11 @@ struct DraftTailTracker {
     /// cadence clock.
     mutating func takeDecodeRequest() -> DecodeRequest? {
         guard totalSamples - lastDecodeTotal >= cadenceSamples else { return nil }
-        guard totalSamples > confirmedBoundary else {
-            // Nothing unconfirmed: skip, but reset the clock so a burst of
-            // confirmed-only audio doesn't fire a decode the instant new
-            // speech arrives with a stale cadence credit.
+        guard totalSamples - confirmedBoundary >= minTailSamples else {
+            // Too little unconfirmed audio to decode usefully (nothing new, or
+            // just a sub-threshold fragment of a fresh window). Skip, but reset
+            // the clock so confirmed-only audio doesn't leave a stale cadence
+            // credit that fires the instant real speech arrives.
             lastDecodeTotal = totalSamples
             return nil
         }
