@@ -231,6 +231,20 @@ actor TokenStream {
         DisplaySnapshot(settled: settled, live: live, draft: draft)
     }
 
+    /// Snapshot the live region for a cleanup invocation (PR 6): the text to
+    /// clean, the generation to tag the result with, and a bounded tail of
+    /// settled text as context so cleanup — which rewrites only `live` — knows
+    /// what precedes it and won't reshape the settled|live boundary.
+    struct CleanupInput: Sendable {
+        let text: String
+        let generation: Int
+        let settledContext: String
+    }
+
+    func cleanupInput() -> CleanupInput {
+        CleanupInput(text: live, generation: generation, settledContext: String(settled.suffix(240)))
+    }
+
     private func publish() {
         snapshotContinuation?.yield(currentSnapshot())
     }
