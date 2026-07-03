@@ -1,5 +1,52 @@
 # Build notes
 
+## Session state — paused 2026-07-03
+
+**Where we are:** PRs 0–5 merged to `main`. PR 6 was split into 6a/6b.
+- **PR 6a** (Vocabulary + CleanupEngine seam + CleanupPrompt + SmartCleanup) is
+  COMMITTED on branch `pr-6-cleanup` (`5f58ddc`), 104 tests green, lint clean,
+  app launches. **Unpushed — awaiting Mauria's review + okay to merge.**
+
+**What's next (in order):**
+1. Push `pr-6-cleanup`, open PR #6a, Mauria reviews + merges.
+2. Start PR 6b from merged main: write the first-party **QwenTokenizer**
+   (byte-level BPE) — golden-tested against `build/6b-hold/tokenizer-golden.json`
+   (58 adversarial cases + ChatML, generated from the reference Qwen2Tokenizer).
+   Then rewrite `MLXCleanup` to use it (dropping swift-transformers/MLXHuggingFace
+   entirely — that path links network code, fails the zero-egress invariant),
+   wire the model, dogfood real cleanup.
+3. Then PRs 7–12 per PLAN.md.
+
+**Held in `build/6b-hold/` for 6b** (NOT in git, NOT lost): `MLXCleanup.swift`
+(the swift-transformers draft, to be rewritten), `gen-tokenizer-golden.py`,
+`tokenizer-golden.json`, and `cleanup-llm/` (the 2.1 GB Qwen model, moved out of
+Resources so 6a doesn't bundle it). `scripts/fetch-models.sh` cleanup section and
+the MLXHuggingFace project.yml dep were reverted for 6a; re-add for 6b (but 6b
+uses the first-party tokenizer, so MLXHuggingFace likely NOT needed after all).
+
+**Key 6b decision (settled with Mauria):** first-party tokenizer, NOT
+swift-transformers (links URLSession → fails binary egress scan) and NOT the Rust
+swift-tokenizers (plan rejects Rust crates). Research on others' failure modes is
+captured — design rules: `unicodeScalars` not `Character` for BPE symbols;
+scalar/UTF-16 offsets for special-token slicing (swift-transformers #210/#355);
+`NSRegularExpression` compiled once, not Swift `Regex`; expand `(?i:)` to explicit
+cases; NFC first; split special tokens before BPE; integer-ID min-heap merge loop;
+match the REFERENCE runtime (Qwen's shipped regex is officially buggy), enforced
+by the golden corpus.
+
+## Model timeline (Mauria noticed the switch went unmarked)
+
+- **PR 0 + PR 1 setup:** Claude Fable 5.
+- **Mid-PR 1 → PR 2 authored (2026-06-13):** switched to Claude Opus 4.8 (1M ctx)
+  — "the government shut down fable."
+- **PR 2 review onward (2026-07-02, "welcome back"):** switched back to Fable 5
+  via /model; did PR 2 review+fixes and continued.
+- **Somewhere during PRs 3–6a:** silently became not-Fable again (Mauria's
+  observation, 2026-07-03). Exact turn is undetermined — no marker was emitted,
+  and the model can't reliably self-detect mid-session. The adversarial-review-
+  heavy PR 5/6 work was plausibly Opus, but that's inference, not fact.
+  **On return: confirm the active model with /model.**
+
 ## Model authorship handoff
 
 - **PR 0 (latency spike)** and the **initial setup of PR 1** (environment checks,
