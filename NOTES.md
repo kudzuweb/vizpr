@@ -45,6 +45,18 @@ belong with the Settings work rather than the hotkey PR:
    with `NSMenuDelegate.menuNeedsUpdate` (re-evaluate on menu open) when the
    menu is rebuilt for Settings.
 
+## Carried into PR 5 (TokenStream) from draft-track field testing
+
+- Draft/final seam dedup: finals can start mid-phrase (leading commas, word
+  overlap with adjacent drafts). PLAN already assigns seam tolerance to
+  TokenStream; the field logs from 2026-07-03 are good fixture material.
+- Tiny-tail draft suppression: the first draft of a fresh window decodes <2 s
+  of audio and can be junk. Consider a minimum-tail threshold (~1.5 s) before
+  emitting drafts — tune where display consequences are visible.
+- Post-commit stragglers: the engine's flush emits a last draft/final after
+  commit; TokenStream's generation checks must drop these (they arrive after
+  the snapshot).
+
 ## Environment prerequisites discovered
 
 - **Metal Toolchain** is required to build the mlx-swift dependency (it compiles
