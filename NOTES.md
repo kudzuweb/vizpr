@@ -39,12 +39,14 @@ by the golden corpus.
 - **PR 0 + PR 1 setup:** Claude Fable 5.
 - **Mid-PR 1 → PR 2 authored (2026-06-13):** switched to Claude Opus 4.8 (1M ctx)
   — "the government shut down fable."
-- **PR 2 review onward (2026-07-02, "welcome back"):** switched back to Fable 5
-  via /model; did PR 2 review+fixes and continued.
-- **Somewhere during PRs 3–6a:** silently became not-Fable again (Mauria's
-  observation, 2026-07-03). Exact turn is undetermined — no marker was emitted,
-  and the model can't reliably self-detect mid-session. The adversarial-review-
-  heavy PR 5/6 work was plausibly Opus, but that's inference, not fact.
+- **PR 2 review → PR 4.5 (2026-07-02/03, "welcome back" stretch):** Fable 5,
+  per Mauria's confirmation — the PR 2 second-pass review + fixes, PR 3
+  (audio/VAD), the tap-callback crash fix, PR 4 (ASR engine), and PR 4.5 (the
+  draft track) were one continuous Fable session.
+- **Somewhere around PR 5/6a:** silently became Opus (Mauria's observation,
+  2026-07-03). Exact turn undetermined — no marker was emitted, and the model
+  can't reliably self-detect mid-session. PR 5 (TokenStream + adversarial
+  review) and PR 6a (cleanup seam) are the plausibly-Opus span.
 - **2026-07-03 (evening):** Mauria switched back to Fable 5 via /model. Fable
   re-verified the suite (104 tests), reviewed PRs 3–6a fresh (findings below in
   session state), and resumed. Also fixed a handoff error: three 6b artifacts
