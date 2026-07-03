@@ -1,5 +1,6 @@
 # Planning and reference documents
 PLAN.md
+HANDOFF.md
 
 # macOS
 .DS_Store
@@ -22,8 +23,9 @@ Package.resolved
 # Dev logger output lives outside the repo, but just in case
 dictation-dev/
 
-# Bundled ASR model: too large for git; fetched by scripts/fetch-models.sh
+# Bundled models: too large for git; fetched by scripts/fetch-models.sh
 Vizpr/Resources/Models/parakeet-tdt-0.6b-v2/
+Vizpr/Resources/Models/cleanup-llm/
 
 # Spike workspace: vendored clones, venvs, downloaded models, generated fixtures
 spikes/FluidAudio/

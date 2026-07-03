@@ -1,28 +1,26 @@
 # Build notes
 
-## Session state — paused 2026-07-03
+## Session state — 2026-07-03 (evening)
 
-**Where we are:** PRs 0–5 merged to `main`. PR 6 was split into 6a/6b.
-- **PR 6a** (Vocabulary + CleanupEngine seam + CleanupPrompt + SmartCleanup) is
-  COMMITTED on branch `pr-6-cleanup` (`5f58ddc`), 104 tests green, lint clean,
-  app launches. **Unpushed — awaiting Mauria's review + okay to merge.**
+**Where we are:** PRs 0–6a merged to `main`. **PR 6b is done and field-tested**,
+on branch `pr-6b-cleanup-engine` (unpushed, awaiting Mauria's okay):
+- `7d2759c` — first-party QwenTokenizer (all 58 golden cases pass against the
+  reference Qwen2Tokenizer) + MLXCleanup on mlx-swift-lm; full live wiring.
+- `5fcff20` — engine warms parallelized; dictation no longer gated on warmup
+  (single-flight `prepare()` on both engines; sessions await it internally).
+- 111 tests / 20 suites green. Dogfood log (2026-07-03 19:07) verified: WYSIWYG
+  commit byte-exact, live cleanup rewrote the display in place, a post-commit
+  straggler final was correctly dropped by the generation gate.
 
 **What's next (in order):**
-1. Push `pr-6-cleanup`, open PR #6a, Mauria reviews + merges.
-2. Start PR 6b from merged main: write the first-party **QwenTokenizer**
-   (byte-level BPE) — golden-tested against `build/6b-hold/tokenizer-golden.json`
-   (58 adversarial cases + ChatML, generated from the reference Qwen2Tokenizer).
-   Then rewrite `MLXCleanup` to use it (dropping swift-transformers/MLXHuggingFace
-   entirely — that path links network code, fails the zero-egress invariant),
-   wire the model, dogfood real cleanup.
-3. Then PRs 7–12 per PLAN.md.
+1. Mauria's okay → push `pr-6b-cleanup-engine`, open PR, merge.
+2. Delete `build/6b-hold/` (its artifacts are all in the repo/bundle now).
+3. PR 7 (dev logger, §14): JSONL appender incl. cleanup disposition records
+   (`applied|stale|cancelled`) — the designated fix for SmartCleanup's `try?`
+   error swallowing. Then PRs 8–12 per PLAN.md.
 
-**Held in `build/6b-hold/` for 6b** (NOT in git, NOT lost): `MLXCleanup.swift`
-(the swift-transformers draft, to be rewritten), `gen-tokenizer-golden.py`,
-`tokenizer-golden.json`, and `cleanup-llm/` (the 2.1 GB Qwen model, moved out of
-Resources so 6a doesn't bundle it). `scripts/fetch-models.sh` cleanup section and
-the MLXHuggingFace project.yml dep were reverted for 6a; re-add for 6b (but 6b
-uses the first-party tokenizer, so MLXHuggingFace likely NOT needed after all).
+**Handoff doc:** `HANDOFF.md` (repo root, gitignored) carries the full resume
+state, agreements, and solved-problem catalog for a fresh session.
 
 **Key 6b decision (settled with Mauria):** first-party tokenizer, NOT
 swift-transformers (links URLSession → fails binary egress scan) and NOT the Rust
@@ -33,6 +31,17 @@ scalar/UTF-16 offsets for special-token slicing (swift-transformers #210/#355);
 cases; NFC first; split special tokens before BPE; integer-ID min-heap merge loop;
 match the REFERENCE runtime (Qwen's shipped regex is officially buggy), enforced
 by the golden corpus.
+
+## Carried to PR 9 (overlay) from 6b dogfood, 2026-07-03
+
+- **Window-boundary word truncation:** window 1's final arrived as
+  "**m** everything…" — the 10 s window split mid-word ("Um" → "m"). Cleanup
+  happened to repair it, but the seam itself is the tiny-tail/seam-tuning item
+  already parked for PR 9; the dogfood log is fixture material.
+- **Raw tail at commit (by design):** trailing live text ("Um see, yeah, um")
+  committed uncleaned because commit strictly cancels in-flight cleanup. The
+  felt-experience verdict on this (and cleanup latency overall, incl. the 1.7B
+  fallback question) is scheduled for PR 9, where display makes it visible.
 
 ## Model timeline (Mauria noticed the switch went unmarked)
 

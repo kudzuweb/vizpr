@@ -140,9 +140,21 @@ actor FluidAudioASR: TranscriptionEngine {
             ?? Bundle.main.resourceURL!.appendingPathComponent("Models/parakeet-tdt-0.6b-v2")
     }
 
-    func prepare() async throws {
-        guard models == nil else { return }
+    /// Single-flight load. Actor reentrancy makes a plain `guard models == nil`
+    /// racy: the launch warm and an eager first dictation can both pass the
+    /// guard and load the ~443 MB model set twice. Every caller awaits the one
+    /// shared task instead. A failed load stays cached — prepare failure means
+    /// a broken bundle, and the app fails loudly rather than retrying.
+    private var prepareTask: Task<Void, any Error>?
 
+    func prepare() async throws {
+        if prepareTask == nil {
+            prepareTask = Task { try await performPrepare() }
+        }
+        try await prepareTask!.value
+    }
+
+    private func performPrepare() async throws {
         // The offline switch must be thrown before any FluidAudio model API is
         // touched (AppDelegate does it at launch); refusing to proceed without
         // it makes the no-download guarantee a checked precondition, not a hope.
@@ -170,9 +182,12 @@ actor FluidAudioASR: TranscriptionEngine {
         batchManager = batch
     }
 
-    /// Build a single-session manager wired to the cached models. Cheap: the
-    /// models are already loaded; this only constructs the windowing state.
+    /// Build a single-session manager wired to the cached models. Awaits the
+    /// (single-flight) model load first, so a dictation begun before the launch
+    /// warm finishes blocks briefly instead of producing an empty session; once
+    /// warm, this only constructs the windowing state.
     private func makeSessionManager() async throws -> SlidingWindowAsrManager? {
+        try await prepare()
         guard let models else { return nil }
         let manager = SlidingWindowAsrManager(config: Self.lockedConfig)
         try await manager.loadModels(models)

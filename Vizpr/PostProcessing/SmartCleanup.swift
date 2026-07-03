@@ -31,6 +31,11 @@ actor SmartCleanup {
         self.codeMode = codeMode
     }
 
+    /// Warm the underlying engine (model load) ahead of the first invocation.
+    func prepareEngine() async throws {
+        try await engine.prepare()
+    }
+
     /// Feed one ASR event. Applies the vocab pre-pass, forwards to the token
     /// stream, and gates a cleanup invocation on finalized events.
     func ingest(_ event: TokenEvent) async {

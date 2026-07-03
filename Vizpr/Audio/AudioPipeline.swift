@@ -7,8 +7,9 @@ import FluidAudio
 ///
 /// Auto-stop is *emitted into the hotkey state machine* via `onAutoStop` — the
 /// pipeline never commits anything itself (§6: VAD never decides commits).
-/// The same capture stream fans out to the transcription engine; its token
-/// events feed the dev logger until TokenStream lands (PR 5).
+/// The capture stream fans out to the transcription engine; token events are
+/// handed to `onTokenEvent` (SmartCleanup → TokenStream in production), with
+/// the dev logger observing alongside.
 @MainActor
 final class AudioPipeline {
     private let source: any CaptureSource
@@ -16,6 +17,9 @@ final class AudioPipeline {
     private let engine: (any TranscriptionEngine)?
     private let autoStopTimeout: Duration
     private let onAutoStop: () -> Void
+    /// Consumer for ASR token events (SmartCleanup.ingest in production; nil
+    /// falls back to dev-log-only, useful in bring-up).
+    private let onTokenEvent: (@Sendable (TokenEvent) async -> Void)?
 
     private var sessionTask: Task<Void, Never>?
 
@@ -24,12 +28,14 @@ final class AudioPipeline {
         detector: SpeechDetector,
         engine: (any TranscriptionEngine)? = nil,
         autoStopTimeout: Duration = .seconds(6),
+        onTokenEvent: (@Sendable (TokenEvent) async -> Void)? = nil,
         onAutoStop: @escaping () -> Void
     ) {
         self.source = source
         self.detector = detector
         self.engine = engine
         self.autoStopTimeout = autoStopTimeout
+        self.onTokenEvent = onTokenEvent
         self.onAutoStop = onAutoStop
     }
 
@@ -38,6 +44,7 @@ final class AudioPipeline {
     /// broken build, invariant: fail loudly at startup).
     static func makeDefault(
         engine: (any TranscriptionEngine)?,
+        onTokenEvent: (@Sendable (TokenEvent) async -> Void)? = nil,
         onAutoStop: @escaping () -> Void
     ) -> AudioPipeline? {
         guard let model = try? SpeechDetector.loadBundledModel() else { return nil }
@@ -45,6 +52,7 @@ final class AudioPipeline {
             source: MicrophoneCapture(),
             detector: SpeechDetector(model: model),
             engine: engine,
+            onTokenEvent: onTokenEvent,
             onAutoStop: onAutoStop
         )
     }
@@ -52,7 +60,7 @@ final class AudioPipeline {
     func start() {
         guard sessionTask == nil else { return }   // one session at a time
 
-        sessionTask = Task { @MainActor [source, detector, engine, autoStopTimeout, onAutoStop] in
+        sessionTask = Task { @MainActor [source, detector, engine, autoStopTimeout, onAutoStop, onTokenEvent] in
             var watchdog = SilenceWatchdog(
                 timeout: autoStopTimeout,
                 sampleRate: Int(MicrophoneCapture.sampleRate)
@@ -62,7 +70,7 @@ final class AudioPipeline {
             // Fan the capture stream out to the transcription engine. Until
             // TokenStream (PR 5), events go to the dev logger — enough to
             // dogfood live transcription end to end.
-            let fanOut = Self.startEngineFanOut(engine: engine)
+            let fanOut = Self.startEngineFanOut(engine: engine, onTokenEvent: onTokenEvent)
 
             #if DICT_DEV_LOG
             var chunkCount = 0
@@ -110,7 +118,8 @@ final class AudioPipeline {
     /// Start a transcription session on the engine (if any): returns the audio
     /// continuation to feed and the event-draining task to await at session end.
     private static func startEngineFanOut(
-        engine: (any TranscriptionEngine)?
+        engine: (any TranscriptionEngine)?,
+        onTokenEvent: (@Sendable (TokenEvent) async -> Void)?
     ) -> (audio: AsyncStream<[Float]>.Continuation?, events: Task<Void, Never>?) {
         guard let engine else { return (nil, nil) }
         let (stream, continuation) = AsyncStream.makeStream(
@@ -127,9 +136,8 @@ final class AudioPipeline {
                         String(format: "asr final (conf %.2f): ", confidence) + text
                     )
                 }
-                #else
-                _ = event
                 #endif
+                await onTokenEvent?(event)
             }
         }
         return (continuation, task)

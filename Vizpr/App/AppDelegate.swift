@@ -14,6 +14,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let permissionProbe = PermissionProbe()
     private var actionsTask: Task<Void, Never>?
     private var audioPipeline: AudioPipeline?
+    private let tokenStream = TokenStream()
+    private var smartCleanup: SmartCleanup?
+    private var snapshotTask: Task<Void, Never>?
 
     /// NSApplication holds its delegate weakly, and a local would be releasable
     /// by the optimizer after its last use even though app.run() never returns —
@@ -51,6 +54,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        snapshotTask?.cancel()
         actionsTask?.cancel()
         audioPipeline?.stop()
         hotkeyMonitor.stop()
@@ -61,9 +65,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// along without a model).
     private func setUpAudioPipeline() {
         let engine = FluidAudioASR()
-        audioPipeline = AudioPipeline.makeDefault(engine: engine) { [hotkeyMonitor] in
-            hotkeyMonitor.injectAutoStop()
-        }
+
+        // The cleanup leg (PR 6): events flow ASR -> SmartCleanup (vocab
+        // pre-pass + confidence gate) -> TokenStream (regions + generation
+        // gate); commit/cancel drive the stream's atomic gate below.
+        let vocabulary = (try? VocabularyStore().load()) ?? .empty
+        let cleanup = SmartCleanup(
+            tokenStream: tokenStream,
+            engine: MLXCleanup(),
+            vocabulary: vocabulary
+        )
+        smartCleanup = cleanup
+
+        audioPipeline = AudioPipeline.makeDefault(
+            engine: engine,
+            onTokenEvent: { [cleanup] event in await cleanup.ingest(event) },
+            onAutoStop: { [hotkeyMonitor] in hotkeyMonitor.injectAutoStop() }
+        )
         guard audioPipeline != nil else {
             failLoudly(
                 "Vizpr's bundled voice-detection model failed to load.",
@@ -72,17 +90,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        // Warm the ASR engine at launch (encoder compilation takes seconds; the
-        // first dictation shouldn't pay it). Missing model = broken build.
+        // Warm both engines concurrently at launch (their loads are
+        // independent; serial warming paid ASR + LLM back to back). Dictation
+        // is NOT gated on this: both engines single-flight their prepare, so a
+        // session begun mid-warm awaits the same load instead of failing.
+        // Missing models = broken build. (Two plain Tasks, not a task group —
+        // the Swift 6 region-isolation checker rejects @MainActor addTask
+        // closures here as an unanalyzable pattern.)
+        warmEngine(devLogLabel: "asr engine prepared") { try await engine.prepare() }
+        warmEngine(devLogLabel: "cleanup engine prepared") { try await cleanup.prepareEngine() }
+
+        // Dev-observe the display: what the overlay (PR 9) will render, and
+        // exactly what a commit would inject.
+        #if DICT_DEV_LOG
+        snapshotTask = Task { @MainActor [tokenStream] in
+            for await snapshot in await tokenStream.makeSnapshotStream() {
+                if snapshot != .empty {
+                    VizprTranscriptLogger.note("display: \(snapshot.displayed)")
+                }
+            }
+        }
+        #endif
+    }
+
+    /// One warm leg: run the prepare, dev-log readiness, fail loudly on error.
+    /// If both legs fail, the first alert's termination wins; the second modal
+    /// never shows.
+    private func warmEngine(
+        devLogLabel: String, _ prepare: @escaping @Sendable () async throws -> Void
+    ) {
         Task { @MainActor in
             do {
-                try await engine.prepare()
+                try await prepare()
                 #if DICT_DEV_LOG
-                VizprTranscriptLogger.note("asr engine prepared")
+                VizprTranscriptLogger.note(devLogLabel)
                 #endif
             } catch {
                 self.failLoudly(
-                    "Vizpr's speech model failed to load.",
+                    "Vizpr's speech models failed to load.",
                     detail: "Run scripts/fetch-models.sh and rebuild, or reinstall. (\(error))"
                 )
             }
@@ -122,11 +167,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 #endif
                 switch action {
                 case .startDictation:
+                    await self?.tokenStream.beginSession()
                     self?.audioPipeline?.start()
-                case .commit, .cancel:
-                    // Text handling arrives with TokenStream (PR 5) and the
-                    // injector (PR 8); for now both just end audio capture.
+                case .commit:
                     self?.audioPipeline?.stop()
+                    // Atomic WYSIWYG gate: snapshot displayed text, cancel
+                    // in-flight cleanup. The injector (PR 8) receives exactly
+                    // this string; until then the dev log records it.
+                    let committed = await self?.tokenStream.commit() ?? ""
+                    #if DICT_DEV_LOG
+                    VizprTranscriptLogger.note("COMMIT (would inject): \(committed)")
+                    #endif
+                case .cancel:
+                    self?.audioPipeline?.stop()
+                    await self?.tokenStream.cancelSession()
                 }
             }
         }
