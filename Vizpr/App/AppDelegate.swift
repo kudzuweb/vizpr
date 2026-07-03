@@ -17,6 +17,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let tokenStream = TokenStream()
     private var smartCleanup: SmartCleanup?
     private var snapshotTask: Task<Void, Never>?
+    #if DICT_DEV_LOG
+    private let dictationTracker = DevDictationTracker()
+    #endif
 
     /// NSApplication holds its delegate weakly, and a local would be releasable
     /// by the optimizer after its last use even though app.run() never returns —
@@ -68,18 +71,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // The cleanup leg (PR 6): events flow ASR -> SmartCleanup (vocab
         // pre-pass + confidence gate) -> TokenStream (regions + generation
-        // gate); commit/cancel drive the stream's atomic gate below.
+        // gate); commit/cancel drive the stream's atomic gate below. In dev
+        // builds the same event stream and outcome seam feed the §14 JSONL
+        // records; Release leaves both hooks unset.
         let vocabulary = (try? VocabularyStore().load()) ?? .empty
+        #if DICT_DEV_LOG
+        let tracker = dictationTracker
+        let onOutcome: (@Sendable (CleanupOutcome) async -> Void)? = { outcome in
+            await VizprDevLogWriter.shared.append(DevCleanupRecord(outcome))
+        }
+        #else
+        let onOutcome: (@Sendable (CleanupOutcome) async -> Void)? = nil
+        #endif
         let cleanup = SmartCleanup(
             tokenStream: tokenStream,
             engine: MLXCleanup(),
-            vocabulary: vocabulary
+            vocabulary: vocabulary,
+            onOutcome: onOutcome
         )
         smartCleanup = cleanup
 
+        #if DICT_DEV_LOG
+        let onTokenEvent: @Sendable (TokenEvent) async -> Void = { [cleanup] event in
+            await tracker.observe(event)
+            await cleanup.ingest(event)
+        }
+        #else
+        let onTokenEvent: @Sendable (TokenEvent) async -> Void = { [cleanup] event in
+            await cleanup.ingest(event)
+        }
+        #endif
+
         audioPipeline = AudioPipeline.makeDefault(
             engine: engine,
-            onTokenEvent: { [cleanup] event in await cleanup.ingest(event) },
+            onTokenEvent: onTokenEvent,
             onAutoStop: { [hotkeyMonitor] in hotkeyMonitor.injectAutoStop() }
         )
         guard audioPipeline != nil else {
@@ -168,6 +193,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 switch action {
                 case .startDictation:
                     await self?.tokenStream.beginSession()
+                    #if DICT_DEV_LOG
+                    await self?.dictationTracker.reset()
+                    #endif
                     self?.audioPipeline?.start()
                 case .commit:
                     self?.audioPipeline?.stop()
@@ -177,10 +205,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     let committed = await self?.tokenStream.commit() ?? ""
                     #if DICT_DEV_LOG
                     VizprTranscriptLogger.note("COMMIT (would inject): \(committed)")
+                    if let record = await self?.dictationTracker.makeRecord(
+                        injectedText: committed,
+                        bundleID: NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
+                        mode: "default",
+                        modelTier: MLXCleanup.modelTier
+                    ) {
+                        await VizprDevLogWriter.shared.append(record)
+                    }
                     #endif
                 case .cancel:
                     self?.audioPipeline?.stop()
                     await self?.tokenStream.cancelSession()
+                    #if DICT_DEV_LOG
+                    await self?.dictationTracker.reset()
+                    #endif
                 }
             }
         }

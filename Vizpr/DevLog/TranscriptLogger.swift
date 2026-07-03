@@ -31,17 +31,18 @@ enum VizprTranscriptLogger {
         return URL(fileURLWithPath: dir + "/debug.log")
     }()
 
-    /// Placeholder behavior: report where the dev transcript log will be written.
-    /// Real append-on-dictation logic arrives in PR 7.
+    /// Report where the dev transcript log is written (the structured JSONL
+    /// records land there via VizprDevLogWriter).
     static func announce() {
         let path = ("~/Documents/dictation-dev/transcripts.jsonl" as NSString)
             .expandingTildeInPath
         note("dev transcript log target: \(path)")
     }
 
-    /// Emit a one-off developer breadcrumb. A stand-in until PR 7's structured
-    /// JSONL records; useful for eyeballing the pipeline during bring-up.
-    /// Called from the main thread only (pipeline + monitor are main-isolated).
+    /// Emit a one-off developer breadcrumb — the human-readable running
+    /// commentary next to the structured JSONL records; useful for eyeballing
+    /// the pipeline live. Called from the main thread only (pipeline +
+    /// monitor are main-isolated).
     static func note(_ message: String) {
         log.debug("[\(buildMarker, privacy: .public)] \(message, privacy: .public)")
         let line = "\(Date().ISO8601Format()) \(message)\n"

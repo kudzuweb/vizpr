@@ -16,19 +16,27 @@ actor SmartCleanup {
     /// is skipped unless a sentence just closed.
     private let confidenceThreshold: Float
     private let codeMode: Bool
+    /// Observation seam for per-invocation outcomes (§14): every launched
+    /// cleanup reports exactly one CleanupOutcome here — applied, stale,
+    /// cancelled, or failed. The dev logger consumes it in Debug; unset, the
+    /// outcome is dropped (Release behavior: cleanup failure fails open, the
+    /// span stays raw).
+    private let onOutcome: (@Sendable (CleanupOutcome) async -> Void)?
 
     init(
         tokenStream: TokenStream,
         engine: any CleanupEngine,
         vocabulary: Vocabulary = .empty,
         confidenceThreshold: Float = 0.85,
-        codeMode: Bool = false
+        codeMode: Bool = false,
+        onOutcome: (@Sendable (CleanupOutcome) async -> Void)? = nil
     ) {
         self.tokenStream = tokenStream
         self.engine = engine
         self.vocabulary = vocabulary
         self.confidenceThreshold = confidenceThreshold
         self.codeMode = codeMode
+        self.onOutcome = onOutcome
     }
 
     /// Warm the underlying engine (model load) ahead of the first invocation.
@@ -84,15 +92,52 @@ actor SmartCleanup {
         )
         let request = CleanupRequest(text: input.text, context: context)
 
-        // Launched through the stream so commit()/cancel() cancels it.
-        await tokenStream.launchCleanup { [engine, vocabulary, tokenStream] in
-            guard let result = try? await engine.clean(request) else { return }
-            // POST-PASS is authoritative: re-fix any canonical form the model
-            // un-fixed (§4, post wins ties). Then apply, generation-gated.
-            let cleaned = vocabulary.apply(to: result.text)
-            await tokenStream.applyCleanup(
-                expectedGeneration: input.generation, rewrittenLive: cleaned
-            )
+        // Launched through the stream so commit()/cancel() cancels it. Every
+        // path reports its disposition through onOutcome — cleanup failures
+        // are fail-open for the display (span stays raw) but never silent.
+        await tokenStream.launchCleanup { [engine, vocabulary, tokenStream, onOutcome] in
+            do {
+                let result = try await engine.clean(request)
+                // POST-PASS is authoritative: re-fix any canonical form the
+                // model un-fixed (§4, post wins ties). Then apply, generation-
+                // gated: a stale result (live changed since snapshot) drops.
+                let cleaned = vocabulary.apply(to: result.text)
+                let applied = await tokenStream.applyCleanup(
+                    expectedGeneration: input.generation, rewrittenLive: cleaned
+                )
+                await onOutcome?(CleanupOutcome(
+                    input: request.text, output: cleaned,
+                    generation: input.generation,
+                    disposition: applied ? .applied : .stale
+                ))
+            } catch is CancellationError {
+                await onOutcome?(CleanupOutcome(
+                    input: request.text, output: nil,
+                    generation: input.generation, disposition: .cancelled
+                ))
+            } catch {
+                await onOutcome?(CleanupOutcome(
+                    input: request.text, output: nil,
+                    generation: input.generation, disposition: .failed,
+                    errorDescription: String(describing: error)
+                ))
+            }
         }
     }
+}
+
+/// The outcome of one cleanup invocation, reported through SmartCleanup's
+/// `onOutcome` seam (§14 per-invocation records). `failed` extends the plan's
+/// applied|stale|cancelled set: surfacing engine errors (instead of the try?
+/// that used to swallow them) is the reason the seam exists.
+struct CleanupOutcome: Sendable, Equatable {
+    enum Disposition: String, Sendable {
+        case applied, stale, cancelled, failed
+    }
+
+    let input: String
+    let output: String?
+    let generation: Int
+    let disposition: Disposition
+    var errorDescription: String?
 }
