@@ -28,8 +28,20 @@ fi
 echo "Launching $APP ..."
 open "$APP"
 
+# Ctrl+C must stop the APP, not just the log stream: a lingering instance keeps
+# its Fn event tap alive and eats the key for every other app (field-reported:
+# it silently broke another dictation tool). The trap runs on any exit path.
+cleanup() {
+  if pgrep -f "Vizpr.app/Contents/MacOS/Vizpr" >/dev/null; then
+    pkill -f "Vizpr.app/Contents/MacOS/Vizpr"
+    echo
+    echo "(Vizpr terminated)"
+  fi
+}
+trap cleanup EXIT
+
 echo
 echo "Streaming dev log. Press Fn / hold Fn / Escape and watch for hotkey actions."
-echo "(Ctrl+C to stop streaming; quit Vizpr from its menu-bar mic icon.)"
+echo "(Ctrl+C stops the log stream AND quits Vizpr.)"
 echo
-exec log stream --level debug --predicate 'subsystem == "com.kudzuweb.vizpr"'
+log stream --level debug --predicate 'subsystem == "com.kudzuweb.vizpr"'
