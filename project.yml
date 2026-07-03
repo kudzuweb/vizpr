@@ -57,6 +57,13 @@ targets:
       - path: Vizpr
         excludes:
           - "**/.gitkeep"
+          - "Resources/**"
+      # Bundled models ship as a folder reference copied verbatim: .mlmodelc is
+      # already-compiled CoreML output, not something Xcode should process.
+      # Lands at Contents/Resources/Models/ in the app bundle.
+      - path: Vizpr/Resources/Models
+        type: folder
+        buildPhase: resources
     info:
       path: Vizpr/Info.plist
       properties:
@@ -68,6 +75,9 @@ targets:
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         LSMinimumSystemVersion: "$(MACOSX_DEPLOYMENT_TARGET)"
         NSHumanReadableCopyright: ""
+        NSMicrophoneUsageDescription: >-
+          Vizpr converts your speech to text entirely on this Mac.
+          Audio never leaves the device.
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kudzuweb.vizpr
@@ -91,7 +101,11 @@ targets:
     type: bundle.unit-test
     platform: macOS
     sources:
-      - VizprTests
+      - path: VizprTests
+        excludes:
+          - "Fixtures/**"
+      - path: VizprTests/Fixtures
+        buildPhase: resources
     dependencies:
       - target: Vizpr
     settings:

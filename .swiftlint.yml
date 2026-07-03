@@ -14,6 +14,7 @@ excluded:
 
 disabled_rules:
   - todo                 # PR plan tracks work; TODO/FIXME comments are expected mid-build
+  - for_where            # suggests `for … where cond` even when cond is a mutating call, which doesn't compile
 
 opt_in_rules:
   - empty_count

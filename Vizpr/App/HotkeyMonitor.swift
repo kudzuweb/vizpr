@@ -128,6 +128,14 @@ final class HotkeyMonitor: @unchecked Sendable {
         return CGEvent.tapIsEnabled(tap: port)
     }
 
+    /// Feed a VAD-silence auto-stop into the state machine (PLAN.md §6): the
+    /// same single commit path as a key press — the machine commits only from
+    /// `latched` and ignores this everywhere else. Never a bypass.
+    @MainActor
+    func injectAutoStop() {
+        apply(machine.handle(.autoStop))
+    }
+
     // MARK: Event handling (called from the tap callback, on the main thread)
 
     /// Translate one CGEvent into machine input(s) and return its disposition.
@@ -142,6 +150,11 @@ final class HotkeyMonitor: @unchecked Sendable {
             // reset BOTH the machine and the edge tracker: a press whose release
             // was missed while we were disabled must not strand `fnDown` true and
             // swallow the next press's edge.
+            #if DICT_DEV_LOG
+            VizprTranscriptLogger.note(
+                "tap disabled by \(type == .tapDisabledByTimeout ? "timeout" : "userInput") — re-enabling"
+            )
+            #endif
             reEnableTap()
             apply(machine.handle(.tapDisabled(type == .tapDisabledByTimeout ? .timeout : .userInput)))
             return Unmanaged.passUnretained(event)
@@ -232,6 +245,9 @@ final class HotkeyMonitor: @unchecked Sendable {
         let timer = Timer(timeInterval: 2.0, repeats: true) { [weak self] _ in
             guard let self, let port = self.machPort else { return }
             if !CGEvent.tapIsEnabled(tap: port) {
+                #if DICT_DEV_LOG
+                VizprTranscriptLogger.note("tap watchdog: tap found dead — re-enabling")
+                #endif
                 // Reset any in-flight press and edge state: a tap that died
                 // mid-session is already broken, and a clean idle is fail-open.
                 self.reEnableTap()

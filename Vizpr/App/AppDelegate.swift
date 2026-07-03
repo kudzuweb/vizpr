@@ -12,12 +12,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let hotkeyMonitor = HotkeyMonitor()
     private let permissionProbe = PermissionProbe()
     private var actionsTask: Task<Void, Never>?
+    private var audioPipeline: AudioPipeline?
+
+    /// NSApplication holds its delegate weakly, and a local would be releasable
+    /// by the optimizer after its last use even though app.run() never returns —
+    /// deallocating the delegate (and the hotkey tap with it) mid-flight in
+    /// Release builds. A static keeps ownership unambiguous.
+    private static var retainedDelegate: AppDelegate?
 
     static func main() {
         let app = NSApplication.shared
         let delegate = AppDelegate()
-        // `delegate` is weakly held by NSApplication; the strong reference here
-        // lives for the whole process because app.run() blocks until quit.
+        retainedDelegate = delegate
         app.delegate = delegate
         app.run()
     }
@@ -27,6 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // is unambiguous regardless of how the process was launched.
         NSApp.setActivationPolicy(.accessory)
         setUpStatusItem()
+        setUpAudioPipeline()
         consumeHotkeyActions()
         startHotkeyIfPermitted()
 
@@ -39,7 +46,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         actionsTask?.cancel()
+        audioPipeline?.stop()
         hotkeyMonitor.stop()
+    }
+
+    /// Build the capture→VAD→auto-stop pipeline against the bundled VAD model.
+    /// A load failure means a broken bundle: fail loudly (invariant — never limp
+    /// along without the model).
+    private func setUpAudioPipeline() {
+        audioPipeline = AudioPipeline.makeDefault { [hotkeyMonitor] in
+            hotkeyMonitor.injectAutoStop()
+        }
+        if audioPipeline == nil {
+            let alert = NSAlert()
+            alert.messageText = "Vizpr's bundled voice-detection model failed to load."
+            alert.informativeText = "The app bundle is damaged — rebuild or reinstall Vizpr."
+            alert.runModal()
+            NSApp.terminate(nil)
+        }
     }
 
     // MARK: Hotkey wiring
@@ -60,12 +84,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Explicit MainActor isolation: the stream payload is the only thing this
         // task touches, and keeping it on main avoids ever reading monitor state
         // off-thread through the @unchecked Sendable escape hatch.
-        actionsTask = Task { @MainActor [hotkeyMonitor] in
+        actionsTask = Task { @MainActor [hotkeyMonitor, weak self] in
             for await action in hotkeyMonitor.actions {
                 #if DICT_DEV_LOG
                 VizprTranscriptLogger.note("hotkey action: \(action)")
                 #endif
-                _ = action
+                switch action {
+                case .startDictation:
+                    self?.audioPipeline?.start()
+                case .commit, .cancel:
+                    // Text handling arrives with TokenStream (PR 5) and the
+                    // injector (PR 8); for now both just end audio capture.
+                    self?.audioPipeline?.stop()
+                }
             }
         }
     }
