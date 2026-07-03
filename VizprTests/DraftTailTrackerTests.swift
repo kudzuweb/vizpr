@@ -5,10 +5,11 @@ import Testing
 struct DraftTailTrackerTests {
 
     private func tracker(
-        cadence: Int = 1000, leftContext: Int = 2000, cap: Int = 10_000
+        cadence: Int = 1000, leftContext: Int = 2000, cap: Int = 10_000, minTail: Int = 1
     ) -> DraftTailTracker {
         DraftTailTracker(
-            cadenceSamples: cadence, leftContextSamples: leftContext, maxDecodeSamples: cap
+            cadenceSamples: cadence, leftContextSamples: leftContext,
+            maxDecodeSamples: cap, minTailSamples: minTail
         )
     }
 
@@ -48,6 +49,15 @@ struct DraftTailTrackerTests {
         #expect(t.takeDecodeRequest() == nil)
         t.append(sampleCount: 999)
         #expect(t.takeDecodeRequest() != nil)
+    }
+
+    @Test("A sub-threshold unconfirmed tail is suppressed until it grows")
+    func minTailSuppresses() {
+        var t = tracker(cadence: 1000, minTail: 3000)
+        t.append(sampleCount: 2000)          // cadence met, but tail 2000 < 3000
+        #expect(t.takeDecodeRequest() == nil)
+        t.append(sampleCount: 2000)          // tail now 4000 >= 3000
+        #expect(t.takeDecodeRequest()?.range == 0 ..< 4000)
     }
 
     @Test("Decode range respects the cost cap")
