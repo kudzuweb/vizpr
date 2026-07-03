@@ -42,7 +42,7 @@ final class HotkeyMonitor: @unchecked Sendable {
     let actions: AsyncStream<DictationAction>
     private let actionsContinuation: AsyncStream<DictationAction>.Continuation
 
-    init(holdThreshold: Duration = .milliseconds(200),
+    init(holdThreshold: Duration = .milliseconds(280),
          secondaryMask: CGEventFlags = [.maskControl, .maskAlternate]) {
         self.machine = HotkeyStateMachine(holdThreshold: holdThreshold)
         self.edges = FlagEdgeTracker(secondaryMask: secondaryMask)

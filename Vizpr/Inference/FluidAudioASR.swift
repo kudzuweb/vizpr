@@ -109,14 +109,14 @@ actor FluidAudioASR: TranscriptionEngine {
                         }
                     }
 
-                    // Input ended (commit/cancel upstream): flush the tail as a
-                    // last finalized event, then stop.
-                    let finalText = try await manager.finish()
-                    if !finalText.isEmpty {
-                        continuation.yield(.finalized(
-                            text: finalText, confidence: 1.0, tokenConfidences: []
-                        ))
-                    }
+                    // Input ended (commit/cancel upstream): finish() flushes the
+                    // remaining assembled audio, and that flush publishes the
+                    // tail through transcriptionUpdates as confirmed updates —
+                    // which the updates task above already forwards. Its return
+                    // value is the WHOLE transcript, so emitting it as an event
+                    // would duplicate everything already finalized (observed
+                    // live: the full session text repeated in the last event).
+                    _ = try await manager.finish()
                     updatesTask.cancel()
                 } catch {
                     await self.manager?.cancel()

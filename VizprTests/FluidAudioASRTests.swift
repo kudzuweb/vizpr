@@ -26,6 +26,12 @@ struct FluidAudioASRTests {
 
     private static let sampleRate = 16_000
 
+    private struct Final {
+        let text: String
+        let confidence: Float
+        let tokenConfidences: [Float]
+    }
+
     /// Fixture speech as 16 kHz mono Float32 (same loader as the VAD tests).
     private func fixtureSamples() throws -> [Float] {
         let bundle = Bundle(for: ASRFixtureLocator.self)
@@ -71,11 +77,6 @@ struct FluidAudioASRTests {
             feeder.finish()
         }
 
-        struct Final {
-            let text: String
-            let confidence: Float
-            let tokenConfidences: [Float]
-        }
         var drafts: [(windowID: Int, text: String)] = []
         var finals: [Final] = []
         for await event in engine.transcribe(audio) {
@@ -89,6 +90,10 @@ struct FluidAudioASRTests {
         }
         feedTask.cancel()
 
+        assertGoldenExpectations(finals: finals, drafts: drafts)
+    }
+
+    private func assertGoldenExpectations(finals: [Final], drafts: [(windowID: Int, text: String)]) {
         // Golden expectations, tolerant to window-seam nondeterminism AND to
         // Parakeet's inverse text normalization: the fixture says "testing one
         // two three four five", which the model legitimately renders as
@@ -108,10 +113,22 @@ struct FluidAudioASRTests {
                 #expect(tokenConfidence > 0 && tokenConfidence <= 1.0)
             }
         }
-        // At least one mid-stream confirmation carried per-token confidence
-        // (the finish() flush legitimately has none).
+        // At least one confirmation carried per-token confidence.
         #expect(finals.contains { !$0.tokenConfidences.isEmpty },
                 "no confirmed event carried per-token confidence")
+
+        // No duplicate-transcript event: the observed bug was finish()'s whole-
+        // transcript return re-emitted after its pieces had already been
+        // finalized. Signature: a later finalized event containing an earlier
+        // finalized event's (nontrivial) text verbatim.
+        for earlier in finals.indices {
+            for later in finals.indices where later > earlier {
+                let earlierText = finals[earlier].text
+                guard earlierText.count > 15 else { continue }
+                #expect(!finals[later].text.contains(earlierText),
+                        "finalized event re-contains earlier finalized text — duplication")
+            }
+        }
 
         // Draft windows only ever advance (draft-replaces-draft is per window).
         let windowIDs = drafts.map(\.windowID)
