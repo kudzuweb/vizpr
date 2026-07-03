@@ -135,6 +135,38 @@ struct FluidAudioASRTests {
         }
     }
 
+    @Test("A session begun before prepare() still transcribes")
+    func sessionBeforePrepareStillTranscribes() async throws {
+        // Dictation is not gated on the launch warm: transcribe() awaits the
+        // single-flight prepare internally, so a session started on a cold
+        // engine blocks for the model load instead of finishing empty (the
+        // prior behavior: makeSessionManager returned nil and the stream
+        // silently ended).
+        DownloadUtils.enforceOffline = true
+        let speech = try fixtureSamples()
+        let gap = [Float](repeating: 0, count: Self.sampleRate / 2)
+        var composite: [Float] = gap
+        for _ in 0..<4 { composite += speech + gap }
+        composite += [Float](repeating: 0, count: Self.sampleRate)
+
+        let engine = FluidAudioASR()
+        // No prepare() call: the session itself must trigger and await the load.
+
+        let (audio, feeder) = AsyncStream.makeStream(of: [Float].self)
+        let feedTask = Task {
+            for start in stride(from: 0, to: composite.count, by: 4000) {
+                feeder.yield(Array(composite[start ..< min(start + 4000, composite.count)]))
+            }
+            feeder.finish()
+        }
+        var sawFinal = false
+        for await event in engine.transcribe(audio) {
+            if case let .finalized(text, _, _) = event, !text.isEmpty { sawFinal = true }
+        }
+        feedTask.cancel()
+        #expect(sawFinal, "cold-engine session produced no finalized events")
+    }
+
     private func assertGoldenExpectations(finals: [Final], drafts: [(windowID: Int, text: String)]) {
         // Golden expectations, tolerant to window-seam nondeterminism AND to
         // Parakeet's inverse text normalization: the fixture says "testing one

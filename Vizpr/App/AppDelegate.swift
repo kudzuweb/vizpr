@@ -90,25 +90,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        // Warm both engines at launch (model loads take seconds; the first
-        // dictation shouldn't pay them). Missing models = broken build.
-        Task { @MainActor in
-            do {
-                try await engine.prepare()
-                #if DICT_DEV_LOG
-                VizprTranscriptLogger.note("asr engine prepared")
-                #endif
-                try await cleanup.prepareEngine()
-                #if DICT_DEV_LOG
-                VizprTranscriptLogger.note("cleanup engine prepared")
-                #endif
-            } catch {
-                self.failLoudly(
-                    "Vizpr's speech models failed to load.",
-                    detail: "Run scripts/fetch-models.sh and rebuild, or reinstall. (\(error))"
-                )
-            }
-        }
+        // Warm both engines concurrently at launch (their loads are
+        // independent; serial warming paid ASR + LLM back to back). Dictation
+        // is NOT gated on this: both engines single-flight their prepare, so a
+        // session begun mid-warm awaits the same load instead of failing.
+        // Missing models = broken build. (Two plain Tasks, not a task group —
+        // the Swift 6 region-isolation checker rejects @MainActor addTask
+        // closures here as an unanalyzable pattern.)
+        warmEngine(devLogLabel: "asr engine prepared") { try await engine.prepare() }
+        warmEngine(devLogLabel: "cleanup engine prepared") { try await cleanup.prepareEngine() }
 
         // Dev-observe the display: what the overlay (PR 9) will render, and
         // exactly what a commit would inject.
@@ -121,6 +111,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         #endif
+    }
+
+    /// One warm leg: run the prepare, dev-log readiness, fail loudly on error.
+    /// If both legs fail, the first alert's termination wins; the second modal
+    /// never shows.
+    private func warmEngine(
+        devLogLabel: String, _ prepare: @escaping @Sendable () async throws -> Void
+    ) {
+        Task { @MainActor in
+            do {
+                try await prepare()
+                #if DICT_DEV_LOG
+                VizprTranscriptLogger.note(devLogLabel)
+                #endif
+            } catch {
+                self.failLoudly(
+                    "Vizpr's speech models failed to load.",
+                    detail: "Run scripts/fetch-models.sh and rebuild, or reinstall. (\(error))"
+                )
+            }
+        }
     }
 
     private func failLoudly(_ message: String, detail: String) {

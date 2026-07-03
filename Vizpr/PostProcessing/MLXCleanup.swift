@@ -4,7 +4,7 @@ import MLXLMCommon
 
 enum MLXCleanupError: Error {
     case bundledModelMissing(String)
-    case notPrepared
+    case modelUnavailable
 }
 
 /// The cleanup LLM behind `CleanupEngine` (PLAN.md §10): Qwen3-4B-Instruct-2507
@@ -27,13 +27,25 @@ actor MLXCleanup: CleanupEngine {
     private let modelDirectory: URL
     private var container: ModelContainer?
 
+    /// Single-flight load (same reentrancy hazard as FluidAudioASR: a plain
+    /// nil-guard lets the launch warm and an early first cleanup both load the
+    /// 2.1 GB weights). A failed load stays cached — the app fails loudly on
+    /// prepare errors rather than retrying.
+    private var prepareTask: Task<Void, any Error>?
+
     init(modelDirectory: URL? = nil) {
         self.modelDirectory = modelDirectory
             ?? Bundle.main.resourceURL!.appendingPathComponent("Models/cleanup-llm")
     }
 
     func prepare() async throws {
-        guard container == nil else { return }
+        if prepareTask == nil {
+            prepareTask = Task { try await performPrepare() }
+        }
+        try await prepareTask!.value
+    }
+
+    private func performPrepare() async throws {
         let marker = modelDirectory.appendingPathComponent("config.json")
         guard FileManager.default.fileExists(atPath: marker.path) else {
             throw MLXCleanupError.bundledModelMissing(modelDirectory.path)
@@ -43,8 +55,12 @@ actor MLXCleanup: CleanupEngine {
         )
     }
 
+    /// Awaits the (single-flight) model load, so cleanup invoked on a dictation
+    /// begun before the launch warm finishes waits for the weights instead of
+    /// silently skipping the span.
     func clean(_ request: CleanupRequest) async throws -> CleanupResult {
-        guard let container else { throw MLXCleanupError.notPrepared }
+        try await prepare()
+        guard let container else { throw MLXCleanupError.modelUnavailable }
 
         let system = CleanupPrompt.system(for: request.context)
         let input = UserInput(chat: [.system(system), .user(request.text)])
