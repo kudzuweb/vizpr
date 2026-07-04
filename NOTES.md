@@ -62,6 +62,13 @@ before commit. Real findings fixed in the same PR:
 - Secure-input re-checked between chord failure and the slower fallback.
 - Dev log never records text dictated at a password field.
 
+**Manual matrix results (Mauria, 2026-07-04):** TextEdit ✓, VS Code ✓,
+Terminal ✓, browser textarea ✓, password field skip+beep ✓ (beep confirmed
+audible), clipboard restore ✓ ("works perfectly"). Dvorak: NOT yet tested —
+the one open cell; layout-resolution path is review-hardened, retest
+opportunistically or at PR 12. One field catch fixed in-PR: the secure-skip
+breadcrumb leaked dictated text into debug.log (now redacted).
+
 **Accepted risks (documented, not fixed):**
 - "Chord posted but target app ignored it" is undetectable without AX; the
   fallback fires on untrusted/creation-failure only. The PR 8 manual matrix
