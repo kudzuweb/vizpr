@@ -45,6 +45,23 @@ by the golden corpus.
   correction landed just after commit. Feedstock for the PR 9 settle-window/
   felt-experience verdict.
 
+## PR 9 design candidate: flush-settle window (Mauria's proposal, 2026-07-04)
+
+Close the WYSIWYG-lag gap by holding commit briefly after release: overlay
+stays up, the ASR flush updates the draft (intermediate color), THEN snapshot
+and inject. Mechanism: commit awaits session-drained (the PR 7 hook — fires
+exactly when flush events are delivered) OR a ~350 ms cap, whichever first.
+Measured flush latency after release: 144–212 ms (2026-07-04 dogfood), so
+drain wins the race in practice.
+
+- WYSIWYG preserved as displayed==injected; "at stop" becomes "at stop +
+  settle" — a §15 amendment to record if adopted (pending Mauria's call).
+- Cleanup stays STRICT-CANCEL (unbounded LLM decode; the §15 rejection of a
+  cleanup grace period is untouched). The settle applies only to the bounded
+  ASR flush.
+- Tune with the overlay in PR 9 (timing + intermediate color are one felt
+  experience); judge with the dev log's raw-vs-injected gap before/after.
+
 ## Carried to PR 9 (overlay) from 6b dogfood, 2026-07-03
 
 - **Window-boundary word truncation:** window 1's final arrived as
