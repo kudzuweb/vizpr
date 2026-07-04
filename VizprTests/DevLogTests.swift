@@ -105,7 +105,7 @@ struct DevLogTests {
         #expect(records[0]["error"] as? String == "modelUnavailable")
     }
 
-    @Test("Tracker accumulates finalized text only and resets after the record")
+    @Test("Tracker joins finalized spans; finals supersede window drafts")
     func trackerAccumulatesFinals() async {
         let tracker = DevDictationTracker()
         await tracker.observe(.draft(windowID: 0, text: "draft noise"))
@@ -127,6 +127,38 @@ struct DevLogTests {
             timestamp: "2026-07-03T00:00:00Z"
         )
         #expect(next.rawASRText.isEmpty)
+    }
+
+    @Test("A draft-only session records the last draft as raw")
+    func trackerDraftOnlySession() async {
+        // Field regression: sessions shorter than the 10 s confirmation
+        // context never confirm anything — even the flush arrives as a draft —
+        // so a finals-only tracker logged empty raw for every short dictation.
+        let tracker = DevDictationTracker()
+        await tracker.observe(.draft(windowID: 0, text: "were doing a quick"))
+        await tracker.observe(.draft(windowID: 0, text: "were doing a quick short"))
+        await tracker.observe(.draft(windowID: 0, text: "were doing a quick short flush tail"))
+
+        let record = await tracker.makeRecord(
+            injectedText: "We're doing a quick short.",
+            bundleID: nil, mode: "default", modelTier: "test",
+            timestamp: "2026-07-04T00:00:00Z"
+        )
+        #expect(record.rawASRText == "were doing a quick short flush tail")
+    }
+
+    @Test("Raw is finals plus the unconfirmed trailing draft")
+    func trackerFinalsPlusTrailingDraft() async {
+        let tracker = DevDictationTracker()
+        await tracker.observe(.finalized(text: "confirmed span.", confidence: 0.9, tokenConfidences: []))
+        await tracker.observe(.draft(windowID: 1, text: "unconfirmed tail"))
+
+        let record = await tracker.makeRecord(
+            injectedText: "Confirmed span. Unconfirmed tail.",
+            bundleID: nil, mode: "default", modelTier: "test",
+            timestamp: "2026-07-04T00:00:00Z"
+        )
+        #expect(record.rawASRText == "confirmed span. unconfirmed tail")
     }
 }
 #endif
