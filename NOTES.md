@@ -32,6 +32,47 @@ cases; NFC first; split special tokens before BPE; integer-ID min-heap merge loo
 match the REFERENCE runtime (Qwen's shipped regex is officially buggy), enforced
 by the golden corpus.
 
+## PR 8 — Injection (adversarial review, 2026-07-04)
+
+Three review lenses (spec/WYSIWYG, races/pasteboard-security, concurrency/API)
+before commit. Real findings fixed in the same PR:
+
+- **Inline 300 ms restore stalled the action loop** (would eat the first
+  300 ms of a rapid re-dictation) → restore runs as a tracked child task;
+  the NEXT inject awaits it before writing, so back-to-back dictation can't
+  defeat the prior restore.
+- **CGEvent.post silently no-ops without Accessibility** (false success →
+  fallback never tried → restore clobbers the dictation) → postPasteChord
+  gates on AXIsProcessTrusted(), untrusted now routes to the fallback.
+- **org.nspasteboard conventions**: our write is marked TransientType
+  (clipboard managers don't record dictation); concealed clipboard content
+  (password managers) is never snapshotted or restored; snapshots skip
+  promise-backed and marker types.
+- **.privateState event source** so physically-held secondary-chord modifiers
+  can't contaminate the synthesized Cmd+V.
+- **Cancellation no longer restores EARLY** (app-terminate mid-delay raced
+  the target app's paste) — cancelled restore = no restore.
+- **Atomic restore claim**: clearContents()-returns-count verify, aborting if
+  a writer raced between guard check and claim.
+- Layout scan hardening: ASCII-capable input source (CJK input methods),
+  withExtendedLifetime (interior-pointer UAF), NoDeadKeysMask (bit vs mask),
+  accepts V as well as v, Unmanaged.fromOpaque + bindMemory.
+- Spacing memory resets on cancel and secure-input skip; combining-mark
+  leaders never get a joiner; secure-input check outranks the empty check.
+- Secure-input re-checked between chord failure and the slower fallback.
+- Dev log never records text dictated at a password field.
+
+**Accepted risks (documented, not fixed):**
+- "Chord posted but target app ignored it" is undetectable without AX; the
+  fallback fires on untrusted/creation-failure only. The PR 8 manual matrix
+  (Terminal/Electron) decides whether a per-app fallback list is needed.
+- NSAppleScript fallback is synchronous through the first-use Automation TCC
+  prompt (freezes the run loop until answered). Rare path; pre-grant during
+  onboarding lands with PR 12.
+- NSSound.beep can be inaudible (muted alerts); the visible notice is PR 9's.
+- Secure-input TOCTOU between probe and HID delivery is inherent; window is
+  microseconds on the chord path, re-checked before the fallback.
+
 ## Dev-log analysis notes (PR 7, for prompt tuning later)
 
 - **`stale` near a commit timestamp usually means "cancelled, politely":**

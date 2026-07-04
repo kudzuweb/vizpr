@@ -15,6 +15,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var actionsTask: Task<Void, Never>?
     private var audioPipeline: AudioPipeline?
     private let tokenStream = TokenStream()
+    private let textInjector = TextInjector(
+        pasteboard: SystemPasteboard(),
+        poster: CGEventPoster(),
+        secureInput: SecureInputProbe()
+    )
     private var smartCleanup: SmartCleanup?
     private var snapshotTask: Task<Void, Never>?
     #if DICT_DEV_LOG
@@ -253,16 +258,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 case .commit:
                     self?.audioPipeline?.stop()
                     // Atomic WYSIWYG gate: snapshot displayed text, cancel
-                    // in-flight cleanup. The injector (PR 8) receives exactly
-                    // this string; until then the dev log records it.
+                    // in-flight cleanup. The injector receives exactly this
+                    // string and transforms nothing (§12).
                     let committed = await self?.tokenStream.commit() ?? ""
+                    let outcome = await self?.textInjector.inject(committed)
+                    switch outcome {
+                    case .skippedSecureInput:
+                        // §12.1's quiet notice, headless edition — the
+                        // overlay (PR 9) upgrades this to a visible one. The
+                        // user is at a different field than last time, so the
+                        // spacing memory no longer applies.
+                        NSSound.beep()
+                        self?.textInjector.resetSpacing()
+                    case .failed:
+                        // Total failure is no quieter: the text is on the
+                        // clipboard for a manual paste.
+                        NSSound.beep()
+                    case .injected, .skippedEmpty, nil:
+                        break
+                    }
                     #if DICT_DEV_LOG
-                    VizprTranscriptLogger.note("COMMIT (would inject): \(committed)")
-                    await self?.noteCommitted(committed)
+                    VizprTranscriptLogger.note(
+                        "COMMIT \(String(describing: outcome)): \(committed)"
+                    )
+                    if outcome == .skippedSecureInput {
+                        // Never log text dictated at a password field.
+                        await self?.abandonDictationRecord()
+                    } else {
+                        await self?.noteCommitted(committed)
+                    }
                     #endif
                 case .cancel:
                     self?.audioPipeline?.stop()
                     await self?.tokenStream.cancelSession()
+                    self?.textInjector.resetSpacing()
                     #if DICT_DEV_LOG
                     await self?.abandonDictationRecord()
                     #endif
