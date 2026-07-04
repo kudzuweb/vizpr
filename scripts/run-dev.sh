@@ -9,12 +9,14 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+# ALWAYS build: an existence check here once launched a stale pre-PR-7 binary
+# and silently dogfooded old code (field-reported: committed dictations wrote
+# no JSONL records). Incremental builds against the cached build/dd are fast;
+# correctness beats the seconds saved.
 APP="build/dd/Build/Products/Debug/Vizpr.app"
-if [[ ! -d "$APP" ]]; then
-  echo "Building Debug app ..."
-  xcodebuild -project Vizpr.xcodeproj -scheme Vizpr -configuration Debug \
-    -derivedDataPath build/dd build >/dev/null
-fi
+echo "Building Debug app ..."
+xcodebuild -project Vizpr.xcodeproj -scheme Vizpr -configuration Debug \
+  -derivedDataPath build/dd build >/dev/null
 
 # Kill any running instance first: `open` would otherwise just activate the
 # old process instead of launching the freshly built binary, silently testing
