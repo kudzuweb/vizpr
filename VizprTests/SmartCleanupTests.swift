@@ -7,10 +7,16 @@ private actor FakeCleanupEngine: CleanupEngine {
     private(set) var requests: [CleanupRequest] = []
     private let transform: @Sendable (String) -> String
     private let holdUntilCancelled: Bool
+    private let delayNanos: UInt64
 
-    init(holdUntilCancelled: Bool = false, transform: @escaping @Sendable (String) -> String = { $0 }) {
+    init(
+        holdUntilCancelled: Bool = false,
+        delayNanos: UInt64 = 0,
+        transform: @escaping @Sendable (String) -> String = { $0 }
+    ) {
         self.transform = transform
         self.holdUntilCancelled = holdUntilCancelled
+        self.delayNanos = delayNanos
     }
 
     func prepare() async throws {}
@@ -21,11 +27,25 @@ private actor FakeCleanupEngine: CleanupEngine {
             while !Task.isCancelled { try? await Task.sleep(nanoseconds: 2_000_000) }
             throw CancellationError()
         }
+        if delayNanos > 0 { try? await Task.sleep(nanoseconds: delayNanos) }
         return CleanupResult(text: transform(request.text))
     }
 
     var requestCount: Int { requests.count }
     var lastRequest: CleanupRequest? { requests.last }
+}
+
+/// An engine whose clean() always throws — for the failed-disposition path.
+private struct ExplodingCleanupEngine: CleanupEngine {
+    struct Boom: Error {}
+    func prepare() async throws {}
+    func clean(_ request: CleanupRequest) async throws -> CleanupResult { throw Boom() }
+}
+
+/// Collects CleanupOutcomes delivered through SmartCleanup's onOutcome seam.
+private actor OutcomeBox {
+    private(set) var outcomes: [CleanupOutcome] = []
+    func add(_ outcome: CleanupOutcome) { outcomes.append(outcome) }
 }
 
 @Suite("SmartCleanup")
@@ -128,6 +148,90 @@ struct SmartCleanupTests {
         let request = await engine.lastRequest
         #expect(request?.context.vocabularyHint == "API")
         #expect(request?.context.surroundingText?.isEmpty == false)
+    }
+
+    @Test("An applied cleanup reports .applied with the post-passed output")
+    func outcomeApplied() async {
+        let ts = TokenStream()
+        let engine = FakeCleanupEngine { $0.uppercased() }
+        let box = OutcomeBox()
+        let smart = SmartCleanup(
+            tokenStream: ts, engine: engine, onOutcome: { await box.add($0) }
+        )
+        await ts.beginSession()
+
+        await smart.ingest(.finalized(text: "helo wrld", confidence: 0.4, tokenConfidences: [0.4]))
+        await settle()
+        let outcomes = await box.outcomes
+        #expect(outcomes.count == 1)
+        #expect(outcomes.first?.disposition == .applied)
+        #expect(outcomes.first?.output == "HELO WRLD")
+        #expect(outcomes.first?.input == "helo wrld")
+    }
+
+    @Test("A result arriving after the live region changed reports .stale")
+    func outcomeStale() async {
+        let ts = TokenStream()
+        // Engine slow enough that a second finalized span lands (advancing the
+        // generation) before the first cleanup's result comes back.
+        let engine = FakeCleanupEngine(delayNanos: 60_000_000) { $0.uppercased() }
+        let box = OutcomeBox()
+        let smart = SmartCleanup(
+            tokenStream: ts, engine: engine, onOutcome: { await box.add($0) }
+        )
+        await ts.beginSession()
+
+        await smart.ingest(.finalized(text: "helo wrld", confidence: 0.4, tokenConfidences: [0.4]))
+        try? await Task.sleep(nanoseconds: 20_000_000)   // cleanup in flight
+        // High confidence, no terminator: advances the generation without
+        // launching a second cleanup.
+        await smart.ingest(.finalized(text: "more words", confidence: 0.99, tokenConfidences: [0.99]))
+        try? await Task.sleep(nanoseconds: 100_000_000)
+
+        let outcomes = await box.outcomes
+        #expect(outcomes.count == 1)
+        #expect(outcomes.first?.disposition == .stale)
+    }
+
+    @Test("A commit-cancelled cleanup reports .cancelled")
+    func outcomeCancelled() async {
+        let ts = TokenStream()
+        let engine = FakeCleanupEngine(holdUntilCancelled: true)
+        let box = OutcomeBox()
+        let smart = SmartCleanup(
+            tokenStream: ts, engine: engine, onOutcome: { await box.add($0) }
+        )
+        await ts.beginSession()
+
+        await smart.ingest(.finalized(text: "pending text.", confidence: 0.4, tokenConfidences: [0.4]))
+        try? await Task.sleep(nanoseconds: 20_000_000)   // cleanup starts and blocks
+        _ = await ts.commit()
+        await settle()
+
+        let outcomes = await box.outcomes
+        #expect(outcomes.count == 1)
+        #expect(outcomes.first?.disposition == .cancelled)
+        #expect(outcomes.first?.output == nil)
+    }
+
+    @Test("An engine error reports .failed with the error — never silently")
+    func outcomeFailed() async {
+        let ts = TokenStream()
+        let box = OutcomeBox()
+        let smart = SmartCleanup(
+            tokenStream: ts, engine: ExplodingCleanupEngine(), onOutcome: { await box.add($0) }
+        )
+        await ts.beginSession()
+
+        await smart.ingest(.finalized(text: "will explode.", confidence: 0.4, tokenConfidences: [0.4]))
+        await settle()
+
+        let outcomes = await box.outcomes
+        #expect(outcomes.count == 1)
+        #expect(outcomes.first?.disposition == .failed)
+        #expect(outcomes.first?.errorDescription?.isEmpty == false)
+        // Fail-open: the raw span is still displayed.
+        #expect(await ts.live == "will explode.")
     }
 
     @Test("Commit cancels an in-flight cleanup and its late result never applies")

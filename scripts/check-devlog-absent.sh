@@ -44,8 +44,8 @@ while IFS= read -r bin; do
     echo "  FAIL: dev-log build marker present." >&2
     FAIL=1
   fi
-  if nm "$bin" 2>/dev/null | grep -qi "VizprTranscriptLogger"; then
-    echo "  FAIL: VizprTranscriptLogger symbol present." >&2
+  if nm "$bin" 2>/dev/null | grep -qiE "VizprTranscriptLogger|VizprDevLogWriter|DevDictationTracker|DevDictationRecord|DevCleanupRecord"; then
+    echo "  FAIL: dev logger symbols present." >&2
     FAIL=1
   fi
 done < <(find "$SCAN_DIR" -type f)

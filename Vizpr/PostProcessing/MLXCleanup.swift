@@ -18,6 +18,10 @@ enum MLXCleanupError: Error {
 /// `Task.isCancelled` between steps, so abandoning the stream stops decoding
 /// promptly — the strict-cancel guarantee the commit gate depends on.
 actor MLXCleanup: CleanupEngine {
+    /// The wired model, recorded as `model_tier` in dev-log dictation records
+    /// (§14). Becomes dynamic when the Models pane lands (PR 11).
+    static let modelTier = "qwen3-4b-instruct-2507-4bit"
+
     /// Deterministic, low-temperature generation (§10 requirement 11).
     private static let temperature: Float = 0.1
     /// Cleanup rewrites a bounded span; cap output so a runaway generation

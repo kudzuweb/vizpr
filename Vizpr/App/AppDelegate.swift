@@ -17,6 +17,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let tokenStream = TokenStream()
     private var smartCleanup: SmartCleanup?
     private var snapshotTask: Task<Void, Never>?
+    #if DICT_DEV_LOG
+    private let dictationTracker = DevDictationTracker()
+    /// Dictation-record handshake: the record needs the committed text (known
+    /// at the commit action) AND the full raw ASR text (complete only when the
+    /// session drains — flush finals arrive after commit). Commit and drain
+    /// race in either order; whichever lands second writes. Main-actor state.
+    private var pendingInjection: String?
+    private var sessionDrained = false
+    #endif
 
     /// NSApplication holds its delegate weakly, and a local would be releasable
     /// by the optimizer after its last use even though app.run() never returns —
@@ -68,18 +77,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // The cleanup leg (PR 6): events flow ASR -> SmartCleanup (vocab
         // pre-pass + confidence gate) -> TokenStream (regions + generation
-        // gate); commit/cancel drive the stream's atomic gate below.
+        // gate); commit/cancel drive the stream's atomic gate below. In dev
+        // builds the same event stream and outcome seam feed the §14 JSONL
+        // records; Release leaves both hooks unset.
         let vocabulary = (try? VocabularyStore().load()) ?? .empty
+        #if DICT_DEV_LOG
+        let tracker = dictationTracker
+        let onOutcome: (@Sendable (CleanupOutcome) async -> Void)? = { outcome in
+            await VizprDevLogWriter.shared.append(DevCleanupRecord(outcome))
+        }
+        let onSessionDrained: (@Sendable () async -> Void)? = { [weak self] in
+            await self?.handleSessionDrained()
+        }
+        #else
+        let onOutcome: (@Sendable (CleanupOutcome) async -> Void)? = nil
+        let onSessionDrained: (@Sendable () async -> Void)? = nil
+        #endif
         let cleanup = SmartCleanup(
             tokenStream: tokenStream,
             engine: MLXCleanup(),
-            vocabulary: vocabulary
+            vocabulary: vocabulary,
+            onOutcome: onOutcome
         )
         smartCleanup = cleanup
 
+        #if DICT_DEV_LOG
+        let onTokenEvent: @Sendable (TokenEvent) async -> Void = { [cleanup] event in
+            await tracker.observe(event)
+            await cleanup.ingest(event)
+        }
+        #else
+        let onTokenEvent: @Sendable (TokenEvent) async -> Void = { [cleanup] event in
+            await cleanup.ingest(event)
+        }
+        #endif
+
         audioPipeline = AudioPipeline.makeDefault(
             engine: engine,
-            onTokenEvent: { [cleanup] event in await cleanup.ingest(event) },
+            onTokenEvent: onTokenEvent,
+            onSessionDrained: onSessionDrained,
             onAutoStop: { [hotkeyMonitor] in hotkeyMonitor.injectAutoStop() }
         )
         guard audioPipeline != nil else {
@@ -112,6 +148,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         #endif
     }
+
+    #if DICT_DEV_LOG
+    // MARK: Dictation-record handshake (§14)
+
+    private func beginDictationRecord() async {
+        pendingInjection = nil
+        sessionDrained = false
+        await dictationTracker.reset()
+    }
+
+    /// Commit half: stash the injected text; write now if the drain already
+    /// happened (the flush can outrun the commit action's actor hops).
+    private func noteCommitted(_ text: String) async {
+        pendingInjection = text
+        if sessionDrained { await writeDictationRecord() }
+    }
+
+    /// Drain half (from AudioPipeline.onSessionDrained): every event including
+    /// flush finals has reached the tracker. Write if the commit text is
+    /// already stashed; a cancelled session leaves it nil — no record.
+    private func handleSessionDrained() async {
+        sessionDrained = true
+        if pendingInjection != nil { await writeDictationRecord() }
+    }
+
+    private func abandonDictationRecord() async {
+        pendingInjection = nil
+        await dictationTracker.reset()
+    }
+
+    private func writeDictationRecord() async {
+        guard let injected = pendingInjection else { return }
+        pendingInjection = nil
+        let record = await dictationTracker.makeRecord(
+            injectedText: injected,
+            bundleID: NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
+            mode: "default",
+            modelTier: MLXCleanup.modelTier
+        )
+        await VizprDevLogWriter.shared.append(record)
+    }
+    #endif
 
     /// One warm leg: run the prepare, dev-log readiness, fail loudly on error.
     /// If both legs fail, the first alert's termination wins; the second modal
@@ -168,6 +246,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 switch action {
                 case .startDictation:
                     await self?.tokenStream.beginSession()
+                    #if DICT_DEV_LOG
+                    await self?.beginDictationRecord()
+                    #endif
                     self?.audioPipeline?.start()
                 case .commit:
                     self?.audioPipeline?.stop()
@@ -177,10 +258,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     let committed = await self?.tokenStream.commit() ?? ""
                     #if DICT_DEV_LOG
                     VizprTranscriptLogger.note("COMMIT (would inject): \(committed)")
+                    await self?.noteCommitted(committed)
                     #endif
                 case .cancel:
                     self?.audioPipeline?.stop()
                     await self?.tokenStream.cancelSession()
+                    #if DICT_DEV_LOG
+                    await self?.abandonDictationRecord()
+                    #endif
                 }
             }
         }

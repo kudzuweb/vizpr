@@ -32,6 +32,44 @@ cases; NFC first; split special tokens before BPE; integer-ID min-heap merge loo
 match the REFERENCE runtime (Qwen's shipped regex is officially buggy), enforced
 by the golden corpus.
 
+## Dev-log analysis notes (PR 7, for prompt tuning later)
+
+- **`stale` near a commit timestamp usually means "cancelled, politely":**
+  mlx-swift's decode loop can notice cancellation and end its stream
+  gracefully instead of throwing, so clean() returns a truncated result and
+  the generation gate drops it as `stale` (observed live: gen-9 record,
+  2026-07-04 dogfood). True `cancelled` appears when the throw wins the race.
+  Either way the result never reached the display.
+- Dictation records are the WYSIWYG-lag signal: e.g. injected "we're gonna
+  head into it." vs raw flush "we're gonna end the tap." — the engine's
+  correction landed just after commit. Feedstock for the PR 9 settle-window/
+  felt-experience verdict.
+
+## PR 9 design candidate: flush-settle window (Mauria's proposal, 2026-07-04)
+
+Close the WYSIWYG-lag gap by holding commit briefly after release: overlay
+stays up, the ASR flush updates the draft (intermediate color), THEN snapshot
+and inject. Mechanism: commit awaits session-drained (the PR 7 hook — fires
+exactly when flush events are delivered) OR a ~350 ms cap, whichever first.
+Measured flush latency after release: 144–212 ms (2026-07-04 dogfood), so
+drain wins the race in practice.
+
+- WYSIWYG preserved as displayed==injected; "at stop" becomes "at stop +
+  settle" — a §15 amendment to record if adopted (pending Mauria's call).
+- Cleanup stays STRICT-CANCEL (unbounded LLM decode; the §15 rejection of a
+  cleanup grace period is untouched). The settle applies only to the bounded
+  ASR flush.
+- Tune with the overlay in PR 9 (timing + intermediate color are one felt
+  experience); judge with the dev log's raw-vs-injected gap before/after.
+- ADOPTED in principle (Mauria, 2026-07-04): settle may run slightly longer
+  than the minimum as long as it never *feels* slow. Her design rationale,
+  verbatim intent: the color is the trust contract — her complaint with other
+  cleanup apps was "no idea I was proofreading a draft or what was subject to
+  change, so I'd send it and then see something I'd have wanted to change."
+  Rule for PR 9: anything that can still change MUST be visibly intermediate;
+  anything final-colored is guaranteed immutable. Never let text change after
+  it reads as final.
+
 ## Carried to PR 9 (overlay) from 6b dogfood, 2026-07-03
 
 - **Window-boundary word truncation:** window 1's final arrived as
