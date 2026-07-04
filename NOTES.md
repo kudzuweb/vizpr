@@ -61,6 +61,14 @@ drain wins the race in practice.
   ASR flush.
 - Tune with the overlay in PR 9 (timing + intermediate color are one felt
   experience); judge with the dev log's raw-vs-injected gap before/after.
+- ADOPTED in principle (Mauria, 2026-07-04): settle may run slightly longer
+  than the minimum as long as it never *feels* slow. Her design rationale,
+  verbatim intent: the color is the trust contract — her complaint with other
+  cleanup apps was "no idea I was proofreading a draft or what was subject to
+  change, so I'd send it and then see something I'd have wanted to change."
+  Rule for PR 9: anything that can still change MUST be visibly intermediate;
+  anything final-colored is guaranteed immutable. Never let text change after
+  it reads as final.
 
 ## Carried to PR 9 (overlay) from 6b dogfood, 2026-07-03
 
