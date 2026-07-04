@@ -63,8 +63,13 @@ before commit. Real findings fixed in the same PR:
 - Dev log never records text dictated at a password field.
 
 **Manual matrix results (Mauria, 2026-07-04):** TextEdit ✓, VS Code ✓,
-Terminal ✓, browser textarea ✓, password field skip+beep ✓ (beep confirmed
-audible), clipboard restore ✓ ("works perfectly"). Dvorak: NOT yet tested —
+browser textarea ✓, password field skip+beep ✓ (beep confirmed audible),
+clipboard restore ✓ ("works perfectly"). **Terminal: UNVERIFIED** — the ✓
+was inferred from the .injected outcome, but Mauria's pastes targeted the
+window running log stream, which doesn't echo tty input; retest at a clean
+shell prompt in the PR 9 dogfood. If .injected + no text at a prompt, the
+"chord posted but ignored" gap is real and the per-app fallback list
+becomes a work item. Dvorak: NOT yet tested —
 the one open cell; layout-resolution path is review-hardened, retest
 opportunistically or at PR 12. One field catch fixed in-PR: the secure-skip
 breadcrumb leaked dictated text into debug.log (now redacted).
