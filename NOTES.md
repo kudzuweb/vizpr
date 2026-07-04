@@ -102,6 +102,14 @@ drain wins the race in practice.
   ASR flush.
 - Tune with the overlay in PR 9 (timing + intermediate color are one felt
   experience); judge with the dev log's raw-vs-injected gap before/after.
+- **Confirmed motivating case (PR 8 field test, 2026-07-04): short
+  utterances are LOST today.** Quick tap-speak-release under ~2 s commits
+  before the first draft decodes → display empty → `skippedEmpty` → the
+  speech vanishes ("Oh hell yeah" ×3; Mauria had to learn "hold the key
+  down a little bit longer after I stop talking"). The settle window fixes
+  exactly this: commit awaits session drain, the flush populates the
+  display, the snapshot is non-empty. This upgrades the settle window from
+  accuracy polish to a data-loss fix.
 - ADOPTED in principle (Mauria, 2026-07-04): settle may run slightly longer
   than the minimum as long as it never *feels* slow. Her design rationale,
   verbatim intent: the color is the trust contract — her complaint with other
@@ -172,6 +180,13 @@ the edge logic into a pure `FlagEdgeTracker` with its own unit tests — turning
 shell logic the property tests couldn't reach into tested value-type code.
 
 ## Carried forward to PR 11 (Settings)
+
+3. **Clipboard-keep toggle (Mauria, PR 8 field test):** "a setting where you
+   can have the transcript stay in the clipboard for pasting." Already
+   provisioned: §14 lists a clipboard-restore toggle and
+   `TextInjector.restoreEnabled` is the wired flag — the pane just exposes
+   it (restore ON = clipboard comes back; OFF = transcript stays).
+
 
 From the second-pass review of PR 2 (Fable, 2026-07-02) — two menu/UX nits that
 belong with the Settings work rather than the hotkey PR:

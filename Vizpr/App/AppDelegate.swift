@@ -278,13 +278,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         break
                     }
                     #if DICT_DEV_LOG
-                    VizprTranscriptLogger.note(
-                        "COMMIT \(String(describing: outcome)): \(committed)"
-                    )
                     if outcome == .skippedSecureInput {
-                        // Never log text dictated at a password field.
+                        // Never log text dictated at a password field — not
+                        // in the JSONL record NOR the breadcrumb (field
+                        // catch: the first cut leaked it into debug.log).
+                        VizprTranscriptLogger.note("COMMIT skippedSecureInput: [redacted]")
                         await self?.abandonDictationRecord()
                     } else {
+                        VizprTranscriptLogger.note(
+                            "COMMIT \(String(describing: outcome)): \(committed)"
+                        )
                         await self?.noteCommitted(committed)
                     }
                     #endif
