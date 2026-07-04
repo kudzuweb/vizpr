@@ -20,6 +20,14 @@ final class AudioPipeline {
     /// Consumer for ASR token events (SmartCleanup.ingest in production; nil
     /// falls back to dev-log-only, useful in bring-up).
     private let onTokenEvent: (@Sendable (TokenEvent) async -> Void)?
+    /// Fires once per session after the engine's event stream fully drains —
+    /// i.e. AFTER every event (including the commit-time flush finals, which
+    /// arrive later than the commit action) has been delivered to
+    /// onTokenEvent. The dev logger writes its dictation record here; a
+    /// commit-time write would miss the flush (field-observed: short
+    /// dictations logged empty raw_asr_text — nothing finalizes before the
+    /// flush unless the session crosses the 10 s confirmation window).
+    private let onSessionDrained: (@Sendable () async -> Void)?
 
     private var sessionTask: Task<Void, Never>?
 
@@ -29,6 +37,7 @@ final class AudioPipeline {
         engine: (any TranscriptionEngine)? = nil,
         autoStopTimeout: Duration = .seconds(6),
         onTokenEvent: (@Sendable (TokenEvent) async -> Void)? = nil,
+        onSessionDrained: (@Sendable () async -> Void)? = nil,
         onAutoStop: @escaping () -> Void
     ) {
         self.source = source
@@ -36,6 +45,7 @@ final class AudioPipeline {
         self.engine = engine
         self.autoStopTimeout = autoStopTimeout
         self.onTokenEvent = onTokenEvent
+        self.onSessionDrained = onSessionDrained
         self.onAutoStop = onAutoStop
     }
 
@@ -45,6 +55,7 @@ final class AudioPipeline {
     static func makeDefault(
         engine: (any TranscriptionEngine)?,
         onTokenEvent: (@Sendable (TokenEvent) async -> Void)? = nil,
+        onSessionDrained: (@Sendable () async -> Void)? = nil,
         onAutoStop: @escaping () -> Void
     ) -> AudioPipeline? {
         guard let model = try? SpeechDetector.loadBundledModel() else { return nil }
@@ -53,6 +64,7 @@ final class AudioPipeline {
             detector: SpeechDetector(model: model),
             engine: engine,
             onTokenEvent: onTokenEvent,
+            onSessionDrained: onSessionDrained,
             onAutoStop: onAutoStop
         )
     }
@@ -60,7 +72,7 @@ final class AudioPipeline {
     func start() {
         guard sessionTask == nil else { return }   // one session at a time
 
-        sessionTask = Task { @MainActor [source, detector, engine, autoStopTimeout, onAutoStop, onTokenEvent] in
+        sessionTask = Task { @MainActor [source, detector, engine, autoStopTimeout, onAutoStop, onTokenEvent, onSessionDrained] in
             var watchdog = SilenceWatchdog(
                 timeout: autoStopTimeout,
                 sampleRate: Int(MicrophoneCapture.sampleRate)
@@ -109,9 +121,12 @@ final class AudioPipeline {
             }
 
             // Session over: end the engine's input so it flushes its tail and
-            // finishes its event stream, then let it drain.
+            // finishes its event stream, then let it drain. Runs even when the
+            // session task was cancelled by stop() — cancellation only breaks
+            // the capture loop above; the flush must still complete.
             fanOut.audio?.finish()
             await fanOut.events?.value
+            await onSessionDrained?()
         }
     }
 
