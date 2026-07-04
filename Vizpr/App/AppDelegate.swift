@@ -22,6 +22,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     )
     private var smartCleanup: SmartCleanup?
     private var snapshotTask: Task<Void, Never>?
+    private let overlay = OverlayController()
+    private let settleGate = SettleGate()
     #if DICT_DEV_LOG
     private let dictationTracker = DevDictationTracker()
     /// Dictation-record handshake: the record needs the committed text (known
@@ -91,13 +93,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let onOutcome: (@Sendable (CleanupOutcome) async -> Void)? = { outcome in
             await VizprDevLogWriter.shared.append(DevCleanupRecord(outcome))
         }
-        let onSessionDrained: (@Sendable () async -> Void)? = { [weak self] in
-            await self?.handleSessionDrained()
-        }
         #else
         let onOutcome: (@Sendable (CleanupOutcome) async -> Void)? = nil
-        let onSessionDrained: (@Sendable () async -> Void)? = nil
         #endif
+        // Ungated: the drain signal now also drives the flush-settle window
+        // (SettleGate), not just the dev logger.
+        let onSessionDrained: (@Sendable () async -> Void)? = { [weak self] in
+            await self?.sessionDrained()
+        }
         let cleanup = SmartCleanup(
             tokenStream: tokenStream,
             engine: MLXCleanup(),
@@ -141,16 +144,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         warmEngine(devLogLabel: "asr engine prepared") { try await engine.prepare() }
         warmEngine(devLogLabel: "cleanup engine prepared") { try await cleanup.prepareEngine() }
 
-        // Dev-observe the display: what the overlay (PR 9) will render, and
-        // exactly what a commit would inject.
-        #if DICT_DEV_LOG
-        snapshotTask = Task { @MainActor [tokenStream] in
+        // The display path: every snapshot renders on the overlay (§13); the
+        // dev logger observes the same stream.
+        snapshotTask = Task { @MainActor [tokenStream, overlay] in
             for await snapshot in await tokenStream.makeSnapshotStream() {
+                overlay.apply(snapshot)
+                #if DICT_DEV_LOG
                 if snapshot != .empty {
                     VizprTranscriptLogger.note("display: \(snapshot.displayed)")
                 }
+                #endif
             }
         }
+    }
+
+    /// Session drain (AudioPipeline hook): releases the settle window, then
+    /// the dev logger's half of the record handshake.
+    private func sessionDrained() async {
+        settleGate.noteDrained()
+        #if DICT_DEV_LOG
+        await handleSessionDrained()
         #endif
     }
 
@@ -251,16 +264,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 switch action {
                 case .startDictation:
                     await self?.tokenStream.beginSession()
+                    self?.settleGate.beginSession()
+                    self?.overlay.show()
                     #if DICT_DEV_LOG
                     await self?.beginDictationRecord()
                     #endif
                     self?.audioPipeline?.start()
                 case .commit:
                     self?.audioPipeline?.stop()
+                    // Flush-settle window (§15 amendment): let the ASR flush
+                    // land on the display — in the mutable color — before
+                    // snapshotting, bounded so a hung engine can't hold the
+                    // commit hostage. WYSIWYG holds: displayed==injected,
+                    // "at stop" is now "at stop + settle".
+                    await self?.settleGate.awaitDrain(cap: .milliseconds(350))
                     // Atomic WYSIWYG gate: snapshot displayed text, cancel
                     // in-flight cleanup. The injector receives exactly this
                     // string and transforms nothing (§12).
                     let committed = await self?.tokenStream.commit() ?? ""
+                    self?.overlay.dismiss()
                     let outcome = await self?.textInjector.inject(committed)
                     switch outcome {
                     case .skippedSecureInput:
@@ -294,6 +316,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 case .cancel:
                     self?.audioPipeline?.stop()
                     await self?.tokenStream.cancelSession()
+                    self?.overlay.dismiss()
                     self?.textInjector.resetSpacing()
                     #if DICT_DEV_LOG
                     await self?.abandonDictationRecord()
