@@ -98,6 +98,34 @@ breadcrumb leaked dictated text into debug.log (now redacted).
   correction landed just after commit. Feedstock for the PR 9 settle-window/
   felt-experience verdict.
 
+## PR 9 — Overlay (adversarial review, 2026-07-04)
+
+Three lenses (focus/spec, concurrency/lifecycle, rendering/WYSIWYG). Fixed
+in-PR: overlay rendered a RECONSTRUCTION of the display string (synthetic
+joiner + plain-space draft join) instead of the exact bytes commit injects —
+now renders settled + DisplaySnapshot.mutableSuffix verbatim; SettleGate
+drains are epoch-keyed (stale drains from cancelled/capped sessions reopened
+the quick-tap hole) and a cancelled timeout no longer fires resume; dismiss
+fade racing a rapid re-show no longer blanks the new session; post-commit
+stragglers can't repaint over dismissal; resting capsule width lives in
+SwiftUI (was dead code); tail-follow re-pins on size changes; capsule-shaped
+clipping; measurement short-circuits past the cap; window shadow off;
+willTerminate unparks the settle waiter. Seam duplication fixed:
+filler-tolerant overlap match (uh/um skipped in alignment, single-word match
+allowed modulo trailing punctuation), pinned by field-case regressions.
+
+**Accepted risks / deferred:** NSScreen.main is not "the active app's
+display" for an LSUIElement app — multi-display placement lands with PR 10's
+AX reader (single-display is correct today). Inline settle+restore awaits can
+delay a rapid next mic start ~350-650 ms worst case — field-judge before
+restructuring. failLoudly's modal can activate the app mid-session (rare,
+terminal path). Screen-change mid-session not re-laid-out. `.secondary`
+contrast over bright desktops in dark mode — check in dogfood.
+
+**Color revisit (Mauria):** overall palette to be revisited at PR 11; the
+intermediate-color trust mechanism itself is approved. The #A16FDF@13% tint
+is §15-locked — reopening it there is a deliberate decision, not drift.
+
 ## PR 9 design candidate: flush-settle window (Mauria's proposal, 2026-07-04)
 
 Close the WYSIWYG-lag gap by holding commit briefly after release: overlay

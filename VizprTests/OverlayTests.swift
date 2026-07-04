@@ -48,8 +48,8 @@ struct SettleGateTests {
     @Test("Drain before the wait returns immediately")
     func drainFirst() async {
         let gate = SettleGate()
-        gate.beginSession()
-        gate.noteDrained()
+        let epoch = gate.beginSession()
+        gate.noteDrained(epoch: epoch)
         let start = ContinuousClock.now
         await gate.awaitDrain(cap: .seconds(5))
         #expect(ContinuousClock.now - start < .milliseconds(100))
@@ -58,10 +58,10 @@ struct SettleGateTests {
     @Test("A waiter is released the moment the drain lands")
     func drainReleasesWaiter() async {
         let gate = SettleGate()
-        gate.beginSession()
+        let epoch = gate.beginSession()
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(30))
-            gate.noteDrained()
+            gate.noteDrained(epoch: epoch)
         }
         let start = ContinuousClock.now
         await gate.awaitDrain(cap: .seconds(5))
@@ -80,11 +80,23 @@ struct SettleGateTests {
         #expect(elapsed < .seconds(2), "cap did not bound the wait: \(elapsed)")
     }
 
+    @Test("A stale epoch's drain never satisfies the current session")
+    func staleEpochIgnored() async {
+        let gate = SettleGate()
+        let old = gate.beginSession()
+        gate.beginSession()   // supersedes `old`
+        gate.noteDrained(epoch: old)   // late drain from the dead session
+        let start = ContinuousClock.now
+        await gate.awaitDrain(cap: .milliseconds(60))
+        #expect(ContinuousClock.now - start >= .milliseconds(60),
+                "a stale drain collapsed the current settle window")
+    }
+
     @Test("Drain state is per-session")
     func perSession() async {
         let gate = SettleGate()
-        gate.beginSession()
-        gate.noteDrained()
+        let stale = gate.beginSession()
+        gate.noteDrained(epoch: stale)
         gate.beginSession()   // new session: previous drain must not leak
         let start = ContinuousClock.now
         await gate.awaitDrain(cap: .milliseconds(60))

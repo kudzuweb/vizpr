@@ -17,7 +17,10 @@ final class PreviewPanel: NSPanel {
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         backgroundColor = .clear
         isOpaque = false
-        hasShadow = true
+        // The panel is a transparent stage; AppKit's window shadow would
+        // stale-halo the old capsule bounds mid-growth (review finding). The
+        // capsule carries its own depth via the glass material.
+        hasShadow = false
         ignoresMouseEvents = true
         hidesOnDeactivate = false
         isMovable = false

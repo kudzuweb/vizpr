@@ -20,36 +20,39 @@ struct OverlayView: View {
     /// False under Reduce Motion — the capsule snaps instead of animating.
     let animated: Bool
 
-    private var mutableText: String {
-        let joined = [snapshot.live, snapshot.draft]
-            .filter { !$0.isEmpty }
-            .joined(separator: " ")
-        // Visual seam only — the injected string comes from commit(), never
-        // from this rendering.
-        return snapshot.settled.isEmpty || joined.isEmpty ? joined : " " + joined
-    }
+    private static let capsuleShape = RoundedRectangle(cornerRadius: 22, style: .continuous)
 
     var body: some View {
+        let resting = snapshot == .empty
         // Bottom-aligned within the fixed panel: the capsule's TOP edge rises.
         VStack {
             Spacer(minLength: 0)
             ZStack(alignment: .bottomLeading) {
                 GlassBackground()
                 ScrollView(.vertical) {
+                    // WYSIWYG: render EXACTLY the decomposition of
+                    // snapshot.displayed — the bytes commit injects. Never a
+                    // reconstruction with synthetic joiners (review finding:
+                    // the user proofread a string with one more space than
+                    // the injection).
                     (
                         Text(snapshot.settled).foregroundStyle(.primary)
-                        + Text(mutableText).foregroundStyle(.secondary)
+                        + Text(snapshot.mutableSuffix).foregroundStyle(.secondary)
                     )
                     .font(.system(size: 16, weight: .regular, design: .rounded))
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 18)
                     .padding(.vertical, 12)
-                    // Bottom-anchored growth: content pins to the bottom;
-                    // past the cap the top clips (tail-follow).
-                    .frame(maxHeight: .infinity, alignment: .bottom)
                 }
                 .scrollIndicators(.hidden)
-                .defaultScrollAnchor(.bottom)
+                // Tail-follow must re-pin on BOTH initial layout and every
+                // size change, or one settled-off-anchor frame sticks forever
+                // (the panel ignores the mouse, so nothing could recover).
+                .defaultScrollAnchor(.bottom, for: .initialOffset)
+                .defaultScrollAnchor(.bottom, for: .sizeChanges)
+                // Clip scrolled text to the capsule, not the rect — square
+                // glyph fragments rendered over the corner curves otherwise.
+                .clipShape(Self.capsuleShape)
 
                 if recording {
                     Circle()
@@ -59,8 +62,13 @@ struct OverlayView: View {
                         .accessibilityLabel("Recording")
                 }
             }
-            .frame(height: capsuleHeight)
+            .frame(
+                width: resting ? OverlayLayout.restingSize.width : OverlayLayout.readingWidth,
+                height: capsuleHeight
+            )
             .animation(animated ? .easeOut(duration: 0.15) : nil, value: capsuleHeight)
+            .animation(animated ? .easeOut(duration: 0.15) : nil, value: resting)
         }
+        .frame(maxWidth: .infinity)
     }
 }

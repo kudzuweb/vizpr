@@ -185,3 +185,33 @@ struct SentenceSplitterTests {
         #expect(SentenceSplitter.split("no terminator here") == ["no terminator here"])
     }
 }
+
+/// Field regressions from the 2026-07-04 PR 9 dogfood: windowed finals
+/// re-covering the previous window's tail with a filler or punctuation
+/// variation rendered the words twice.
+@Suite("SeamMerger filler-tolerant overlap")
+struct SeamMergerFillerTests {
+    @Test("A filler inside the overlap does not break the match")
+    func fillerInOverlap() {
+        let merged = SeamMerger.appendix(
+            context: "Sorry about that. Otherwise, we're",
+            new: "Otherwise, uh we're coming along here"
+        )
+        #expect(merged == " coming along here", "got: \(merged.debugDescription)")
+    }
+
+    @Test("Trailing punctuation on the context side still matches one word")
+    func punctuationSingleWord() {
+        let merged = SeamMerger.appendix(
+            context: "I do like the confirmation.",
+            new: "confirmation lag whatever thing"
+        )
+        #expect(merged == " lag whatever thing", "got: \(merged.debugDescription)")
+    }
+
+    @Test("Real repeated speech with different casing is preserved")
+    func emphasisRepeatPreserved() {
+        let merged = SeamMerger.appendix(context: "that's final.", new: "Final answer.")
+        #expect(merged.contains("Final answer"), "emphasis repeat was eaten: \(merged.debugDescription)")
+    }
+}

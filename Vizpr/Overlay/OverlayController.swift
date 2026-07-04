@@ -11,6 +11,9 @@ final class OverlayController {
     private var hosting: NSHostingView<OverlayView>?
     private var layout: OverlayLayout?
     private var recording = false
+    /// Once the capsule caps, stop measuring: the O(session-length)
+    /// boundingRect result is clamped anyway (review finding).
+    private var hitCap = false
 
     private var reduceMotion: Bool {
         NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
@@ -23,6 +26,7 @@ final class OverlayController {
         let layout = OverlayLayout(screen: screen.visibleFrame)
         self.layout = layout
         recording = true
+        hitCap = false
         panel.alphaValue = 1
         // The panel is a FIXED transparent stage spanning bottom edge to cap;
         // only the SwiftUI capsule inside animates (field catch: animating
@@ -33,7 +37,9 @@ final class OverlayController {
     }
 
     func apply(_ snapshot: DisplaySnapshot) {
-        guard panel.isVisible else { return }
+        // `recording`, not `isVisible`: post-commit straggler snapshots must
+        // not repaint text over an in-flight dismissal (review finding).
+        guard recording, panel.isVisible else { return }
         render(snapshot)
     }
 
@@ -50,9 +56,13 @@ final class OverlayController {
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.18
             panel.animator().alphaValue = 0
-        }, completionHandler: { [panel] in
-            panel.orderOut(nil)
-            panel.alphaValue = 1
+        }, completionHandler: { [weak self] in
+            // A rapid re-dictation can start during the fade; hiding the
+            // panel then would blank the NEW session's overlay entirely
+            // (review finding — apply() drops snapshots while hidden).
+            guard let self, !self.recording else { return }
+            self.panel.orderOut(nil)
+            self.panel.alphaValue = 1
         })
     }
 
@@ -78,6 +88,7 @@ final class OverlayController {
     /// catch).
     private func capsuleHeight(for snapshot: DisplaySnapshot) -> CGFloat {
         guard let layout else { return OverlayLayout.restingSize.height }
+        if hitCap { return layout.maxHeight }
         let text = snapshot.displayed
         guard !text.isEmpty else { return OverlayLayout.restingSize.height }
         let width = OverlayLayout.readingWidth - 36
@@ -92,6 +103,8 @@ final class OverlayController {
         // Extra line of headroom: growth leads the text instead of trailing
         // it, so a wrapping word never renders against the clipped edge.
         let measured = ceil(bounds.height) + 24 + ceil(font.ascender - font.descender)
-        return min(max(measured, OverlayLayout.restingSize.height), layout.maxHeight)
+        let clamped = min(max(measured, OverlayLayout.restingSize.height), layout.maxHeight)
+        if clamped >= layout.maxHeight { hitCap = true }
+        return clamped
     }
 }

@@ -54,30 +54,51 @@ enum SeamMerger {
     /// a single-word match trims only when the raw words are IDENTICAL
     /// including case and punctuation — real emphasis repeats ("final." vs
     /// "Final") differ in surface form and are preserved.
+    /// Filler tokens ignored when ALIGNING the overlap (field catch: the
+    /// windowed final ended "…Otherwise, we're" and the next window opened
+    /// "Otherwise, uh we're coming" — the "uh" broke token alignment and the
+    /// words rendered twice). Fillers inside a matched overlap are trimmed
+    /// with it; fillers elsewhere are never touched.
+    private static let fillers: Set<String> = ["uh", "um"]
+
     private static func trimOverlap(context: String, incoming: String) -> String {
         let contextRaw = context.split(separator: " ").suffix(12)
-        let contextWords = contextRaw.map(normalize)
         let incomingRaw = incoming.split(separator: " ", omittingEmptySubsequences: true)
-        let incomingWords = incomingRaw.prefix(12).map(normalize)
+        let incomingHead = incomingRaw.prefix(12).map(normalize)
 
-        var overlap = 0
-        let maxLen = min(contextWords.count, incomingWords.count)
+        // Filler-free views, with incoming's map back to raw indices.
+        let contextFiltered = contextRaw.map(normalize).filter { !fillers.contains($0) }
+        let incomingIdx = incomingHead.indices.filter { !fillers.contains(incomingHead[$0]) }
+        let incomingFiltered = incomingIdx.map { incomingHead[$0] }
+
+        var rawConsumed = 0
+        let maxLen = min(contextFiltered.count, incomingFiltered.count)
         for length in stride(from: maxLen, through: 1, by: -1) {
-            let tail = contextWords.suffix(length)
-            let head = incomingWords.prefix(length)
+            let tail = contextFiltered.suffix(length)
+            let head = incomingFiltered.prefix(length)
             guard !tail.isEmpty, Array(tail) == Array(head),
                   tail.contains(where: { !$0.isEmpty }) else { continue }
-            if length == 1, contextRaw.last != incomingRaw.first { continue }
-            overlap = length
+            if length == 1 {
+                // Single-word trims need raw equality modulo the context
+                // word's trailing punctuation ("confirmation." / "confirmation"
+                // is a seam; "final." / "Final" is real repeated speech).
+                let rawContext = contextRaw.last { !fillers.contains(normalize($0)) }.map(String.init) ?? ""
+                let rawIncoming = incomingIdx.first.map { String(incomingRaw[$0]) } ?? ""
+                let stripped = String(rawContext.reversed().drop(while: \.isPunctuation).reversed())
+                guard rawContext == rawIncoming || stripped == rawIncoming else { continue }
+            }
+            // Consume through the raw index of the last matched word,
+            // including any fillers interior to the overlap.
+            rawConsumed = incomingIdx[length - 1] + 1
             break
         }
-        guard overlap > 0, overlap <= incomingRaw.count else { return incoming }
-        guard overlap < incomingRaw.count else { return "" }
+        guard rawConsumed > 0, rawConsumed <= incomingRaw.count else { return incoming }
+        guard rawConsumed < incomingRaw.count else { return "" }
 
         // Slice the ORIGINAL string after the overlap words rather than
         // rejoining split words: rejoining collapses internal whitespace, a
         // silent transformation the WYSIWYG contract forbids (review finding).
-        let lastOverlapWord = incomingRaw[overlap - 1]
+        let lastOverlapWord = incomingRaw[rawConsumed - 1]
         let rest = incoming[lastOverlapWord.endIndex...]
         return String(rest.drop { $0 == " " })
     }

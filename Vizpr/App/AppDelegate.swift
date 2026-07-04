@@ -70,6 +70,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // Unpark any commit waiting in the settle window (the continuation is
+        // cancellation-blind) and drop the overlay before tasks die.
+        settleGate.releaseAll()
+        overlay.dismiss()
         snapshotTask?.cancel()
         actionsTask?.cancel()
         audioPipeline?.stop()
@@ -98,8 +102,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         #endif
         // Ungated: the drain signal now also drives the flush-settle window
         // (SettleGate), not just the dev logger.
-        let onSessionDrained: (@Sendable () async -> Void)? = { [weak self] in
-            await self?.sessionDrained()
+        let onSessionDrained: (@Sendable (Int) async -> Void)? = { [weak self] epoch in
+            await self?.sessionDrained(epoch: epoch)
         }
         let cleanup = SmartCleanup(
             tokenStream: tokenStream,
@@ -160,8 +164,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Session drain (AudioPipeline hook): releases the settle window, then
     /// the dev logger's half of the record handshake.
-    private func sessionDrained() async {
-        settleGate.noteDrained()
+    private func sessionDrained(epoch: Int) async {
+        settleGate.noteDrained(epoch: epoch)
         #if DICT_DEV_LOG
         await handleSessionDrained()
         #endif
@@ -264,12 +268,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 switch action {
                 case .startDictation:
                     await self?.tokenStream.beginSession()
-                    self?.settleGate.beginSession()
+                    let sessionEpoch = self?.settleGate.beginSession() ?? 0
                     self?.overlay.show()
                     #if DICT_DEV_LOG
                     await self?.beginDictationRecord()
                     #endif
-                    self?.audioPipeline?.start()
+                    self?.audioPipeline?.start(sessionEpoch: sessionEpoch)
                 case .commit:
                     self?.audioPipeline?.stop()
                     // Flush-settle window (§15 amendment): let the ASR flush
