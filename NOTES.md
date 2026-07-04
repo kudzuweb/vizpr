@@ -32,6 +32,19 @@ cases; NFC first; split special tokens before BPE; integer-ID min-heap merge loo
 match the REFERENCE runtime (Qwen's shipped regex is officially buggy), enforced
 by the golden corpus.
 
+## Dev-log analysis notes (PR 7, for prompt tuning later)
+
+- **`stale` near a commit timestamp usually means "cancelled, politely":**
+  mlx-swift's decode loop can notice cancellation and end its stream
+  gracefully instead of throwing, so clean() returns a truncated result and
+  the generation gate drops it as `stale` (observed live: gen-9 record,
+  2026-07-04 dogfood). True `cancelled` appears when the throw wins the race.
+  Either way the result never reached the display.
+- Dictation records are the WYSIWYG-lag signal: e.g. injected "we're gonna
+  head into it." vs raw flush "we're gonna end the tap." — the engine's
+  correction landed just after commit. Feedstock for the PR 9 settle-window/
+  felt-experience verdict.
+
 ## Carried to PR 9 (overlay) from 6b dogfood, 2026-07-03
 
 - **Window-boundary word truncation:** window 1's final arrived as
