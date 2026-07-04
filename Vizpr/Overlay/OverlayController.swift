@@ -24,18 +24,17 @@ final class OverlayController {
         self.layout = layout
         recording = true
         panel.alphaValue = 1
+        // The panel is a FIXED transparent stage spanning bottom edge to cap;
+        // only the SwiftUI capsule inside animates (field catch: animating
+        // the window frame lagged the text and clipped it mid-growth).
+        panel.setFrame(layout.frame(contentHeight: layout.maxHeight), display: true)
         render(.empty)
-        panel.setFrame(layout.restingFrame, display: true)
         panel.orderFrontRegardless()
     }
 
     func apply(_ snapshot: DisplaySnapshot) {
-        guard panel.isVisible, let layout else { return }
+        guard panel.isVisible else { return }
         render(snapshot)
-        let target = layout.frame(contentHeight: contentHeight(for: snapshot))
-        if target != panel.frame {
-            panel.setFrame(target, display: true, animate: !reduceMotion)
-        }
     }
 
     /// Ephemeral dismissal (§13): clear → shrink → fade. Reduce Motion →
@@ -47,7 +46,7 @@ final class OverlayController {
             panel.orderOut(nil)
             return
         }
-        if let layout { panel.setFrame(layout.restingFrame, display: true, animate: true) }
+        render(.empty)   // capsule shrinks to resting inside the fixed stage
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.18
             panel.animator().alphaValue = 0
@@ -58,7 +57,12 @@ final class OverlayController {
     }
 
     private func render(_ snapshot: DisplaySnapshot) {
-        let view = OverlayView(snapshot: snapshot, recording: recording)
+        let view = OverlayView(
+            snapshot: snapshot,
+            recording: recording,
+            capsuleHeight: capsuleHeight(for: snapshot),
+            animated: !reduceMotion
+        )
         if let hosting {
             hosting.rootView = view
         } else {
@@ -68,18 +72,26 @@ final class OverlayController {
         }
     }
 
-    /// Measured text height at the reading width — drives OverlayLayout.
-    /// (Text metrics, not hosting-view fitting: deterministic and cheap.)
-    private func contentHeight(for snapshot: DisplaySnapshot) -> CGFloat {
+    /// Measured text height at the reading width, clamped to layout bounds.
+    /// Measures with the ROUNDED design the view renders in — measuring with
+    /// the plain system font undersized the capsule and clipped text (field
+    /// catch).
+    private func capsuleHeight(for snapshot: DisplaySnapshot) -> CGFloat {
+        guard let layout else { return OverlayLayout.restingSize.height }
         let text = snapshot.displayed
-        guard !text.isEmpty else { return 0 }
+        guard !text.isEmpty else { return OverlayLayout.restingSize.height }
         let width = OverlayLayout.readingWidth - 36
-        let font = NSFont.systemFont(ofSize: 16, weight: .regular)
+        let base = NSFont.systemFont(ofSize: 16, weight: .regular)
+        let font = base.fontDescriptor.withDesign(.rounded)
+            .flatMap { NSFont(descriptor: $0, size: 16) } ?? base
         let bounds = (text as NSString).boundingRect(
             with: NSSize(width: width, height: .greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin, .usesFontLeading],
             attributes: [.font: font]
         )
-        return ceil(bounds.height) + 24
+        // Extra line of headroom: growth leads the text instead of trailing
+        // it, so a wrapping word never renders against the clipped edge.
+        let measured = ceil(bounds.height) + 24 + ceil(font.ascender - font.descender)
+        return min(max(measured, OverlayLayout.restingSize.height), layout.maxHeight)
     }
 }

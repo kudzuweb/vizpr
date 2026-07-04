@@ -11,6 +11,14 @@ import SwiftUI
 struct OverlayView: View {
     let snapshot: DisplaySnapshot
     let recording: Bool
+    /// Capsule height, measured by the controller. The PANEL never animates —
+    /// it is a fixed transparent stage; the capsule animates here in SwiftUI
+    /// so glass, text, and size move as one (field catch: AppKit frame
+    /// animation lagged the instantly-rendered text — jerky, and text clipped
+    /// at the edge mid-growth).
+    let capsuleHeight: CGFloat
+    /// False under Reduce Motion — the capsule snaps instead of animating.
+    let animated: Bool
 
     private var mutableText: String {
         let joined = [snapshot.live, snapshot.draft]
@@ -22,31 +30,37 @@ struct OverlayView: View {
     }
 
     var body: some View {
-        ZStack(alignment: .bottomLeading) {
-            GlassBackground()
-            ScrollView(.vertical) {
-                (
-                    Text(snapshot.settled).foregroundStyle(.primary)
-                    + Text(mutableText).foregroundStyle(.secondary)
-                )
-                .font(.system(size: 16, weight: .regular, design: .rounded))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 18)
-                .padding(.vertical, 12)
-                // Bottom-anchored growth: content pins to the bottom; when it
-                // exceeds the cap the top clips (tail-follow).
-                .frame(maxHeight: .infinity, alignment: .bottom)
-            }
-            .scrollIndicators(.hidden)
-            .defaultScrollAnchor(.bottom)
+        // Bottom-aligned within the fixed panel: the capsule's TOP edge rises.
+        VStack {
+            Spacer(minLength: 0)
+            ZStack(alignment: .bottomLeading) {
+                GlassBackground()
+                ScrollView(.vertical) {
+                    (
+                        Text(snapshot.settled).foregroundStyle(.primary)
+                        + Text(mutableText).foregroundStyle(.secondary)
+                    )
+                    .font(.system(size: 16, weight: .regular, design: .rounded))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 12)
+                    // Bottom-anchored growth: content pins to the bottom;
+                    // past the cap the top clips (tail-follow).
+                    .frame(maxHeight: .infinity, alignment: .bottom)
+                }
+                .scrollIndicators(.hidden)
+                .defaultScrollAnchor(.bottom)
 
-            if recording {
-                Circle()
-                    .fill(GlassBackground.tint)
-                    .frame(width: 7, height: 7)
-                    .padding(10)
-                    .accessibilityLabel("Recording")
+                if recording {
+                    Circle()
+                        .fill(GlassBackground.tint)
+                        .frame(width: 7, height: 7)
+                        .padding(10)
+                        .accessibilityLabel("Recording")
+                }
             }
+            .frame(height: capsuleHeight)
+            .animation(animated ? .easeOut(duration: 0.15) : nil, value: capsuleHeight)
         }
     }
 }
