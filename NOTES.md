@@ -281,9 +281,14 @@ is table-tested.
    2026-07-05):** different dictionaries may work better in different
    contexts; switching between named vocabulary sets — eventually
    automatically (per-app, per-mode) — could be a signature dictation
-   feature. PR 11's vocabulary storage should be shaped so multiple named
-   sets with an active selection isn't a retrofit; auto-switching is the
-   future work.
+   feature. **Hierarchical, not flat (Mauria's refinement): a GLOBAL
+   dictionary plus context-specific ones, with definitions movable/
+   propagatable between levels — "like a global claude.md and
+   project-level, but for how to interpret speech in context."**
+   Resolution: context set overrides global on conflicts; global applies
+   everywhere. PR 11's vocabulary storage should be shaped so a global set
+   + named context sets with an active selection isn't a retrofit;
+   auto-switching and up/down propagation UI are the future work.
 4. **Preflight-edit toggle:** optionally edit the transcript before injection
    (hold at the overlay, edit, then commit). Motivating case: TUIs — can't
    select-and-delete in a terminal input line, only backspace. Interacts
