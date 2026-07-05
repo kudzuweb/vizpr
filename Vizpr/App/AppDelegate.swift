@@ -29,7 +29,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let settingsStore = SettingsStore()
     /// Hierarchical vocabulary (PR 11): global + named buckets + app
     /// assignments; resolved per session against the focused bundle id.
-    private var vocabularyLibrary = (try? VocabularyStore().loadLibrary()) ?? .empty
+    private let vocabularyModel = VocabularyModel()
+    private let settingsWindow = SettingsWindowController()
     /// The focused field's context, captured at session start (PR 10).
     private var currentField: FieldContext = .empty
     #if DICT_DEV_LOG
@@ -104,7 +105,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // gate); commit/cancel drive the stream's atomic gate below. In dev
         // builds the same event stream and outcome seam feed the §14 JSONL
         // records; Release leaves both hooks unset.
-        let vocabulary = vocabularyLibrary.resolved(bundleID: nil)
+        let vocabulary = vocabularyModel.library.resolved(bundleID: nil)
         #if DICT_DEV_LOG
         let tracker = dictationTracker
         let onOutcome: (@Sendable (CleanupOutcome) async -> Void)? = { outcome in
@@ -306,8 +307,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     // read-only AX, one shot per session (PR 10).
                     let field = self?.fieldReader.read() ?? .empty
                     self?.currentField = field
-                    let vocab = self?.vocabularyLibrary.resolved(bundleID: field.bundleID)
-                    let style = self?.vocabularyLibrary.resolvedStyleRules(bundleID: field.bundleID)
+                    let vocab = self?.vocabularyModel.library.resolved(bundleID: field.bundleID)
+                    let style = self?.vocabularyModel.library.resolvedStyleRules(bundleID: field.bundleID)
                     await self?.smartCleanup?.beginSession(
                         field: field, vocabulary: vocab, styleRules: style
                     )
@@ -373,6 +374,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    @objc private func openSettings() {
+        settingsWindow.show(settings: settingsStore, vocabulary: vocabularyModel)
+    }
+
+    @objc private func cycleVocabulary() {
+        let name = vocabularyModel.cycle()
+        #if DICT_DEV_LOG
+        VizprTranscriptLogger.note("vocabulary cycled to: \(name)")
+        #endif
+        refreshMenu()
+    }
+
     @objc private func grantAccessibility() {
         let capability = permissionProbe.evaluate()
         switch capability {
@@ -425,6 +438,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             menu.addItem(.separator())
         }
 
+        let dictionary = NSMenuItem(
+            title: "Dictionary: \(vocabularyModel.library.manualBucket ?? "Automatic")",
+            action: #selector(cycleVocabulary), keyEquivalent: ""
+        )
+        dictionary.target = self
+        menu.addItem(dictionary)
+
+        let settings = NSMenuItem(
+            title: "Settings…", action: #selector(openSettings), keyEquivalent: ","
+        )
+        settings.target = self
+        menu.addItem(settings)
+        menu.addItem(.separator())
+
         menu.addItem(
             NSMenuItem(
                 title: "Quit Vizpr",
@@ -432,6 +459,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 keyEquivalent: "q"
             )
         )
+        // PR 2 review carry: re-evaluate capability every time the menu
+        // opens, so an external grant in System Settings reflects without
+        // clicking anything.
+        menu.delegate = self
         statusItem?.menu = menu
+    }
+}
+
+
+extension AppDelegate: NSMenuDelegate {
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        refreshMenu()
     }
 }

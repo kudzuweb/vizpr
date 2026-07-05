@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 
 /// User settings (PLAN.md §14 + PR 11). One JSON doc (§15: JSON for mutable
@@ -110,9 +111,9 @@ struct ColorPreset: Codable, Equatable, Sendable, Identifiable {
 /// Load/save + live change notification. Settings live next to the vocab
 /// store in Application Support.
 @MainActor
-final class SettingsStore {
+final class SettingsStore: ObservableObject {
     private let fileURL: URL
-    private(set) var settings: VizprSettings
+    @Published private(set) var settings: VizprSettings
     /// Observers invoked on every successful save (live application).
     private var observers: [(VizprSettings) -> Void] = []
 
