@@ -33,6 +33,12 @@ struct VizprSettings: Codable, Equatable, Sendable {
     /// the clipboard (Mauria, PR 8 field request).
     var restoreClipboard: Bool = true
 
+    /// Inviz mode (Mauria): no live transcript preview — just a small
+    /// "talking is happening" indicator mid-screen; text appears finalized
+    /// in place at commit. An explicit opt-out of proofread-as-you-speak;
+    /// the pipeline underneath is unchanged.
+    var invizMode: Bool = false
+
     // MARK: Appearance (PR 11 color decisions, 2026-07-05)
     /// Glass tint, hex RGB. Default is the §15 lavender — the lock is
     /// amended to "lavender default, user-tunable".

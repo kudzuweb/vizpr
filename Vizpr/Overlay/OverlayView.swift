@@ -20,6 +20,8 @@ struct OverlayView: View {
     /// False under Reduce Motion — the capsule snaps instead of animating.
     let animated: Bool
     var theme: OverlayTheme = .standard
+    /// Inviz mode: render the minimal indicator instead of the transcript.
+    var inviz: Bool = false
 
     /// Trust-contract styles: system labels by default; a custom base keeps
     /// the LOCKED settled:mutable opacity ratio (only the hue is the user's).
@@ -35,6 +37,46 @@ struct OverlayView: View {
     private static let capsuleShape = RoundedRectangle(cornerRadius: 22, style: .continuous)
 
     var body: some View {
+        if inviz {
+            indicator
+        } else {
+            transcript
+        }
+    }
+
+    /// The inviz-mode "talking is happening" pill: mid-stage, theme-tinted,
+    /// pulsing while recording. No text — that's the point.
+    private var indicator: some View {
+        VStack {
+            Spacer(minLength: 0)
+            ZStack {
+                GlassBackground(theme: theme)
+                HStack(spacing: 6) {
+                    ForEach(0..<3, id: \.self) { index in
+                        Circle()
+                            .fill(theme.tint)
+                            .frame(width: 8, height: 8)
+                            .opacity(recording ? 1 : 0.3)
+                            .scaleEffect(recording ? 1 : 0.7)
+                            .animation(
+                                animated && recording
+                                    ? .easeInOut(duration: 0.6)
+                                        .repeatForever(autoreverses: true)
+                                        .delay(Double(index) * 0.2)
+                                    : .default,
+                                value: recording
+                            )
+                    }
+                }
+                .accessibilityLabel(recording ? "Dictating" : "Idle")
+            }
+            .frame(width: 84, height: 36)
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    @ViewBuilder private var transcript: some View {
         let resting = snapshot == .empty
         // Bottom-aligned within the fixed panel: the capsule's TOP edge rises.
         VStack {

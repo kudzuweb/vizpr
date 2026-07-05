@@ -182,6 +182,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         audioPipeline?.setAutoStopTimeout(.seconds(settings.autoStopSeconds))
         textInjector.setRestoreEnabled(settings.restoreClipboard)
         overlay.setTheme(OverlayTheme.from(settings))
+        overlay.setInviz(settings.invizMode)
         Task { [tokenStream, smartCleanup, asrEngine] in
             await tokenStream.setSettleSentences(settings.settleSentences)
             await smartCleanup?.setRuntime(

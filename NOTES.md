@@ -260,6 +260,14 @@ is table-tested.
   secondary label colors, adaptive) or "Custom" (one base color; settled =
   base, mutable = base at a fixed opacity ratio).
 
+## Inviz mode (Mauria, 2026-07-05 — implemented in PR 11)
+
+No live transcript preview: a small theme-tinted "talking is happening"
+pill mid-screen; text appears finalized in place at commit. An EXPLICIT
+opt-out of proofread-as-you-speak (§ WYSIWYG's premise) — the pipeline
+(settle window, commit snapshot, seams, cleanup) is unchanged; only the
+rendering differs. Shares the overlay color theme.
+
 ## Future directions (Mauria, 2026-07-05 — recorded, not scheduled)
 
 1. **Verbatim mode:** "I should be able to talk casually and have it show up

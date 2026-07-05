@@ -17,6 +17,15 @@ final class OverlayController {
     private var theme = OverlayTheme.standard
     private var lastSnapshot = DisplaySnapshot.empty
 
+    private var inviz = false
+
+    /// Live setting (PR 11): inviz mode swaps the transcript for the
+    /// indicator; applies to the next render.
+    func setInviz(_ enabled: Bool) {
+        inviz = enabled
+        if panel.isVisible { render(lastSnapshot) }
+    }
+
     /// Live setting (PR 11): re-renders immediately so the picker previews.
     func setTheme(_ newTheme: OverlayTheme) {
         theme = newTheme
@@ -91,7 +100,8 @@ final class OverlayController {
             recording: recording,
             capsuleHeight: capsuleHeight(for: snapshot),
             animated: !reduceMotion,
-            theme: theme
+            theme: theme,
+            inviz: inviz
         )
         if let hosting {
             hosting.rootView = view
