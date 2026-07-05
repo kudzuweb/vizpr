@@ -285,10 +285,14 @@ is table-tested.
    dictionary plus context-specific ones, with definitions movable/
    propagatable between levels — "like a global claude.md and
    project-level, but for how to interpret speech in context."**
-   Resolution: context set overrides global on conflicts; global applies
-   everywhere. PR 11's vocabulary storage should be shaped so a global set
-   + named context sets with an active selection isn't a retrofit;
-   auto-switching and up/down propagation UI are the future work.
+   **Refined design (Mauria): three layers with an indirection —
+   (1) global, (2) named generic buckets the user creates ("coding",
+   "casual", "professional email"), (3) app -> bucket assignments.**
+   Dictionaries belong to CONTEXTS, not apps; apps are assigned to a
+   context to inherit its dictionary. Resolution: global + assigned
+   bucket, bucket wins conflicts. PR 11 ships the storage + per-session
+   resolution (bundle id from FieldContextReader picks the bucket);
+   bucket-management/propagation UI grows over time.
 4. **Preflight-edit toggle:** optionally edit the transcript before injection
    (hold at the overlay, edit, then commit). Motivating case: TUIs — can't
    select-and-delete in a terminal input line, only backspace. Interacts
