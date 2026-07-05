@@ -248,6 +248,18 @@ TextEdit -> default. Fail-soft acceptance held: context-less sessions fully
 functional. Multi-display placement untested (single display); pure geometry
 is table-tested.
 
+## PR 11 design decisions (Mauria, 2026-07-05)
+
+- **Tint:** keep #A16FDF @13% as the DEFAULT, expose a tint picker in
+  Settings. This deliberately amends the §15 lock: the decision becomes
+  "lavender default, user-tunable" rather than a fixed constant.
+- **Text colors:** the settled/mutable pair is changeable — even derivable
+  from the background tint like a theme — but their RATIO is locked: the
+  contrast relationship between final and provisional text is the trust
+  contract and no theme may collapse it. v1 shape: "System" theme (primary/
+  secondary label colors, adaptive) or "Custom" (one base color; settled =
+  base, mutable = base at a fixed opacity ratio).
+
 ## Future directions (Mauria, 2026-07-05 — recorded, not scheduled)
 
 1. **Verbatim mode:** "I should be able to talk casually and have it show up
@@ -257,7 +269,13 @@ is table-tested.
    further — verbatim fidelity is partly model behavior, so it needs its own
    design pass. The seam matcher's contraction expansion is ALIGNMENT-only
    (never rewrites surface forms) and stays regardless.
-2. **Preflight-edit toggle:** optionally edit the transcript before injection
+2. **PR 13 — optimization pass (post-PR-12):** bird's-eye latency audit of
+   the whole harness once feature-complete. Constraint: MODEL-AGNOSTIC — "the
+   fastest VTT harness for whatever model gets dropped in": pipeline overhead,
+   decode scheduling, draft cadence, settle timing, engine-swap cost — never
+   model-specific tricks. Feedstock already exists: the dev JSONL timings and
+   the PR 0 spike harness.
+3. **Preflight-edit toggle:** optionally edit the transcript before injection
    (hold at the overlay, edit, then commit). Motivating case: TUIs — can't
    select-and-delete in a terminal input line, only backspace. Interacts
    carefully with WYSIWYG (an edited preview is still displayed==injected)
