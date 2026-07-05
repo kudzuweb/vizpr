@@ -215,3 +215,50 @@ struct SeamMergerFillerTests {
         #expect(merged.contains("Final answer"), "emphasis repeat was eaten: \(merged.debugDescription)")
     }
 }
+
+/// Field regressions from the 2026-07-05 dogfood.
+@Suite("SeamMerger echo + contraction")
+struct SeamMergerEchoTests {
+    @Test("Contraction variants align across the seam (gonna / going to)")
+    func contractionSeam() {
+        let merged = SeamMerger.appendix(
+            context: "and I think that's going to feel different than",
+            new: "And I think that's gonna feel different than if I tried."
+        )
+        #expect(merged == " if I tried.", "got: \(merged.debugDescription)")
+    }
+
+    @Test("A full context echo ahead of the rewrite is stripped")
+    func contextEchoStripped() {
+        let context = "It's not there. They're both just kind of slow. There's a few seconds before it starts showing."
+        let output = context + " I still haven't seen the confirmed words."
+        let stripped = SeamMerger.stripContextEcho(context: context, from: output)
+        #expect(stripped == "I still haven't seen the confirmed words.",
+                "got: \(stripped.debugDescription)")
+    }
+
+    @Test("Echo detection survives case/punctuation drift in the copy")
+    func echoWithDrift() {
+        let stripped = SeamMerger.stripContextEcho(
+            context: "and one of them was too cold.",
+            from: "And one of them was too cold and one of them was just right."
+        )
+        #expect(stripped == "and one of them was just right.",
+                "got: \(stripped.debugDescription)")
+    }
+
+    @Test("Output that is nothing but echo strips to empty")
+    func echoOnly() {
+        let context = "She saw some porridge and she was like oh snap food."
+        #expect(SeamMerger.stripContextEcho(context: context, from: context).isEmpty)
+    }
+
+    @Test("A rewrite that merely opens with one repeated word is untouched")
+    func shortRepeatNotEcho() {
+        let stripped = SeamMerger.stripContextEcho(
+            context: "that is final.",
+            from: "Final answer, and more words."
+        )
+        #expect(stripped == "Final answer, and more words.")
+    }
+}

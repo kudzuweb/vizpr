@@ -42,6 +42,21 @@ private struct ExplodingCleanupEngine: CleanupEngine {
     func clean(_ request: CleanupRequest) async throws -> CleanupResult { throw Boom() }
 }
 
+/// An engine that copies the surrounding context into its rewrite — the
+/// field-observed 4B failure mode (2026-07-05: a settled paragraph rendered
+/// and committed twice).
+private struct EchoingCleanupEngine: CleanupEngine {
+    var echoOnly = false
+    func prepare() async throws {}
+    func clean(_ request: CleanupRequest) async throws -> CleanupResult {
+        guard request.text.contains("helo wrld") else {
+            return CleanupResult(text: request.text)
+        }
+        let echo = request.context.surroundingText ?? ""
+        return CleanupResult(text: echoOnly ? echo : echo + " " + request.text.uppercased())
+    }
+}
+
 /// Collects CleanupOutcomes delivered through SmartCleanup's onOutcome seam.
 private actor OutcomeBox {
     private(set) var outcomes: [CleanupOutcome] = []
@@ -248,5 +263,50 @@ struct SmartCleanupTests {
         await settle()
         // Session sealed; nothing the cancelled cleanup could do applies.
         #expect(await ts.currentSnapshot() == .empty)
+    }
+}
+
+@Suite("SmartCleanup context echo")
+struct SmartCleanupEchoTests {
+    /// Give async cleanup tasks a beat to run to completion.
+    private func settle() async {
+        try? await Task.sleep(nanoseconds: 60_000_000)
+    }
+
+    @Test("An echoed settled context never duplicates on the display")
+    func echoStrippedBeforeApply() async {
+        let ts = TokenStream()
+        let smart = SmartCleanup(tokenStream: ts, engine: EchoingCleanupEngine())
+        await ts.beginSession()
+        await smart.ingest(.finalized(text: "First sentence.", confidence: 0.99, tokenConfidences: [0.99]))
+        await smart.ingest(.finalized(text: "Second sentence.", confidence: 0.99, tokenConfidences: [0.99]))
+        await settle()
+        await smart.ingest(.finalized(text: "helo wrld", confidence: 0.4, tokenConfidences: [0.4]))
+        await settle()
+
+        let displayed = await ts.currentSnapshot().displayed
+        let firsts = displayed.lowercased().components(separatedBy: "first sentence").count - 1
+        #expect(firsts <= 1, "settled context echoed into the display: \(displayed)")
+    }
+
+    @Test("Echo-only output fails open: live text survives")
+    func echoOnlyFailsOpen() async {
+        let ts = TokenStream()
+        let box = OutcomeBox()
+        let smart = SmartCleanup(
+            tokenStream: ts, engine: EchoingCleanupEngine(echoOnly: true),
+            onOutcome: { await box.add($0) }
+        )
+        await ts.beginSession()
+        await smart.ingest(.finalized(text: "First sentence.", confidence: 0.99, tokenConfidences: [0.99]))
+        await smart.ingest(.finalized(text: "Second sentence.", confidence: 0.99, tokenConfidences: [0.99]))
+        await settle()
+        await smart.ingest(.finalized(text: "helo wrld", confidence: 0.4, tokenConfidences: [0.4]))
+        await settle()
+
+        let displayed = await ts.currentSnapshot().displayed
+        #expect(displayed.contains("helo wrld"), "live text erased by echo-only output: \(displayed)")
+        let failed = await box.outcomes.contains { $0.disposition == .failed }
+        #expect(failed, "echo-only output not reported as failed")
     }
 }

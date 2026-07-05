@@ -114,6 +114,21 @@ willTerminate unparks the settle waiter. Seam duplication fixed:
 filler-tolerant overlap match (uh/um skipped in alignment, single-word match
 allowed modulo trailing punctuation), pinned by field-case regressions.
 
+**Second dogfood round (2026-07-05) caught two more, fixed + pinned:**
+- **Cleanup context echo (serious):** the 4B model copied the settled-context
+  tail into its rewrite; the echo duplicated a settled paragraph on screen AND
+  in the commit. Structural fix: SeamMerger.stripContextEcho removes a leading
+  echo (≥3 tokens, or the whole context verbatim) before applyCleanup; output
+  that is echo-only fails open (live text survives, disposition=failed).
+- **Contraction seam miss:** "going to" / "gonna" broke overlap alignment
+  (words rendered twice); alignment now expands contractions (gonna/wanna/
+  gotta/kinda/sorta/dunno).
+- Felt-experience data: first draft appears ~2.5-3 s into a session (VAD arm +
+  1.5 s min-tail + decode) — Mauria asks if it can be faster; min-tail is the
+  lever, junk-draft risk is the cost → PR 11 tunable. Confirmed-color latency
+  (~10 s+) is inherent to the locked sliding-window config; the trust color
+  just makes it visible now.
+
 **Accepted risks / deferred:** NSScreen.main is not "the active app's
 display" for an LSUIElement app — multi-display placement lands with PR 10's
 AX reader (single-display is correct today). Inline settle+restore awaits can
