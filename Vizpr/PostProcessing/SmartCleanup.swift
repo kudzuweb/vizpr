@@ -99,9 +99,25 @@ actor SmartCleanup {
             do {
                 let result = try await engine.clean(request)
                 // POST-PASS is authoritative: re-fix any canonical form the
-                // model un-fixed (§4, post wins ties). Then apply, generation-
-                // gated: a stale result (live changed since snapshot) drops.
-                let cleaned = vocabulary.apply(to: result.text)
+                // model un-fixed (§4, post wins ties). Then strip any echo of
+                // the settled context the model copied into its rewrite
+                // (field catch: an echoed context duplicated a settled
+                // paragraph on screen AND in the commit). Then apply,
+                // generation-gated: a stale result drops.
+                let cleaned = SeamMerger.stripContextEcho(
+                    context: input.settledContext,
+                    from: vocabulary.apply(to: result.text)
+                )
+                // Output that was NOTHING BUT echo strips to empty — applying
+                // it would erase the user's live text. Fail open instead.
+                guard !cleaned.trimmingCharacters(in: .whitespaces).isEmpty else {
+                    await onOutcome?(CleanupOutcome(
+                        input: request.text, output: nil,
+                        generation: input.generation, disposition: .failed,
+                        errorDescription: "output was context echo only"
+                    ))
+                    return
+                }
                 let applied = await tokenStream.applyCleanup(
                     expectedGeneration: input.generation, rewrittenLive: cleaned
                 )

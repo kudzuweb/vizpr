@@ -27,7 +27,7 @@ final class AudioPipeline {
     /// commit-time write would miss the flush (field-observed: short
     /// dictations logged empty raw_asr_text — nothing finalizes before the
     /// flush unless the session crosses the 10 s confirmation window).
-    private let onSessionDrained: (@Sendable () async -> Void)?
+    private let onSessionDrained: (@Sendable (Int) async -> Void)?
 
     private var sessionTask: Task<Void, Never>?
 
@@ -37,7 +37,7 @@ final class AudioPipeline {
         engine: (any TranscriptionEngine)? = nil,
         autoStopTimeout: Duration = .seconds(6),
         onTokenEvent: (@Sendable (TokenEvent) async -> Void)? = nil,
-        onSessionDrained: (@Sendable () async -> Void)? = nil,
+        onSessionDrained: (@Sendable (Int) async -> Void)? = nil,
         onAutoStop: @escaping () -> Void
     ) {
         self.source = source
@@ -55,7 +55,7 @@ final class AudioPipeline {
     static func makeDefault(
         engine: (any TranscriptionEngine)?,
         onTokenEvent: (@Sendable (TokenEvent) async -> Void)? = nil,
-        onSessionDrained: (@Sendable () async -> Void)? = nil,
+        onSessionDrained: (@Sendable (Int) async -> Void)? = nil,
         onAutoStop: @escaping () -> Void
     ) -> AudioPipeline? {
         guard let model = try? SpeechDetector.loadBundledModel() else { return nil }
@@ -69,10 +69,13 @@ final class AudioPipeline {
         )
     }
 
-    func start() {
+    /// - Parameter sessionEpoch: echoed back through onSessionDrained so a
+    ///   late drain from a superseded session is attributable (SettleGate).
+    func start(sessionEpoch: Int = 0) {
         guard sessionTask == nil else { return }   // one session at a time
 
         sessionTask = Task { @MainActor [source, detector, engine, autoStopTimeout, onAutoStop, onTokenEvent, onSessionDrained] in
+            let epoch = sessionEpoch
             var watchdog = SilenceWatchdog(
                 timeout: autoStopTimeout,
                 sampleRate: Int(MicrophoneCapture.sampleRate)
@@ -126,7 +129,7 @@ final class AudioPipeline {
             // the capture loop above; the flush must still complete.
             fanOut.audio?.finish()
             await fanOut.events?.value
-            await onSessionDrained?()
+            await onSessionDrained?(epoch)
         }
     }
 

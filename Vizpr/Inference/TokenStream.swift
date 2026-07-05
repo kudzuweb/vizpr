@@ -14,6 +14,14 @@ struct DisplaySnapshot: Sendable, Equatable {
         return text
     }
 
+    /// The mutable (secondary-color) portion: EXACTLY `displayed` minus the
+    /// settled prefix. The overlay renders settled + this — never its own
+    /// reconstruction of live/draft (review finding: a synthetic joiner made
+    /// the user proofread a string the commit didn't inject).
+    var mutableSuffix: String {
+        String(displayed.dropFirst(settled.count))
+    }
+
     static let empty = DisplaySnapshot(settled: "", live: "", draft: "")
 }
 

@@ -63,8 +63,13 @@ before commit. Real findings fixed in the same PR:
 - Dev log never records text dictated at a password field.
 
 **Manual matrix results (Mauria, 2026-07-04):** TextEdit ✓, VS Code ✓,
-Terminal ✓, browser textarea ✓, password field skip+beep ✓ (beep confirmed
-audible), clipboard restore ✓ ("works perfectly"). Dvorak: NOT yet tested —
+browser textarea ✓, password field skip+beep ✓ (beep confirmed audible),
+clipboard restore ✓ ("works perfectly"). **Terminal: UNVERIFIED** — the ✓
+was inferred from the .injected outcome, but Mauria's pastes targeted the
+window running log stream, which doesn't echo tty input; retest at a clean
+shell prompt in the PR 9 dogfood. If .injected + no text at a prompt, the
+"chord posted but ignored" gap is real and the per-app fallback list
+becomes a work item. Dvorak: NOT yet tested —
 the one open cell; layout-resolution path is review-hardened, retest
 opportunistically or at PR 12. One field catch fixed in-PR: the secure-skip
 breadcrumb leaked dictated text into debug.log (now redacted).
@@ -92,6 +97,54 @@ breadcrumb leaked dictated text into debug.log (now redacted).
   head into it." vs raw flush "we're gonna end the tap." — the engine's
   correction landed just after commit. Feedstock for the PR 9 settle-window/
   felt-experience verdict.
+
+## PR 9 — Overlay (adversarial review, 2026-07-04)
+
+Three lenses (focus/spec, concurrency/lifecycle, rendering/WYSIWYG). Fixed
+in-PR: overlay rendered a RECONSTRUCTION of the display string (synthetic
+joiner + plain-space draft join) instead of the exact bytes commit injects —
+now renders settled + DisplaySnapshot.mutableSuffix verbatim; SettleGate
+drains are epoch-keyed (stale drains from cancelled/capped sessions reopened
+the quick-tap hole) and a cancelled timeout no longer fires resume; dismiss
+fade racing a rapid re-show no longer blanks the new session; post-commit
+stragglers can't repaint over dismissal; resting capsule width lives in
+SwiftUI (was dead code); tail-follow re-pins on size changes; capsule-shaped
+clipping; measurement short-circuits past the cap; window shadow off;
+willTerminate unparks the settle waiter. Seam duplication fixed:
+filler-tolerant overlap match (uh/um skipped in alignment, single-word match
+allowed modulo trailing punctuation), pinned by field-case regressions.
+
+**Second dogfood round (2026-07-05) caught two more, fixed + pinned:**
+- **Cleanup context echo (serious):** the 4B model copied the settled-context
+  tail into its rewrite; the echo duplicated a settled paragraph on screen AND
+  in the commit. Structural fix: SeamMerger.stripContextEcho removes a leading
+  echo (≥3 tokens, or the whole context verbatim) before applyCleanup; output
+  that is echo-only fails open (live text survives, disposition=failed).
+- **Contraction seam miss:** "going to" / "gonna" broke overlap alignment
+  (words rendered twice); alignment now expands contractions (gonna/wanna/
+  gotta/kinda/sorta/dunno).
+- **Known artifact (recorded, not fixed): mid-word seam fragments.** A
+  windowed final can cut INSIDE a word ("dict|ation"); the orphan fragment
+  glues badly ("Theation", observed committed 2026-07-05). Token alignment
+  can't see sub-word splits; candidate fix is fragment-aware gluing at the
+  seam. Rare and cosmetic — future seam-tuning item.
+- Felt-experience data: first draft appears ~2.5-3 s into a session (VAD arm +
+  1.5 s min-tail + decode) — Mauria asks if it can be faster; min-tail is the
+  lever, junk-draft risk is the cost → PR 11 tunable. Confirmed-color latency
+  (~10 s+) is inherent to the locked sliding-window config; the trust color
+  just makes it visible now.
+
+**Accepted risks / deferred:** NSScreen.main is not "the active app's
+display" for an LSUIElement app — multi-display placement lands with PR 10's
+AX reader (single-display is correct today). Inline settle+restore awaits can
+delay a rapid next mic start ~350-650 ms worst case — field-judge before
+restructuring. failLoudly's modal can activate the app mid-session (rare,
+terminal path). Screen-change mid-session not re-laid-out. `.secondary`
+contrast over bright desktops in dark mode — check in dogfood.
+
+**Color revisit (Mauria):** overall palette to be revisited at PR 11; the
+intermediate-color trust mechanism itself is approved. The #A16FDF@13% tint
+is §15-locked — reopening it there is a deliberate decision, not drift.
 
 ## PR 9 design candidate: flush-settle window (Mauria's proposal, 2026-07-04)
 
@@ -185,6 +238,23 @@ fixed in the same PR:
 The two edge-tracking bugs lived in the untestable shell, so the fix extracted
 the edge logic into a pure `FlagEdgeTracker` with its own unit tests — turning
 shell logic the property tests couldn't reach into tested value-type code.
+
+## Future directions (Mauria, 2026-07-05 — recorded, not scheduled)
+
+1. **Verbatim mode:** "I should be able to talk casually and have it show up
+   how I said it, just like I can type it that way." Cleanup/normalization
+   (and ASR inverse-normalization: gonna→going to, spoken numbers→digits)
+   should be suppressible. Relates to §14's cleanup on/off toggle but goes
+   further — verbatim fidelity is partly model behavior, so it needs its own
+   design pass. The seam matcher's contraction expansion is ALIGNMENT-only
+   (never rewrites surface forms) and stays regardless.
+2. **Preflight-edit toggle:** optionally edit the transcript before injection
+   (hold at the overlay, edit, then commit). Motivating case: TUIs — can't
+   select-and-delete in a terminal input line, only backspace. Interacts
+   carefully with WYSIWYG (an edited preview is still displayed==injected)
+   and with the overlay's non-activating panel (an editable field needs key
+   focus — likely a separate activating edit window summoned on demand).
+   Adjacent to the plan's parked "post-injection edit capture" idea.
 
 ## Carried forward to PR 11 (Settings)
 

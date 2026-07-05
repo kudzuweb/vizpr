@@ -64,23 +64,23 @@ struct AudioPipelineTests {
                 case let .finalized(text, _, _): await log.add("final:\(text)")
                 }
             },
-            onSessionDrained: { await log.add("drained") },
+            onSessionDrained: { epoch in await log.add("drained:\(epoch)") },
             onAutoStop: {}
         )
 
-        pipeline.start()
+        pipeline.start(sessionEpoch: 7)
         feeder.yield([Float](repeating: 0, count: 4096))
         feeder.finish()
 
         // Wait for the drain (bounded).
         for _ in 0..<200 {
-            if await log.entries.contains("drained") { break }
+            if await log.entries.contains("drained:7") { break }
             try await Task.sleep(nanoseconds: 10_000_000)
         }
 
         let entries = await log.entries
-        try #require(entries.contains("drained"), "session never drained: \(entries)")
-        #expect(entries.last == "drained", "drained was not the final callback: \(entries)")
+        try #require(entries.contains("drained:7"), "session never drained (or epoch lost): \(entries)")
+        #expect(entries.last == "drained:7", "drained was not the final callback: \(entries)")
         #expect(entries.contains("final:flush final."),
                 "flush final missing before drain: \(entries)")
     }
