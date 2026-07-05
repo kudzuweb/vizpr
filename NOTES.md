@@ -292,7 +292,10 @@ is table-tested.
    context to inherit its dictionary. Resolution: global + assigned
    bucket, bucket wins conflicts. PR 11 ships the storage + per-session
    resolution (bundle id from FieldContextReader picks the bucket);
-   bucket-management/propagation UI grows over time.
+   bucket-management/propagation UI grows over time. **Plus manual
+   override: hotkey CYCLING between dictionaries (Mauria) — resolution
+   order is manual override > app assignment > global-only; a cycle
+   chord rotates buckets (incl. back to automatic).**
 4. **Preflight-edit toggle:** optionally edit the transcript before injection
    (hold at the overlay, edit, then commit). Motivating case: TUIs — can't
    select-and-delete in a terminal input line, only backspace. Interacts
