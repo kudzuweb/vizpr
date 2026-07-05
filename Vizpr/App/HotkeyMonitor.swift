@@ -23,6 +23,12 @@ final class HotkeyMonitor: @unchecked Sendable {
     private static let escapeKeyCode: Int64 = 53
 
     private var machine: HotkeyStateMachine
+
+    /// Live setting (PR 11): applies from the next press — replacing the
+    /// machine preserves its current state so a mid-session change is safe.
+    func setHoldThreshold(_ threshold: Duration) {
+        machine = HotkeyStateMachine(holdThreshold: threshold, state: machine.state)
+    }
     /// Edge tracking lives in a pure, tested value type (see `FlagEdgeTracker`):
     /// flagsChanged reports the whole flag set, so down/up edges are derived by
     /// comparison, and that comparison has real failure modes worth testing.

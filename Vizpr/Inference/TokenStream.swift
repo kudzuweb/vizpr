@@ -44,7 +44,7 @@ struct DisplaySnapshot: Sendable, Equatable {
 /// returns the string. Displayed-at-stop == injected, byte for byte.
 actor TokenStream {
     /// Settle window size in sentences (user-tunable in Settings, PR 11).
-    private let settleSentences: Int
+    private var settleSentences: Int
 
     private(set) var settled = ""
     private(set) var live = ""
@@ -72,6 +72,11 @@ actor TokenStream {
 
     init(settleSentences: Int = 2) {
         self.settleSentences = settleSentences
+    }
+
+    /// Live setting (PR 11): takes effect at the next settle pass.
+    func setSettleSentences(_ count: Int) {
+        settleSentences = max(1, count)
     }
 
     /// Create THE display snapshot stream; only the latest matters, so older

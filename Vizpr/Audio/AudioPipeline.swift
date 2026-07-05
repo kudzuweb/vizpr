@@ -15,7 +15,13 @@ final class AudioPipeline {
     private let source: any CaptureSource
     private let detector: SpeechDetector
     private let engine: (any TranscriptionEngine)?
-    private let autoStopTimeout: Duration
+    /// var: live setting (PR 11) — captured per session at start(), so a
+    /// change applies from the NEXT session.
+    private var autoStopTimeout: Duration
+
+    func setAutoStopTimeout(_ timeout: Duration) {
+        autoStopTimeout = timeout
+    }
     private let onAutoStop: () -> Void
     /// Consumer for ASR token events (SmartCleanup.ingest in production; nil
     /// falls back to dev-log-only, useful in bring-up).

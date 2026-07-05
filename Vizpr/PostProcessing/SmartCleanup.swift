@@ -26,6 +26,9 @@ actor SmartCleanup {
     /// captured at session start; code mode derived from the bundle id.
     private var sessionField: FieldContext = .empty
     private var sessionCodeMode = false
+    /// Live settings (PR 11).
+    private var enabled = true
+    private var codeModeOverride = false
 
     init(
         tokenStream: TokenStream,
@@ -53,7 +56,16 @@ actor SmartCleanup {
     /// runs context-less (acceptance).
     func beginSession(field: FieldContext) {
         sessionField = field
-        sessionCodeMode = codeMode || CodeDetector.isCodeSurface(bundleID: field.bundleID)
+        sessionCodeMode = codeMode || codeModeOverride
+            || CodeDetector.isCodeSurface(bundleID: field.bundleID)
+    }
+
+    /// Live settings (PR 11): cleanup can be disabled entirely (§14 toggle;
+    /// the disabled path still runs the vocab pre-pass — display/injection
+    /// keep working, just uncleaned), and code mode can be forced on.
+    func setRuntime(enabled: Bool, codeModeOverride: Bool) {
+        self.enabled = enabled
+        self.codeModeOverride = codeModeOverride
     }
 
     /// Feed one ASR event. Applies the vocab pre-pass, forwards to the token
@@ -69,7 +81,7 @@ actor SmartCleanup {
             await tokenStream.apply(.finalized(
                 text: normalized, confidence: confidence, tokenConfidences: tokenConfidences
             ))
-            if shouldClean(text: normalized, confidence: confidence, tokens: tokenConfidences) {
+            if enabled, shouldClean(text: normalized, confidence: confidence, tokens: tokenConfidences) {
                 await launchCleanup()
             }
         }

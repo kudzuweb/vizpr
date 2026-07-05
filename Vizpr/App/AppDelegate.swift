@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let permissionProbe = PermissionProbe()
     private var actionsTask: Task<Void, Never>?
     private var audioPipeline: AudioPipeline?
+    private var asrEngine: FluidAudioASR?
     private let tokenStream = TokenStream()
     private let textInjector = TextInjector(
         pasteboard: SystemPasteboard(),
@@ -25,6 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let overlay = OverlayController()
     private let settleGate = SettleGate()
     private let fieldReader = FieldContextReader()
+    private let settingsStore = SettingsStore()
     /// The focused field's context, captured at session start (PR 10).
     private var currentField: FieldContext = .empty
     #if DICT_DEV_LOG
@@ -62,6 +64,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.accessory)
         setUpStatusItem()
         setUpAudioPipeline()
+        applySettings(settingsStore.settings)
+        settingsStore.onChange { [weak self] settings in
+            self?.applySettings(settings)
+        }
         consumeHotkeyActions()
         startHotkeyIfPermitted()
 
@@ -88,6 +94,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// along without a model).
     private func setUpAudioPipeline() {
         let engine = FluidAudioASR()
+        asrEngine = engine
 
         // The cleanup leg (PR 6): events flow ASR -> SmartCleanup (vocab
         // pre-pass + confidence gate) -> TokenStream (regions + generation
@@ -162,6 +169,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 #endif
             }
+        }
+    }
+
+    /// Push settings into every live consumer (PR 11: everything applies
+    /// without relaunch; timing values take effect at the next session).
+    private func applySettings(_ settings: VizprSettings) {
+        hotkeyMonitor.setHoldThreshold(.milliseconds(settings.holdThresholdMs))
+        audioPipeline?.setAutoStopTimeout(.seconds(settings.autoStopSeconds))
+        textInjector.setRestoreEnabled(settings.restoreClipboard)
+        overlay.setTheme(OverlayTheme.from(settings))
+        Task { [tokenStream, smartCleanup, asrEngine] in
+            await tokenStream.setSettleSentences(settings.settleSentences)
+            await smartCleanup?.setRuntime(
+                enabled: settings.cleanupEnabled,
+                codeModeOverride: settings.codeModeOverride
+            )
+            await asrEngine?.setDraftMinTail(milliseconds: settings.draftMinTailMs)
         }
     }
 
@@ -291,7 +315,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     // snapshotting, bounded so a hung engine can't hold the
                     // commit hostage. WYSIWYG holds: displayed==injected,
                     // "at stop" is now "at stop + settle".
-                    await self?.settleGate.awaitDrain(cap: .milliseconds(350))
+                    let cap = self?.settingsStore.settings.settleCapMs ?? 350
+                    await self?.settleGate.awaitDrain(cap: .milliseconds(cap))
                     // Atomic WYSIWYG gate: snapshot displayed text, cancel
                     // in-flight cleanup. The injector receives exactly this
                     // string and transforms nothing (§12).

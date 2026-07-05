@@ -19,6 +19,18 @@ struct OverlayView: View {
     let capsuleHeight: CGFloat
     /// False under Reduce Motion — the capsule snaps instead of animating.
     let animated: Bool
+    var theme: OverlayTheme = .standard
+
+    /// Trust-contract styles: system labels by default; a custom base keeps
+    /// the LOCKED settled:mutable opacity ratio (only the hue is the user's).
+    private var settledStyle: AnyShapeStyle {
+        theme.textBase.map { AnyShapeStyle($0) } ?? AnyShapeStyle(.primary)
+    }
+    private var mutableStyle: AnyShapeStyle {
+        theme.textBase.map {
+            AnyShapeStyle($0.opacity(VizprSettings.mutableOpacityRatio))
+        } ?? AnyShapeStyle(.secondary)
+    }
 
     private static let capsuleShape = RoundedRectangle(cornerRadius: 22, style: .continuous)
 
@@ -28,7 +40,7 @@ struct OverlayView: View {
         VStack {
             Spacer(minLength: 0)
             ZStack(alignment: .bottomLeading) {
-                GlassBackground()
+                GlassBackground(theme: theme)
                 ScrollView(.vertical) {
                     // WYSIWYG: render EXACTLY the decomposition of
                     // snapshot.displayed — the bytes commit injects. Never a
@@ -36,8 +48,8 @@ struct OverlayView: View {
                     // the user proofread a string with one more space than
                     // the injection).
                     (
-                        Text(snapshot.settled).foregroundStyle(.primary)
-                        + Text(snapshot.mutableSuffix).foregroundStyle(.secondary)
+                        Text(snapshot.settled).foregroundStyle(settledStyle)
+                        + Text(snapshot.mutableSuffix).foregroundStyle(mutableStyle)
                     )
                     .font(.system(size: 16, weight: .regular, design: .rounded))
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -56,7 +68,7 @@ struct OverlayView: View {
 
                 if recording {
                     Circle()
-                        .fill(GlassBackground.tint)
+                        .fill(theme.tint)
                         .frame(width: 7, height: 7)
                         .padding(10)
                         .accessibilityLabel("Recording")
