@@ -1,0 +1,110 @@
+import Foundation
+
+/// One named context dictionary ("coding", "casual", "professional email" —
+/// the user names them freely). Order in the library is the hotkey-cycling
+/// order.
+struct VocabularyBucket: Codable, Equatable, Sendable, Identifiable {
+    var id = UUID()
+    var name: String
+    var entries: [VocabularyEntry] = []
+}
+
+/// The hierarchical vocabulary (Mauria's design, 2026-07-05): a GLOBAL
+/// dictionary that applies everywhere, named context buckets below it, and
+/// app → bucket assignments — dictionaries belong to contexts, apps are
+/// assigned to contexts. "Like a global claude.md and project-level, but for
+/// how to interpret speech in context."
+struct VocabularyLibrary: Codable, Equatable, Sendable {
+    var global: [VocabularyEntry] = []
+    var buckets: [VocabularyBucket] = []
+    /// bundle id → bucket name.
+    var appAssignments: [String: String] = [:]
+    /// Manual override (hotkey cycle / menu pick). nil = automatic (use the
+    /// app assignment).
+    var manualBucket: String?
+
+    static let empty = VocabularyLibrary()
+
+    /// Resolution order: manual override > app assignment > global-only.
+    /// Within a resolved bucket, bucket entries win pattern conflicts with
+    /// global (context overrides global; global fills everything else).
+    func resolved(bundleID: String?) -> Vocabulary {
+        let name = manualBucket ?? bundleID.flatMap { appAssignments[$0] }
+        guard let name, let bucket = buckets.first(where: { $0.name == name }) else {
+            return Vocabulary(entries: global)
+        }
+        let overridden = Set(bucket.entries.map { $0.pattern.lowercased() })
+        let merged = bucket.entries + global.filter {
+            !overridden.contains($0.pattern.lowercased())
+        }
+        return Vocabulary(entries: merged)
+    }
+
+    /// Hotkey cycle: automatic → bucket 1 → bucket 2 → … → automatic.
+    /// Returns the new state's display name for the menu/overlay.
+    @discardableResult
+    mutating func cycleManualBucket() -> String {
+        guard !buckets.isEmpty else {
+            manualBucket = nil
+            return "Automatic"
+        }
+        if let current = manualBucket,
+           let index = buckets.firstIndex(where: { $0.name == current }) {
+            if index + 1 < buckets.count {
+                manualBucket = buckets[index + 1].name
+            } else {
+                manualBucket = nil   // wrap back to automatic
+            }
+        } else {
+            manualBucket = buckets[0].name
+        }
+        return manualBucket ?? "Automatic"
+    }
+
+    /// Propagation (the claude.md analogy): move an entry between levels.
+    mutating func promoteToGlobal(pattern: String, fromBucket name: String) {
+        guard let bucketIndex = buckets.firstIndex(where: { $0.name == name }),
+              let entryIndex = buckets[bucketIndex].entries.firstIndex(where: {
+                  $0.pattern.lowercased() == pattern.lowercased()
+              }) else { return }
+        let entry = buckets[bucketIndex].entries.remove(at: entryIndex)
+        global.removeAll { $0.pattern.lowercased() == entry.pattern.lowercased() }
+        global.append(entry)
+    }
+
+    mutating func demoteFromGlobal(pattern: String, toBucket name: String) {
+        guard let entryIndex = global.firstIndex(where: {
+                  $0.pattern.lowercased() == pattern.lowercased()
+              }),
+              let bucketIndex = buckets.firstIndex(where: { $0.name == name })
+        else { return }
+        let entry = global.remove(at: entryIndex)
+        buckets[bucketIndex].entries.removeAll {
+            $0.pattern.lowercased() == entry.pattern.lowercased()
+        }
+        buckets[bucketIndex].entries.append(entry)
+    }
+}
+
+extension VocabularyStore {
+    /// Load the hierarchical library, migrating a pre-PR-11 flat file
+    /// (a bare entry array) into the global level losslessly.
+    func loadLibrary() throws -> VocabularyLibrary {
+        guard FileManager.default.fileExists(atPath: url.path) else { return .empty }
+        let data = try Data(contentsOf: url)
+        if let library = try? JSONDecoder().decode(VocabularyLibrary.self, from: data) {
+            return library
+        }
+        let flat = try JSONDecoder().decode([VocabularyEntry].self, from: data)
+        return VocabularyLibrary(global: flat)
+    }
+
+    func saveLibrary(_ library: VocabularyLibrary) throws {
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(library).write(to: url, options: .atomic)
+    }
+}

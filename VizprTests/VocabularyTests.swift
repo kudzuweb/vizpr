@@ -121,3 +121,89 @@ struct VocabularyStoreTests {
         #expect(throws: (any Error).self) { try VocabularyStore(url: url).load() }
     }
 }
+
+import Foundation
+
+@Suite("VocabularyLibrary")
+struct VocabularyLibraryTests {
+    private func entry(_ p: String, _ r: String) -> VocabularyEntry {
+        VocabularyEntry(pattern: p, replacement: r, kind: .canonical)
+    }
+
+    private var library: VocabularyLibrary {
+        VocabularyLibrary(
+            global: [entry("api", "API"), entry("github", "GitHub")],
+            buckets: [
+                VocabularyBucket(name: "coding", entries: [entry("api", "Api"), entry("repo", "repository")]),
+                VocabularyBucket(name: "casual", entries: [entry("lol", "lol")]),
+            ],
+            appAssignments: ["com.microsoft.VSCode": "coding"]
+        )
+    }
+
+    @Test("Resolution: app assignment picks the bucket; bucket wins conflicts")
+    func appAssignment() {
+        let v = library.resolved(bundleID: "com.microsoft.VSCode")
+        #expect(v.apply(to: "the api") == "the Api", "bucket must override global")
+        #expect(v.apply(to: "on github") == "on GitHub", "global must fill through")
+        #expect(v.apply(to: "the repo") == "the repository")
+    }
+
+    @Test("Resolution: unassigned app gets global only")
+    func globalOnly() {
+        let v = library.resolved(bundleID: "com.apple.TextEdit")
+        #expect(v.apply(to: "the api") == "the API")
+        #expect(v.apply(to: "the repo") == "the repo", "bucket entries must not leak")
+    }
+
+    @Test("Manual override outranks the app assignment")
+    func manualWins() {
+        var lib = library
+        lib.manualBucket = "casual"
+        let v = lib.resolved(bundleID: "com.microsoft.VSCode")
+        #expect(v.apply(to: "the api") == "the API", "manual bucket replaced the assigned one")
+    }
+
+    @Test("Hotkey cycle: automatic -> each bucket -> automatic")
+    func cycle() {
+        var lib = library
+        #expect(lib.cycleManualBucket() == "coding")
+        #expect(lib.cycleManualBucket() == "casual")
+        #expect(lib.cycleManualBucket() == "Automatic")
+        #expect(lib.manualBucket == nil)
+    }
+
+    @Test("Promote/demote move entries between levels without duplicates")
+    func propagation() {
+        var lib = library
+        lib.promoteToGlobal(pattern: "repo", fromBucket: "coding")
+        #expect(lib.global.contains { $0.pattern == "repo" })
+        #expect(!lib.buckets[0].entries.contains { $0.pattern == "repo" })
+        lib.demoteFromGlobal(pattern: "github", toBucket: "casual")
+        #expect(!lib.global.contains { $0.pattern == "github" })
+        #expect(lib.buckets[1].entries.contains { $0.pattern == "github" })
+    }
+
+    @Test("Migration: a pre-PR-11 flat file loads as the global level")
+    func migration() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vocab-migrate-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let flat = [entry("api", "API")]
+        try JSONEncoder().encode(flat).write(to: url)
+        let store = VocabularyStore(url: url)
+        let lib = try store.loadLibrary()
+        #expect(lib.global == flat)
+        #expect(lib.buckets.isEmpty)
+
+        // Round-trip the library format (single instance: bucket ids are
+        // minted at init, so equality needs the SAME value both sides).
+        let full = VocabularyLibrary(
+            global: [entry("x", "X")],
+            buckets: [VocabularyBucket(name: "b", entries: [])],
+            appAssignments: ["a": "b"]
+        )
+        try store.saveLibrary(full)
+        #expect(try store.loadLibrary() == full)
+    }
+}

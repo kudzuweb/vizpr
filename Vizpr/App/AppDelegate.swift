@@ -27,6 +27,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let settleGate = SettleGate()
     private let fieldReader = FieldContextReader()
     private let settingsStore = SettingsStore()
+    /// Hierarchical vocabulary (PR 11): global + named buckets + app
+    /// assignments; resolved per session against the focused bundle id.
+    private var vocabularyLibrary = (try? VocabularyStore().loadLibrary()) ?? .empty
     /// The focused field's context, captured at session start (PR 10).
     private var currentField: FieldContext = .empty
     #if DICT_DEV_LOG
@@ -101,7 +104,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // gate); commit/cancel drive the stream's atomic gate below. In dev
         // builds the same event stream and outcome seam feed the §14 JSONL
         // records; Release leaves both hooks unset.
-        let vocabulary = (try? VocabularyStore().load()) ?? .empty
+        let vocabulary = vocabularyLibrary.resolved(bundleID: nil)
         #if DICT_DEV_LOG
         let tracker = dictationTracker
         let onOutcome: (@Sendable (CleanupOutcome) async -> Void)? = { outcome in
@@ -302,7 +305,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     // read-only AX, one shot per session (PR 10).
                     let field = self?.fieldReader.read() ?? .empty
                     self?.currentField = field
-                    await self?.smartCleanup?.beginSession(field: field)
+                    let vocab = self?.vocabularyLibrary.resolved(bundleID: field.bundleID)
+                    await self?.smartCleanup?.beginSession(field: field, vocabulary: vocab)
                     self?.overlay.show(targetWindowFrame: field.focusedWindowFrame)
                     #if DICT_DEV_LOG
                     await self?.beginDictationRecord()

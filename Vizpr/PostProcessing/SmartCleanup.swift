@@ -11,7 +11,7 @@
 actor SmartCleanup {
     private let tokenStream: TokenStream
     private let engine: any CleanupEngine
-    private let vocabulary: Vocabulary
+    private var vocabulary: Vocabulary
     /// Finalized-span confidence at/above which the text is trusted and cleanup
     /// is skipped unless a sentence just closed.
     private let confidenceThreshold: Float
@@ -54,7 +54,10 @@ actor SmartCleanup {
     /// Adopt the focused field's context for this session (PR 10). A session
     /// begun without this (or with .empty) is fully functional — cleanup just
     /// runs context-less (acceptance).
-    func beginSession(field: FieldContext) {
+    func beginSession(field: FieldContext, vocabulary: Vocabulary? = nil) {
+        // PR 11: the resolved per-context vocabulary (global + assigned
+        // bucket) rides in with the session; nil keeps the current one.
+        if let vocabulary { self.vocabulary = vocabulary }
         sessionField = field
         sessionCodeMode = codeMode || codeModeOverride
             || CodeDetector.isCodeSurface(bundleID: field.bundleID)
