@@ -277,7 +277,14 @@ is table-tested.
    decode scheduling, draft cadence, settle timing, engine-swap cost — never
    model-specific tricks. Feedstock already exists: the dev JSONL timings and
    the PR 0 spike harness.
-3. **Preflight-edit toggle:** optionally edit the transcript before injection
+3. **Context-dependent vocabularies / "code switching" (Mauria,
+   2026-07-05):** different dictionaries may work better in different
+   contexts; switching between named vocabulary sets — eventually
+   automatically (per-app, per-mode) — could be a signature dictation
+   feature. PR 11's vocabulary storage should be shaped so multiple named
+   sets with an active selection isn't a retrofit; auto-switching is the
+   future work.
+4. **Preflight-edit toggle:** optionally edit the transcript before injection
    (hold at the overlay, edit, then commit). Motivating case: TUIs — can't
    select-and-delete in a terminal input line, only backspace. Interacts
    carefully with WYSIWYG (an edited preview is still displayed==injected)

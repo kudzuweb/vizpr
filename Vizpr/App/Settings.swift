@@ -46,9 +46,16 @@ struct VizprSettings: Codable, Equatable, Sendable {
     /// and no theme can collapse it (only the hue is user's).
     var textBaseHex: String?
 
+    /// Linked mode: the text base color derives from the tint (one picker
+    /// moves both); unlinked, tint and text are independent (Mauria).
+    var colorsLinked: Bool = false
+    /// Saved color configurations (Mauria: ~6 presets).
+    var colorPresets: [ColorPreset] = []
+
     /// The locked settled:mutable opacity ratio (not persisted, not a
     /// setting — the trust contract's floor).
     static let mutableOpacityRatio = 0.55
+    static let maxColorPresets = 6
 
     static let `default` = VizprSettings()
 
@@ -63,6 +70,8 @@ struct VizprSettings: Codable, Equatable, Sendable {
         s.tintStrength = min(max(s.tintStrength, 0), 0.5)
         s.tintHex = Self.sanitizeHex(s.tintHex) ?? Self.default.tintHex
         s.textBaseHex = s.textBaseHex.flatMap(Self.sanitizeHex)
+        s.colorPresets = Array(s.colorPresets.prefix(Self.maxColorPresets))
+            .map { $0.clamped() }
         return s
     }
 
@@ -71,6 +80,24 @@ struct VizprSettings: Codable, Equatable, Sendable {
             .replacingOccurrences(of: "#", with: "").uppercased()
         guard cleaned.count == 6, cleaned.allSatisfy(\.isHexDigit) else { return nil }
         return cleaned
+    }
+}
+
+/// One saved color configuration.
+struct ColorPreset: Codable, Equatable, Sendable, Identifiable {
+    var id = UUID()
+    var name: String = ""
+    var tintHex: String = VizprSettings.default.tintHex
+    var tintStrength: Double = 0.13
+    var textBaseHex: String?
+    var colorsLinked: Bool = false
+
+    func clamped() -> ColorPreset {
+        var p = self
+        p.tintStrength = min(max(p.tintStrength, 0), 0.5)
+        p.tintHex = VizprSettings.sanitizeHex(p.tintHex) ?? VizprSettings.default.tintHex
+        p.textBaseHex = p.textBaseHex.flatMap(VizprSettings.sanitizeHex)
+        return p
     }
 }
 
