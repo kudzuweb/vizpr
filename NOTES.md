@@ -234,6 +234,23 @@ The two edge-tracking bugs lived in the untestable shell, so the fix extracted
 the edge logic into a pure `FlagEdgeTracker` with its own unit tests — turning
 shell logic the property tests couldn't reach into tested value-type code.
 
+## Future directions (Mauria, 2026-07-05 — recorded, not scheduled)
+
+1. **Verbatim mode:** "I should be able to talk casually and have it show up
+   how I said it, just like I can type it that way." Cleanup/normalization
+   (and ASR inverse-normalization: gonna→going to, spoken numbers→digits)
+   should be suppressible. Relates to §14's cleanup on/off toggle but goes
+   further — verbatim fidelity is partly model behavior, so it needs its own
+   design pass. The seam matcher's contraction expansion is ALIGNMENT-only
+   (never rewrites surface forms) and stays regardless.
+2. **Preflight-edit toggle:** optionally edit the transcript before injection
+   (hold at the overlay, edit, then commit). Motivating case: TUIs — can't
+   select-and-delete in a terminal input line, only backspace. Interacts
+   carefully with WYSIWYG (an edited preview is still displayed==injected)
+   and with the overlay's non-activating panel (an editable field needs key
+   focus — likely a separate activating edit window summoned on demand).
+   Adjacent to the plan's parked "post-injection edit capture" idea.
+
 ## Carried forward to PR 11 (Settings)
 
 3. **Clipboard-keep toggle (Mauria, PR 8 field test):** "a setting where you
