@@ -270,8 +270,10 @@ is table-tested.
    design pass. The seam matcher's contraction expansion is ALIGNMENT-only
    (never rewrites surface forms) and stays regardless.
 2. **PR 13 — optimization pass (post-PR-12):** bird's-eye latency audit of
-   the whole harness once feature-complete. Constraint: MODEL-AGNOSTIC — "the
-   fastest VTT harness for whatever model gets dropped in": pipeline overhead,
+   the whole harness once feature-complete. Constraints: MODEL-AGNOSTIC and
+   ACCURACY-PRESERVING — "the fastest VTT harness for whatever model gets
+   dropped in," fastest WITHOUT losing accuracy (speed gains that cost
+   transcription quality are rejected): pipeline overhead,
    decode scheduling, draft cadence, settle timing, engine-swap cost — never
    model-specific tricks. Feedstock already exists: the dev JSONL timings and
    the PR 0 spike harness.
