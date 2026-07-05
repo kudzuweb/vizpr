@@ -123,6 +123,11 @@ allowed modulo trailing punctuation), pinned by field-case regressions.
 - **Contraction seam miss:** "going to" / "gonna" broke overlap alignment
   (words rendered twice); alignment now expands contractions (gonna/wanna/
   gotta/kinda/sorta/dunno).
+- **Known artifact (recorded, not fixed): mid-word seam fragments.** A
+  windowed final can cut INSIDE a word ("dict|ation"); the orphan fragment
+  glues badly ("Theation", observed committed 2026-07-05). Token alignment
+  can't see sub-word splits; candidate fix is fragment-aware gluing at the
+  seam. Rare and cosmetic — future seam-tuning item.
 - Felt-experience data: first draft appears ~2.5-3 s into a session (VAD arm +
   1.5 s min-tail + decode) — Mauria asks if it can be faster; min-tail is the
   lever, junk-draft risk is the cost → PR 11 tunable. Confirmed-color latency
