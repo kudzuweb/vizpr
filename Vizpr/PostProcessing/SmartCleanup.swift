@@ -26,6 +26,7 @@ actor SmartCleanup {
     /// captured at session start; code mode derived from the bundle id.
     private var sessionField: FieldContext = .empty
     private var sessionCodeMode = false
+    private var sessionStyleRules: String?
     /// Live settings (PR 11).
     private var enabled = true
     private var codeModeOverride = false
@@ -54,10 +55,13 @@ actor SmartCleanup {
     /// Adopt the focused field's context for this session (PR 10). A session
     /// begun without this (or with .empty) is fully functional — cleanup just
     /// runs context-less (acceptance).
-    func beginSession(field: FieldContext, vocabulary: Vocabulary? = nil) {
+    func beginSession(
+        field: FieldContext, vocabulary: Vocabulary? = nil, styleRules: String? = nil
+    ) {
         // PR 11: the resolved per-context vocabulary (global + assigned
-        // bucket) rides in with the session; nil keeps the current one.
+        // bucket) and its style rules ride in with the session.
         if let vocabulary { self.vocabulary = vocabulary }
+        sessionStyleRules = styleRules
         sessionField = field
         sessionCodeMode = codeMode || codeModeOverride
             || CodeDetector.isCodeSurface(bundleID: field.bundleID)
@@ -122,7 +126,8 @@ actor SmartCleanup {
             surroundingText: surrounding.isEmpty ? nil : surrounding,
             bundleID: sessionField.bundleID,
             codeMode: sessionCodeMode,
-            vocabularyHint: vocabulary.promptHint()
+            vocabularyHint: vocabulary.promptHint(),
+            styleRules: sessionStyleRules
         )
         let request = CleanupRequest(text: input.text, context: context)
 

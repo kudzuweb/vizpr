@@ -207,3 +207,43 @@ struct VocabularyLibraryTests {
         #expect(try store.loadLibrary() == full)
     }
 }
+
+@Suite("VocabularyBucket style rules")
+struct StyleRulesTests {
+    private var library: VocabularyLibrary {
+        var lib = VocabularyLibrary(
+            buckets: [
+                VocabularyBucket(name: "casual", styleRules: "no capitalization"),
+                VocabularyBucket(name: "email", styleRules: "formal punctuation; expand contractions"),
+            ],
+            appAssignments: ["com.apple.mail": "email"]
+        )
+        lib.globalStyleRules = "never censor profanity"
+        return lib
+    }
+
+    @Test("Global + bucket rules combine, bucket last")
+    func combined() {
+        let rules = library.resolvedStyleRules(bundleID: "com.apple.mail")
+        #expect(rules == "never censor profanity\nformal punctuation; expand contractions")
+    }
+
+    @Test("Unassigned app gets global rules only; manual override wins")
+    func fallbackAndOverride() {
+        #expect(library.resolvedStyleRules(bundleID: "com.apple.TextEdit")
+                == "never censor profanity")
+        var lib = library
+        lib.manualBucket = "casual"
+        #expect(lib.resolvedStyleRules(bundleID: "com.apple.mail")?
+            .contains("no capitalization") == true)
+    }
+
+    @Test("No rules anywhere resolves to nil, and the prompt omits the section")
+    func nilAndPrompt() {
+        #expect(VocabularyLibrary.empty.resolvedStyleRules(bundleID: nil) == nil)
+        var context = CleanupContext.empty
+        #expect(!CleanupPrompt.system(for: context).contains("STYLE RULES"))
+        context.styleRules = "no capitalization"
+        #expect(CleanupPrompt.system(for: context).contains("no capitalization"))
+    }
+}

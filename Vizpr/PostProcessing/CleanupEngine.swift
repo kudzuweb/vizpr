@@ -10,9 +10,13 @@ struct CleanupContext: Sendable, Equatable {
     /// Vocabulary terms to make the model aware they exist (post-pass stays
     /// authoritative regardless).
     var vocabularyHint: String
+    /// Context-profile style directives (PR 11 buckets): free-text rules the
+    /// active bucket imposes ("no capitalization"). Prompt-enforced.
+    var styleRules: String?
 
     static let empty = CleanupContext(
-        surroundingText: nil, bundleID: nil, codeMode: false, vocabularyHint: ""
+        surroundingText: nil, bundleID: nil, codeMode: false, vocabularyHint: "",
+        styleRules: nil
     )
 }
 

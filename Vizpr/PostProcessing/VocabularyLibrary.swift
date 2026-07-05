@@ -7,6 +7,11 @@ struct VocabularyBucket: Codable, Equatable, Sendable, Identifiable {
     var id = UUID()
     var name: String
     var entries: [VocabularyEntry] = []
+    /// Style directives for this context (Mauria: buckets are full context
+    /// profiles) — free text injected into the cleanup prompt when active,
+    /// e.g. "no capitalization" or "formal punctuation; expand contractions
+    /// (gonna -> going to)". Prompt-enforced, best-effort.
+    var styleRules: String = ""
 }
 
 /// The hierarchical vocabulary (Mauria's design, 2026-07-05): a GLOBAL
@@ -22,6 +27,23 @@ struct VocabularyLibrary: Codable, Equatable, Sendable {
     /// Manual override (hotkey cycle / menu pick). nil = automatic (use the
     /// app assignment).
     var manualBucket: String?
+    /// Style directives that apply everywhere (the global level's rules).
+    var globalStyleRules: String = ""
+
+    /// The active bucket under the same resolution order as resolved().
+    func activeBucket(bundleID: String?) -> VocabularyBucket? {
+        let name = manualBucket ?? bundleID.flatMap { appAssignments[$0] }
+        return name.flatMap { n in buckets.first { $0.name == n } }
+    }
+
+    /// Combined style rules: global first, bucket last (bucket wins in
+    /// instruction order). nil when neither has rules.
+    func resolvedStyleRules(bundleID: String?) -> String? {
+        let parts = [globalStyleRules, activeBucket(bundleID: bundleID)?.styleRules ?? ""]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        return parts.isEmpty ? nil : parts.joined(separator: "\n")
+    }
 
     static let empty = VocabularyLibrary()
 

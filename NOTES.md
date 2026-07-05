@@ -295,7 +295,13 @@ is table-tested.
    bucket-management/propagation UI grows over time. **Plus manual
    override: hotkey CYCLING between dictionaries (Mauria) — resolution
    order is manual override > app assignment > global-only; a cycle
-   chord rotates buckets (incl. back to automatic).**
+   chord rotates buckets (incl. back to automatic). Plus STYLE RULES per
+   bucket (Mauria): buckets are full context profiles — casual = no
+   caps, professional email = proper punctuation + expanded contractions
+   — injected into the cleanup prompt when active (global rules +
+   bucket rules, bucket last). Caveat recorded: prompt-enforced
+   (best-effort on a 4B) and only where cleanup runs; a per-bucket
+   "always clean" flag is the future lever for aggressive restyling.**
 4. **Preflight-edit toggle:** optionally edit the transcript before injection
    (hold at the overlay, edit, then commit). Motivating case: TUIs — can't
    select-and-delete in a terminal input line, only backspace. Interacts

@@ -306,7 +306,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     let field = self?.fieldReader.read() ?? .empty
                     self?.currentField = field
                     let vocab = self?.vocabularyLibrary.resolved(bundleID: field.bundleID)
-                    await self?.smartCleanup?.beginSession(field: field, vocabulary: vocab)
+                    let style = self?.vocabularyLibrary.resolvedStyleRules(bundleID: field.bundleID)
+                    await self?.smartCleanup?.beginSession(
+                        field: field, vocabulary: vocab, styleRules: style
+                    )
                     self?.overlay.show(targetWindowFrame: field.focusedWindowFrame)
                     #if DICT_DEV_LOG
                     await self?.beginDictationRecord()

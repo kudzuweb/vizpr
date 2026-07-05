@@ -48,6 +48,11 @@ enum CleanupPrompt {
             )
         }
 
+        if let style = context.styleRules, !style.isEmpty {
+            // PR 11 context profiles: the active bucket's style directives.
+            lines.append("STYLE RULES for this context (follow them even when they "
+                + "contradict the defaults above): \(style)")
+        }
         if !context.vocabularyHint.isEmpty {
             lines.append("Known terms (spell exactly as written): \(context.vocabularyHint).")
         }
