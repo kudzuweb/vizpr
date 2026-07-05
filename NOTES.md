@@ -239,6 +239,15 @@ The two edge-tracking bugs lived in the untestable shell, so the fix extracted
 the edge logic into a pure `FlagEdgeTracker` with its own unit tests — turning
 shell logic the property tests couldn't reach into tested value-type code.
 
+## PR 10 — FieldContextReader (field matrix, 2026-07-05)
+
+Matrix passed via JSONL verification: VS Code -> mode=code (surrounding nil,
+Electron/AX expected), Terminal -> mode=code WITH real surrounding text (its
+buffer is AX-readable), Chrome textarea -> mode=default (surrounding nil),
+TextEdit -> default. Fail-soft acceptance held: context-less sessions fully
+functional. Multi-display placement untested (single display); pure geometry
+is table-tested.
+
 ## Future directions (Mauria, 2026-07-05 — recorded, not scheduled)
 
 1. **Verbatim mode:** "I should be able to talk casually and have it show up

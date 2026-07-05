@@ -19,10 +19,20 @@ final class OverlayController {
         NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
     }
 
-    func show() {
-        // §13: the display holding the active app. NSScreen.main is the
-        // screen with the key window — the field being dictated into.
-        guard let screen = NSScreen.main ?? NSScreen.screens.first else { return }
+    func show(targetWindowFrame: CGRect? = nil) {
+        // §13: the display holding the dictation target. The AX focused-
+        // window frame (PR 10) decides; fall back to NSScreen.main (wrong
+        // for an LSUIElement app on multi-display, correct on one screen).
+        let screens = NSScreen.screens
+        let primaryHeight = screens.first?.frame.height ?? 0
+        let targetFrame = OverlayLayout.targetScreenFrame(
+            axFrame: targetWindowFrame,
+            screenFrames: screens.map(\.frame),
+            primaryHeight: primaryHeight
+        )
+        let screen = screens.first { $0.frame == targetFrame }
+            ?? NSScreen.main ?? screens.first
+        guard let screen else { return }
         let layout = OverlayLayout(screen: screen.visibleFrame)
         self.layout = layout
         recording = true

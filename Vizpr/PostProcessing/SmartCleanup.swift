@@ -22,6 +22,10 @@ actor SmartCleanup {
     /// outcome is dropped (Release behavior: cleanup failure fails open, the
     /// span stays raw).
     private let onOutcome: (@Sendable (CleanupOutcome) async -> Void)?
+    /// Per-session field context (PR 10): AX surrounding text and bundle id
+    /// captured at session start; code mode derived from the bundle id.
+    private var sessionField: FieldContext = .empty
+    private var sessionCodeMode = false
 
     init(
         tokenStream: TokenStream,
@@ -42,6 +46,14 @@ actor SmartCleanup {
     /// Warm the underlying engine (model load) ahead of the first invocation.
     func prepareEngine() async throws {
         try await engine.prepare()
+    }
+
+    /// Adopt the focused field's context for this session (PR 10). A session
+    /// begun without this (or with .empty) is fully functional — cleanup just
+    /// runs context-less (acceptance).
+    func beginSession(field: FieldContext) {
+        sessionField = field
+        sessionCodeMode = codeMode || CodeDetector.isCodeSurface(bundleID: field.bundleID)
     }
 
     /// Feed one ASR event. Applies the vocab pre-pass, forwards to the token
@@ -84,10 +96,17 @@ actor SmartCleanup {
         let input = await tokenStream.cleanupInput()
         guard !input.text.trimmingCharacters(in: .whitespaces).isEmpty else { return }
 
+        // Surrounding text = the focused field's vicinity (AX, PR 10) plus
+        // the settled tail of this dictation — both are what precedes the
+        // span being cleaned.
+        let surrounding = [
+            sessionField.surroundingText,
+            input.settledContext.isEmpty ? nil : input.settledContext,
+        ].compactMap { $0 }.joined(separator: "\n")
         let context = CleanupContext(
-            surroundingText: input.settledContext.isEmpty ? nil : input.settledContext,
-            bundleID: nil,
-            codeMode: codeMode,
+            surroundingText: surrounding.isEmpty ? nil : surrounding,
+            bundleID: sessionField.bundleID,
+            codeMode: sessionCodeMode,
             vocabularyHint: vocabulary.promptHint()
         )
         let request = CleanupRequest(text: input.text, context: context)

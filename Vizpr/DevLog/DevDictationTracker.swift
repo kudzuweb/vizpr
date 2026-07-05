@@ -38,6 +38,7 @@ actor DevDictationTracker {
     /// Build the dictation record at session drain and reset for the next one.
     func makeRecord(
         injectedText: String,
+        surroundingText: String? = nil,
         bundleID: String?,
         mode: String,
         modelTier: String,
@@ -51,7 +52,7 @@ actor DevDictationTracker {
             rawASRText: parts.joined(separator: " "),
             injectedText: injectedText,
             context: DevDictationContext(
-                surroundingText: nil, bundleID: bundleID, mode: mode
+                surroundingText: surroundingText, bundleID: bundleID, mode: mode
             ),
             modelTier: modelTier
         )

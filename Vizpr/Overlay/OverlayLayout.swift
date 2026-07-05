@@ -40,4 +40,21 @@ struct OverlayLayout: Sendable, Equatable {
     }
 
     var restingFrame: CGRect { frame(contentHeight: 0) }
+
+    /// Pick the screen holding the dictation target (§13 multi-display,
+    /// PR 10): convert the AX window frame (top-left origin, primary-relative)
+    /// to Cocoa coordinates and choose the screen containing its center.
+    /// Pure so it's table-testable; nil axFrame → nil (caller falls back).
+    static func targetScreenFrame(
+        axFrame: CGRect?,
+        screenFrames: [CGRect],
+        primaryHeight: CGFloat
+    ) -> CGRect? {
+        guard let axFrame, !screenFrames.isEmpty else { return nil }
+        let center = CGPoint(
+            x: axFrame.midX,
+            y: primaryHeight - axFrame.midY   // flip AX top-left to Cocoa
+        )
+        return screenFrames.first { $0.contains(center) }
+    }
 }
