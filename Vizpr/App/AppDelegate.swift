@@ -24,6 +24,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var snapshotTask: Task<Void, Never>?
     private let overlay = OverlayController()
     private let settleGate = SettleGate()
+    private let fieldReader = FieldContextReader()
+    /// The focused field's context, captured at session start (PR 10).
+    private var currentField: FieldContext = .empty
     #if DICT_DEV_LOG
     private let dictationTracker = DevDictationTracker()
     /// Dictation-record handshake: the record needs the committed text (known
@@ -205,8 +208,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pendingInjection = nil
         let record = await dictationTracker.makeRecord(
             injectedText: injected,
-            bundleID: NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
-            mode: "default",
+            surroundingText: currentField.surroundingText,
+            bundleID: currentField.bundleID,
+            mode: CodeDetector.isCodeSurface(bundleID: currentField.bundleID)
+                ? "code" : "default",
             modelTier: MLXCleanup.modelTier
         )
         await VizprDevLogWriter.shared.append(record)
@@ -269,7 +274,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 case .startDictation:
                     await self?.tokenStream.beginSession()
                     let sessionEpoch = self?.settleGate.beginSession() ?? 0
-                    self?.overlay.show()
+                    // Read the focused field BEFORE the overlay appears —
+                    // read-only AX, one shot per session (PR 10).
+                    let field = self?.fieldReader.read() ?? .empty
+                    self?.currentField = field
+                    await self?.smartCleanup?.beginSession(field: field)
+                    self?.overlay.show(targetWindowFrame: field.focusedWindowFrame)
                     #if DICT_DEV_LOG
                     await self?.beginDictationRecord()
                     #endif
