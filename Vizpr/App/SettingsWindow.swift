@@ -43,12 +43,16 @@ struct SettingsRootView: View {
         }
         .frame(minWidth: 560, minHeight: 460)
         .padding()
+        // Field catch (Mauria): grouped-form TextFields render borderless —
+        // literally invisible until you click the blank space. Rounded
+        // borders for every field in the window.
+        .textFieldStyle(.roundedBorder)
         .safeAreaInset(edge: .bottom) {
             HStack {
                 Spacer()
                 Button("Reset All Settings", role: .destructive) { confirmReset = true }
                     .confirmationDialog(
-                        "Reset every setting to its default? Color presets are included.",
+                        "Reset every setting to its default? Color presets are kept.",
                         isPresented: $confirmReset
                     ) {
                         Button("Reset Everything", role: .destructive) { store.resetAll() }
@@ -172,6 +176,10 @@ struct AppearancePane: View {
                     Button("Save current") { saveCurrent() }
                         .disabled(store.settings.colorPresets.count >= VizprSettings.maxColorPresets)
                 }
+                Button("Delete All Presets", role: .destructive) {
+                    store.deleteAllPresets()
+                }
+                .disabled(store.settings.colorPresets.isEmpty)
             }
         }
         .formStyle(.grouped)
@@ -241,138 +249,300 @@ extension Color {
 
 // MARK: - Vocabulary
 
+extension VocabularyEntry: Identifiable {
+    var id: String { pattern + "\u{1F}" + replacement }
+}
+
+/// Which level is being edited: the global dictionary or a named bucket.
+enum VocabLevel: Hashable {
+    case global
+    case bucket(String)
+
+    var title: String {
+        switch self {
+        case .global: return "Global"
+        case .bucket(let name): return name
+        }
+    }
+}
+
+/// Master-detail vocabulary editor (Mauria's field feedback, 2026-07-06):
+/// levels ALWAYS visible in a sidebar (no dropdown), entries in a multi-
+/// select table with row actions, +/- panes in the classic macOS settings
+/// style, and app assignment via a real app picker instead of typed bundle
+/// ids.
 struct VocabularyPane: View {
     @ObservedObject var vocab: VocabularyModel
-    @State private var selectedBucket: String?
+    @State private var level: VocabLevel = .global
+    @State private var selectedEntries = Set<VocabularyEntry.ID>()
     @State private var newBucketName = ""
+    @State private var addingBucket = false
     @State private var newPattern = ""
     @State private var newReplacement = ""
-    @State private var newAppBundle = ""
 
     var body: some View {
-        Form {
-            Section("Level") {
-                Picker("Editing", selection: $selectedBucket) {
-                    Text("Global").tag(String?.none)
-                    ForEach(vocab.library.buckets) { bucket in
-                        Text(bucket.name).tag(String?.some(bucket.name))
-                    }
-                }
-                HStack {
-                    TextField("New bucket (e.g. coding, casual)", text: $newBucketName)
-                    Button("Add") {
-                        let name = newBucketName.trimmingCharacters(in: .whitespaces)
-                        guard !name.isEmpty,
-                              !vocab.library.buckets.contains(where: { $0.name == name })
-                        else { return }
-                        vocab.library.buckets.append(VocabularyBucket(name: name))
-                        newBucketName = ""
-                    }
-                }
-            }
-            Section("Entries") {
-                ForEach(currentEntries, id: \.pattern) { entry in
-                    HStack {
-                        Text(entry.pattern)
-                        Image(systemName: "arrow.right").foregroundStyle(.secondary)
-                        Text(entry.replacement)
-                        Spacer()
-                        if selectedBucket != nil {
-                            Button("Promote") {
-                                vocab.library.promoteToGlobal(
-                                    pattern: entry.pattern, fromBucket: selectedBucket!)
-                            }
-                        }
-                        Button(role: .destructive) { remove(entry) } label: { Text("Remove") }
-                    }
-                }
-                HStack {
-                    TextField("Heard as…", text: $newPattern)
-                    TextField("Write as…", text: $newReplacement)
-                    Button("Add") { addEntry() }
-                }
-            }
-            Section("Style rules for this level") {
-                TextEditor(text: styleBinding)
-                    .frame(height: 60)
-                    .font(.body)
-                Text("e.g. \"no capitalization\" or \"formal punctuation; expand contractions\"")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            Section("App assignments") {
-                ForEach(vocab.library.appAssignments.sorted(by: { $0.key < $1.key }), id: \.key) { app, bucket in
-                    HStack {
-                        Text(app)
-                        Spacer()
-                        Text(bucket).foregroundStyle(.secondary)
-                        Button(role: .destructive) {
-                            vocab.library.appAssignments[app] = nil
-                        } label: { Text("Remove") }
-                    }
-                }
-                if let bucket = selectedBucket {
-                    HStack {
-                        TextField("Bundle id (e.g. com.microsoft.VSCode)", text: $newAppBundle)
-                        Button("Assign to \(bucket)") {
-                            let id = newAppBundle.trimmingCharacters(in: .whitespaces)
-                            guard !id.isEmpty else { return }
-                            vocab.library.appAssignments[id] = bucket
-                            newAppBundle = ""
-                        }
-                    }
-                }
-            }
+        HSplitView {
+            sidebar
+                .frame(minWidth: 150, maxWidth: 190)
+            detail
+                .frame(minWidth: 320, maxWidth: .infinity)
         }
-        .formStyle(.grouped)
     }
 
+    // MARK: Sidebar — levels, always visible
+
+    private var sidebar: some View {
+        VStack(spacing: 0) {
+            List(selection: $level) {
+                Label("Global", systemImage: "globe").tag(VocabLevel.global)
+                Section("Buckets") {
+                    ForEach(vocab.library.buckets) { bucket in
+                        Label(bucket.name, systemImage: "tray")
+                            .tag(VocabLevel.bucket(bucket.name))
+                    }
+                }
+            }
+            .listStyle(.sidebar)
+            Divider()
+            HStack(spacing: 0) {
+                Button { addingBucket = true } label: { Image(systemName: "plus") }
+                    .buttonStyle(.borderless).frame(width: 28, height: 24)
+                Button { deleteCurrentBucket() } label: { Image(systemName: "minus") }
+                    .buttonStyle(.borderless).frame(width: 28, height: 24)
+                    .disabled(currentBucketName == nil)
+                Spacer()
+            }
+            .background(.bar)
+        }
+        .alert("New Bucket", isPresented: $addingBucket) {
+            TextField("Name (e.g. coding, casual)", text: $newBucketName)
+            Button("Add") { addBucket() }
+            Button("Cancel", role: .cancel) { newBucketName = "" }
+        } message: {
+            Text("A named dictionary you can assign to apps.")
+        }
+    }
+
+    // MARK: Detail — entries table, style rules, app assignments
+
+    private var detail: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(level.title).font(.headline)
+
+            Table(currentEntries, selection: $selectedEntries) {
+                TableColumn("Heard as…", value: \.pattern)
+                TableColumn("Written as…", value: \.replacement)
+            }
+            .frame(minHeight: 140)
+
+            HStack {
+                TextField("Heard as…", text: $newPattern)
+                TextField("Written as…", text: $newReplacement)
+                Button("Add") { addEntry() }
+                    .disabled(newPattern.trimmingCharacters(in: .whitespaces).isEmpty
+                              || newReplacement.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+
+            HStack {
+                Button("Remove") { removeSelected() }
+                    .disabled(selectedEntries.isEmpty)
+                if case .bucket(let name) = level {
+                    Button("Copy to Global") { copySelectedToGlobal(from: name) }
+                        .disabled(selectedEntries.isEmpty)
+                }
+                if !otherLevels.isEmpty {
+                    Menu("Move to…") {
+                        ForEach(otherLevels, id: \.self) { target in
+                            Button(target.title) { moveSelected(to: target) }
+                        }
+                    }
+                    .disabled(selectedEntries.isEmpty)
+                    .frame(width: 110)
+                }
+                Spacer()
+            }
+
+            GroupBox("Style rules for \(level.title)") {
+                TextEditor(text: styleBinding)
+                    .frame(height: 48)
+                    .font(.body)
+            }
+
+            if case .bucket(let name) = level {
+                GroupBox("Apps using \(name)") {
+                    assignmentsList(bucket: name)
+                }
+            }
+        }
+        .padding()
+    }
+
+    private func assignmentsList(bucket: String) -> some View {
+        VStack(spacing: 0) {
+            let assigned = vocab.library.appAssignments
+                .filter { $0.value == bucket }.keys.sorted()
+            if assigned.isEmpty {
+                Text("No apps assigned — this bucket activates only via manual cycling.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(6)
+            } else {
+                List(assigned, id: \.self) { app in
+                    HStack {
+                        Text(appDisplayName(app))
+                        Text(app).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                .alternatingRowBackgrounds()
+                .frame(height: min(CGFloat(assigned.count) * 26 + 12, 110))
+            }
+            Divider()
+            HStack(spacing: 0) {
+                Button { pickApp(for: bucket) } label: { Image(systemName: "plus") }
+                    .buttonStyle(.borderless).frame(width: 28, height: 22)
+                Menu {
+                    ForEach(assigned, id: \.self) { app in
+                        Button(appDisplayName(app)) {
+                            vocab.library.appAssignments[app] = nil
+                        }
+                    }
+                } label: { Image(systemName: "minus") }
+                    .menuStyle(.borderlessButton)
+                    .frame(width: 28, height: 22)
+                    .disabled(assigned.isEmpty)
+                Spacer()
+            }
+        }
+    }
+
+    // MARK: Data helpers
+
     private var currentEntries: [VocabularyEntry] {
-        if let name = selectedBucket {
+        switch level {
+        case .global: return vocab.library.global
+        case .bucket(let name):
             return vocab.library.buckets.first { $0.name == name }?.entries ?? []
         }
-        return vocab.library.global
+    }
+
+    private var currentBucketName: String? {
+        if case .bucket(let name) = level { return name }
+        return nil
+    }
+
+    private var otherLevels: [VocabLevel] {
+        var levels: [VocabLevel] = level == .global ? [] : [.global]
+        levels += vocab.library.buckets.map { VocabLevel.bucket($0.name) }
+            .filter { $0 != level }
+        return levels
     }
 
     private var styleBinding: Binding<String> {
         Binding(
             get: {
-                if let name = selectedBucket {
+                switch level {
+                case .global: return vocab.library.globalStyleRules
+                case .bucket(let name):
                     return vocab.library.buckets.first { $0.name == name }?.styleRules ?? ""
                 }
-                return vocab.library.globalStyleRules
             },
             set: { rules in
-                if let name = selectedBucket,
-                   let index = vocab.library.buckets.firstIndex(where: { $0.name == name }) {
-                    vocab.library.buckets[index].styleRules = rules
-                } else {
-                    vocab.library.globalStyleRules = rules
+                switch level {
+                case .global: vocab.library.globalStyleRules = rules
+                case .bucket(let name):
+                    if let i = vocab.library.buckets.firstIndex(where: { $0.name == name }) {
+                        vocab.library.buckets[i].styleRules = rules
+                    }
                 }
             }
         )
     }
 
+    // MARK: Actions
+
+    private func addBucket() {
+        let name = newBucketName.trimmingCharacters(in: .whitespaces)
+        newBucketName = ""
+        guard !name.isEmpty, name != "Global",
+              !vocab.library.buckets.contains(where: { $0.name == name }) else { return }
+        vocab.library.buckets.append(VocabularyBucket(name: name))
+        level = .bucket(name)
+    }
+
+    private func deleteCurrentBucket() {
+        guard let name = currentBucketName else { return }
+        vocab.library.buckets.removeAll { $0.name == name }
+        vocab.library.appAssignments = vocab.library.appAssignments.filter { $0.value != name }
+        if vocab.library.manualBucket == name { vocab.library.manualBucket = nil }
+        level = .global
+    }
+
     private func addEntry() {
-        let pattern = newPattern.trimmingCharacters(in: .whitespaces)
-        let replacement = newReplacement.trimmingCharacters(in: .whitespaces)
-        guard !pattern.isEmpty, !replacement.isEmpty else { return }
-        let entry = VocabularyEntry(pattern: pattern, replacement: replacement, kind: .canonical)
-        if let name = selectedBucket,
-           let index = vocab.library.buckets.firstIndex(where: { $0.name == name }) {
-            vocab.library.buckets[index].entries.append(entry)
-        } else {
-            vocab.library.global.append(entry)
-        }
+        let entry = VocabularyEntry(
+            pattern: newPattern.trimmingCharacters(in: .whitespaces),
+            replacement: newReplacement.trimmingCharacters(in: .whitespaces),
+            kind: .canonical
+        )
+        mutateCurrent { $0.removeAll { $0.pattern == entry.pattern }; $0.append(entry) }
         newPattern = ""
         newReplacement = ""
     }
 
-    private func remove(_ entry: VocabularyEntry) {
-        if let name = selectedBucket,
-           let index = vocab.library.buckets.firstIndex(where: { $0.name == name }) {
-            vocab.library.buckets[index].entries.removeAll { $0.pattern == entry.pattern }
-        } else {
+    private func removeSelected() {
+        mutateCurrent { entries in entries.removeAll { selectedEntries.contains($0.id) } }
+        selectedEntries = []
+    }
+
+    private func copySelectedToGlobal(from bucket: String) {
+        let picked = currentEntries.filter { selectedEntries.contains($0.id) }
+        for entry in picked {
             vocab.library.global.removeAll { $0.pattern == entry.pattern }
+            vocab.library.global.append(entry)
         }
+        selectedEntries = []
+    }
+
+    private func moveSelected(to target: VocabLevel) {
+        let picked = currentEntries.filter { selectedEntries.contains($0.id) }
+        mutateCurrent { entries in entries.removeAll { selectedEntries.contains($0.id) } }
+        for entry in picked {
+            mutate(level: target) { $0.removeAll { $0.pattern == entry.pattern }; $0.append(entry) }
+        }
+        selectedEntries = []
+    }
+
+    private func mutateCurrent(_ change: (inout [VocabularyEntry]) -> Void) {
+        mutate(level: level, change)
+    }
+
+    private func mutate(level: VocabLevel, _ change: (inout [VocabularyEntry]) -> Void) {
+        switch level {
+        case .global:
+            change(&vocab.library.global)
+        case .bucket(let name):
+            if let i = vocab.library.buckets.firstIndex(where: { $0.name == name }) {
+                change(&vocab.library.buckets[i].entries)
+            }
+        }
+    }
+
+    private func pickApp(for bucket: String) {
+        let panel = NSOpenPanel()
+        panel.directoryURL = URL(fileURLWithPath: "/Applications")
+        panel.allowedContentTypes = [.applicationBundle]
+        panel.allowsMultipleSelection = true
+        panel.message = "Choose apps that should use the \(bucket) dictionary"
+        guard panel.runModal() == .OK else { return }
+        for url in panel.urls {
+            if let id = Bundle(url: url)?.bundleIdentifier {
+                vocab.library.appAssignments[id] = bucket
+            }
+        }
+    }
+
+    private func appDisplayName(_ bundleID: String) -> String {
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
+        else { return bundleID }
+        return FileManager.default.displayName(atPath: url.path)
     }
 }
