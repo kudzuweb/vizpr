@@ -33,6 +33,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let settingsWindow = SettingsWindowController()
     /// The focused field's context, captured at session start (PR 10).
     private var currentField: FieldContext = .empty
+    /// Set when the last session's mic delivered pure silence (AirPods
+    /// held-route trap); shown in the menu until a session gets real audio.
+    private var lastSessionWasSilent = false
     #if DICT_DEV_LOG
     private let dictationTracker = DevDictationTracker()
     /// Dictation-record handshake: the record needs the committed text (known
@@ -138,6 +141,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         #endif
 
+        defer {
+            audioPipeline?.onSilentSession = { [weak self] in
+                self?.lastSessionWasSilent = true
+                NSSound.beep()
+                #if DICT_DEV_LOG
+                VizprTranscriptLogger.note(
+                    "SILENT SESSION: mic delivered zero audio — check input device")
+                #endif
+            }
+        }
         audioPipeline = AudioPipeline.makeDefault(
             engine: engine,
             onTokenEvent: onTokenEvent,
@@ -301,6 +314,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 #endif
                 switch action {
                 case .startDictation:
+                    self?.lastSessionWasSilent = false
                     await self?.tokenStream.beginSession()
                     let sessionEpoch = self?.settleGate.beginSession() ?? 0
                     // Read the focused field BEFORE the overlay appears —
@@ -435,6 +449,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let grant = NSMenuItem(title: title, action: #selector(grantAccessibility), keyEquivalent: "")
             grant.target = self
             menu.addItem(grant)
+            menu.addItem(.separator())
+        }
+
+        if lastSessionWasSilent {
+            let warning = NSMenuItem(
+                title: "⚠ Mic delivered silence — check Sound input",
+                action: nil, keyEquivalent: ""
+            )
+            warning.isEnabled = false
+            menu.addItem(warning)
             menu.addItem(.separator())
         }
 

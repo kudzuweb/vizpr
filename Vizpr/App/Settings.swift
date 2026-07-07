@@ -134,6 +134,12 @@ final class SettingsStore: ObservableObject {
         observers.append(observer)
     }
 
+    /// Reset every setting to its default (Mauria's request). Color presets
+    /// are settings too, so they reset as well — deliberate, not a bug.
+    func resetAll() {
+        update { $0 = .default }
+    }
+
     func update(_ mutate: (inout VizprSettings) -> Void) {
         var next = settings
         mutate(&next)

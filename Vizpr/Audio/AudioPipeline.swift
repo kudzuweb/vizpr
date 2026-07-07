@@ -34,6 +34,11 @@ final class AudioPipeline {
     /// dictations logged empty raw_asr_text — nothing finalizes before the
     /// flush unless the session crosses the 10 s confirmation window).
     private let onSessionDrained: (@Sendable (Int) async -> Void)?
+    /// Fired at stop() when the mic delivered PURE SILENCE for a session
+    /// with real length — the AirPods held-route trap (rms 0.0000; second
+    /// field occurrence 2026-07-06 burned a whole test session). The caller
+    /// surfaces a notice; fail-silent here would look like broken dictation.
+    var onSilentSession: (() -> Void)?
 
     private var sessionTask: Task<Void, Never>?
 
@@ -172,6 +177,10 @@ final class AudioPipeline {
         sessionTask = nil
         source.stop()
         Task { await detector.reset() }
+        if let capture = source as? MicrophoneCapture,
+           capture.rawPeakLevel.value == 0, capture.tapInvocations.value > 20 {
+            onSilentSession?()
+        }
         #if DICT_DEV_LOG
         if let capture = source as? MicrophoneCapture, capture.droppedBatches.value > 0 {
             VizprTranscriptLogger.note("dropped audio batches this run: \(capture.droppedBatches.value)")

@@ -30,6 +30,7 @@ final class SettingsWindowController {
 struct SettingsRootView: View {
     @ObservedObject var store: SettingsStore
     @ObservedObject var vocab: VocabularyModel
+    @State private var confirmReset = false
 
     var body: some View {
         TabView {
@@ -42,6 +43,19 @@ struct SettingsRootView: View {
         }
         .frame(minWidth: 560, minHeight: 460)
         .padding()
+        .safeAreaInset(edge: .bottom) {
+            HStack {
+                Spacer()
+                Button("Reset All Settings", role: .destructive) { confirmReset = true }
+                    .confirmationDialog(
+                        "Reset every setting to its default? Color presets are included.",
+                        isPresented: $confirmReset
+                    ) {
+                        Button("Reset Everything", role: .destructive) { store.resetAll() }
+                    }
+            }
+            .padding([.horizontal, .bottom])
+        }
     }
 }
 
