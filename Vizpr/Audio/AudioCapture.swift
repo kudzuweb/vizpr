@@ -9,6 +9,7 @@ import Synchronization
 final class AtomicCounter: Sendable {
     private let storage = Atomic<Int>(0)
     func increment() { storage.add(1, ordering: .relaxed) }
+    func reset() { storage.store(0, ordering: .relaxed) }
     func storeMax(_ candidate: Int) {
         var current = storage.load(ordering: .relaxed)
         while candidate > current {
@@ -79,6 +80,15 @@ final class MicrophoneCapture: CaptureSource, @unchecked Sendable {
         guard await Self.ensureMicrophonePermission() else {
             throw AudioCaptureError.microphonePermissionDenied
         }
+
+        // Per-session diagnostics (field bug: cumulative counters carried
+        // session 1's real audio peak into session 2, masking its silence —
+        // the fallback trigger and the stop() log both need per-session
+        // values).
+        tapInvocations.reset()
+        convertedBatches.reset()
+        droppedBatches.reset()
+        rawPeakLevel.reset()
 
         let engine = AVAudioEngine()
         let input = engine.inputNode
