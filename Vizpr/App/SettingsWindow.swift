@@ -87,6 +87,26 @@ struct BehaviorPane: View {
 
     var body: some View {
         Form {
+            Section("Hotkeys") {
+                Toggle("Enable dictation hotkey", isOn: bind(store, \.hotkeyEnabled))
+                LabeledContent("Start / stop") {
+                    Text("Fn  (hold = push-to-talk, tap = latch)")
+                        .foregroundStyle(.secondary)
+                }
+                LabeledContent("Cancel") {
+                    Text("⎋ Esc").foregroundStyle(.secondary)
+                }
+                LabeledContent("Secondary chord") {
+                    HStack(spacing: 10) {
+                        modifierToggle("⌃", "control")
+                        modifierToggle("⌥", "option")
+                        modifierToggle("⇧", "shift")
+                        modifierToggle("⌘", "command")
+                    }
+                }
+                Text("The chord needs at least two modifiers. Trigger reassignment is coming.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section("Dictation") {
                 Stepper("Settle window: \(store.settings.settleSentences) sentences",
                         value: bind(store, \.settleSentences), in: 1...6)
@@ -112,6 +132,24 @@ struct BehaviorPane: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    private func modifierToggle(_ symbol: String, _ name: String) -> some View {
+        Toggle(symbol, isOn: Binding(
+            get: { store.settings.secondaryModifiers.contains(name) },
+            set: { on in
+                store.update {
+                    if on {
+                        if !$0.secondaryModifiers.contains(name) {
+                            $0.secondaryModifiers.append(name)
+                        }
+                    } else if $0.secondaryModifiers.count > 2 {
+                        $0.secondaryModifiers.removeAll { $0 == name }
+                    }
+                }
+            }
+        ))
+        .toggleStyle(.button)
     }
 
     private func sliderRow(_ title: String, _ value: Binding<Int>,

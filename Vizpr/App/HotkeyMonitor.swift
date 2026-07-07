@@ -29,6 +29,13 @@ final class HotkeyMonitor: @unchecked Sendable {
     func setHoldThreshold(_ threshold: Duration) {
         machine = HotkeyStateMachine(holdThreshold: threshold, state: machine.state)
     }
+
+    /// Live setting (PR 11): reassign the secondary chord. A fresh tracker
+    /// is unseeded, so it silently adopts the current flag state as its
+    /// baseline (no phantom edges).
+    func setSecondaryMask(_ mask: CGEventFlags) {
+        edges = FlagEdgeTracker(secondaryMask: mask)
+    }
     /// Edge tracking lives in a pure, tested value type (see `FlagEdgeTracker`):
     /// flagsChanged reports the whole flag set, so down/up edges are derived by
     /// comparison, and that comparison has real failure modes worth testing.

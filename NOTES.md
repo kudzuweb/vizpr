@@ -324,6 +324,36 @@ rendering differs. Shares the overlay color theme.
    focus — likely a separate activating edit window summoned on demand).
    Adjacent to the plan's parked "post-injection edit capture" idea.
 
+## Trigger reassignment (Mauria, 2026-07-07 — designed-in, deliberate follow-up)
+
+"I guess you should be able to reassign the trigger too. I like Fn but maybe
+other people want other button. especially vim guys."
+
+Deliberately NOT shipped in the PR 11 hotkey slice. The fail-open invariant
+("consume a keystroke ONLY if it's our trigger") is written specifically
+around Fn's flagsChanged behavior — Fn arrives as a modifier-flag transition,
+not a keyDown, so the current HotkeyStateMachine never has to decide whether
+to swallow a character-producing key. Reassignment to an arbitrary key (or a
+modifier chord as primary) means parameterizing that state machine, and the
+property tests that pin fail-open (`HotkeyStateMachineTests`) must be
+regenerated around the parameterized trigger, not just extended. **Do NOT
+rush this one** — a wrong trigger match eats user keystrokes system-wide.
+
+Plan when it lands:
+1. Parameterize `HotkeyStateMachine` over a trigger descriptor (flag-based
+   like Fn, chord-based like the secondary, or plain-keycode).
+2. Modifier-mask triggers first (Right-Option, Right-Command, Globe) — same
+   flagsChanged shape as Fn, smallest step, covers most "other button" asks.
+3. Plain-keycode triggers (the vim ask) last: these require keyDown
+   consumption and a new class of fail-open property tests (never swallow a
+   key that ISN'T the trigger; always swallow one that IS; secure-input and
+   tap-timeout behavior re-proven).
+
+Already provisioned NOW so the settings format is stable:
+`VizprSettings.primaryTrigger: String = "fn"` — reserved field, decode-clamps
+to "fn" until the machine is parameterized. The Behavior pane displays the
+binding read-only with a "Trigger reassignment is coming." caption.
+
 ## Carried forward to PR 11 (Settings)
 
 3. **Clipboard-keep toggle (Mauria, PR 8 field test):** "a setting where you

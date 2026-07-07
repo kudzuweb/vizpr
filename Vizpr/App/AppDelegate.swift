@@ -193,6 +193,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// without relaunch; timing values take effect at the next session).
     private func applySettings(_ settings: VizprSettings) {
         hotkeyMonitor.setHoldThreshold(.milliseconds(settings.holdThresholdMs))
+        hotkeyMonitor.setSecondaryMask(Self.modifierMask(settings.secondaryModifiers))
+        if settings.hotkeyEnabled {
+            if permissionProbe.evaluate() == .ready { _ = hotkeyMonitor.start() }
+        } else {
+            hotkeyMonitor.stop()
+        }
         audioPipeline?.setAutoStopTimeout(.seconds(settings.autoStopSeconds))
         audioPipeline?.silentInputFallback = settings.silentInputFallback
         textInjector.setRestoreEnabled(settings.restoreClipboard)
@@ -206,6 +212,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
             await asrEngine?.setDraftMinTail(milliseconds: settings.draftMinTailMs)
         }
+    }
+
+    static func modifierMask(_ names: [String]) -> CGEventFlags {
+        var mask: CGEventFlags = []
+        for name in names {
+            switch name {
+            case "control": mask.insert(.maskControl)
+            case "option": mask.insert(.maskAlternate)
+            case "shift": mask.insert(.maskShift)
+            case "command": mask.insert(.maskCommand)
+            default: break
+            }
+        }
+        return mask
     }
 
     /// Session drain (AudioPipeline hook): releases the settle window, then

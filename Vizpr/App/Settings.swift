@@ -11,8 +11,24 @@ import Foundation
 /// a pathological value in.
 struct VizprSettings: Codable, Equatable, Sendable {
     // MARK: Hotkey
+    /// Master switch: disable to release the event tap entirely (Fn behaves
+    /// stock, nothing listens).
+    var hotkeyEnabled: Bool = true
     /// Tap vs hold boundary, milliseconds (field-tuned default from PR 3).
     var holdThresholdMs: Int = 280
+    /// Secondary chord modifiers (ordered set of: control, option, shift,
+    /// command). At least two — a single bare modifier would collide with
+    /// normal typing.
+    var secondaryModifiers: [String] = ["control", "option"]
+    /// RESERVED for trigger reassignment (Mauria: "maybe other people want
+    /// other button. especially vim guys"). Only "fn" is valid today — the
+    /// fail-open state machine is written around Fn's flagsChanged behavior
+    /// and gets parameterized deliberately, with its own property-test pass
+    /// (see NOTES.md "Trigger reassignment"). Reserving the field now keeps
+    /// the on-disk format stable when that lands.
+    var primaryTrigger: String = "fn"
+
+    static let validModifiers: Set<String> = ["control", "option", "shift", "command"]
 
     // MARK: Session behavior
     /// Settle window, sentences (TokenStream live-region size).
@@ -73,6 +89,9 @@ struct VizprSettings: Codable, Equatable, Sendable {
     func clamped() -> VizprSettings {
         var s = self
         s.holdThresholdMs = min(max(s.holdThresholdMs, 100), 1_000)
+        s.secondaryModifiers = s.secondaryModifiers.filter { Self.validModifiers.contains($0) }
+        if s.secondaryModifiers.count < 2 { s.secondaryModifiers = ["control", "option"] }
+        if s.primaryTrigger != "fn" { s.primaryTrigger = "fn" }   // only Fn yet
         s.settleSentences = min(max(s.settleSentences, 1), 6)
         s.autoStopSeconds = min(max(s.autoStopSeconds, 2), 60)
         s.settleCapMs = min(max(s.settleCapMs, 0), 1_000)
