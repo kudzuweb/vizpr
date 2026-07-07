@@ -164,13 +164,25 @@ struct VocabularyLibraryTests {
         #expect(v.apply(to: "the api") == "the API", "manual bucket replaced the assigned one")
     }
 
-    @Test("Hotkey cycle: automatic -> each bucket -> automatic")
+    @Test("Hotkey cycle: automatic -> global only -> each bucket -> automatic")
     func cycle() {
         var lib = library
+        #expect(lib.cycleManualBucket() == "Global only")
         #expect(lib.cycleManualBucket() == "coding")
         #expect(lib.cycleManualBucket() == "casual")
         #expect(lib.cycleManualBucket() == "Automatic")
         #expect(lib.manualBucket == nil)
+    }
+
+    @Test("Global-only ignores app assignments entirely")
+    func globalOnly() {
+        var lib = library
+        lib.manualBucket = VocabularyLibrary.globalOnly
+        let v = lib.resolved(bundleID: "com.microsoft.VSCode")
+        #expect(v.apply(to: "the api") == "the API", "bucket leaked through global-only")
+        #expect(v.apply(to: "the repo") == "the repo")
+        #expect(lib.resolvedStyleRules(bundleID: "com.microsoft.VSCode") == nil
+                || lib.resolvedStyleRules(bundleID: "com.microsoft.VSCode")?.contains("coding") == false)
     }
 
     @Test("Promote/demote move entries between levels without duplicates")

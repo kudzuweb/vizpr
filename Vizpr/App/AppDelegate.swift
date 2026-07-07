@@ -464,7 +464,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let dictionary = NSMenuItem(
-            title: "Dictionary: \(vocabularyModel.library.manualBucket ?? "Automatic")",
+            title: "Dictionary: \(vocabularyModel.library.activeDisplayName)",
             action: #selector(cycleVocabulary), keyEquivalent: ""
         )
         dictionary.target = self

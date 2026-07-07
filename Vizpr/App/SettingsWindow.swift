@@ -288,6 +288,8 @@ struct VocabularyPane: View {
             HStack {
                 Picker("Active dictionary:", selection: activeBinding) {
                     Text("Automatic (per-app)").tag(String?.none)
+                    Text("Global only").tag(String?.some(VocabularyLibrary.globalOnly))
+                    Divider()
                     ForEach(vocab.library.buckets) { bucket in
                         Text(bucket.name).tag(String?.some(bucket.name))
                     }
@@ -319,7 +321,16 @@ struct VocabularyPane: View {
     private var sidebar: some View {
         VStack(spacing: 0) {
             List(selection: $level) {
-                Label("Global", systemImage: "globe").tag(VocabLevel.global)
+                HStack {
+                    Label("Global", systemImage: "globe")
+                    if vocab.library.isGlobalOnly {
+                        Spacer()
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(.tint)
+                            .help("Active: global only")
+                    }
+                }
+                .tag(VocabLevel.global)
                 Section("Buckets") {
                     ForEach(vocab.library.buckets) { bucket in
                         HStack {

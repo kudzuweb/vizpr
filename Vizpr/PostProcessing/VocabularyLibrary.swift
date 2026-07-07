@@ -25,13 +25,28 @@ struct VocabularyLibrary: Codable, Equatable, Sendable {
     /// bundle id → bucket name.
     var appAssignments: [String: String] = [:]
     /// Manual override (hotkey cycle / menu pick). nil = automatic (use the
-    /// app assignment).
+    /// app assignment); the reserved sentinel = global-only.
     var manualBucket: String?
+
+    /// Reserved manualBucket value meaning "use ONLY the global dictionary —
+    /// ignore app assignments" (a sentinel rather than a new field keeps the
+    /// on-disk format stable; the control character can never collide with a
+    /// user bucket name).
+    static let globalOnly = "\u{1F}global-only"
+
+    var isGlobalOnly: Bool { manualBucket == Self.globalOnly }
+
+    /// Menu/UI display name for the current manual state.
+    var activeDisplayName: String {
+        if isGlobalOnly { return "Global only" }
+        return manualBucket ?? "Automatic"
+    }
     /// Style directives that apply everywhere (the global level's rules).
     var globalStyleRules: String = ""
 
     /// The active bucket under the same resolution order as resolved().
     func activeBucket(bundleID: String?) -> VocabularyBucket? {
+        if isGlobalOnly { return nil }
         let name = manualBucket ?? bundleID.flatMap { appAssignments[$0] }
         return name.flatMap { n in buckets.first { $0.name == n } }
     }
@@ -51,8 +66,7 @@ struct VocabularyLibrary: Codable, Equatable, Sendable {
     /// Within a resolved bucket, bucket entries win pattern conflicts with
     /// global (context overrides global; global fills everything else).
     func resolved(bundleID: String?) -> Vocabulary {
-        let name = manualBucket ?? bundleID.flatMap { appAssignments[$0] }
-        guard let name, let bucket = buckets.first(where: { $0.name == name }) else {
+        guard let bucket = activeBucket(bundleID: bundleID) else {
             return Vocabulary(entries: global)
         }
         let overridden = Set(bucket.entries.map { $0.pattern.lowercased() })
@@ -64,23 +78,23 @@ struct VocabularyLibrary: Codable, Equatable, Sendable {
 
     /// Hotkey cycle: automatic → bucket 1 → bucket 2 → … → automatic.
     /// Returns the new state's display name for the menu/overlay.
+    /// Cycle order: Automatic → Global only → bucket 1 → … → Automatic.
     @discardableResult
     mutating func cycleManualBucket() -> String {
-        guard !buckets.isEmpty else {
-            manualBucket = nil
-            return "Automatic"
-        }
-        if let current = manualBucket,
-           let index = buckets.firstIndex(where: { $0.name == current }) {
-            if index + 1 < buckets.count {
+        switch manualBucket {
+        case nil:
+            manualBucket = Self.globalOnly
+        case Self.globalOnly:
+            manualBucket = buckets.first?.name   // nil (Automatic) if none
+        case let current?:
+            if let index = buckets.firstIndex(where: { $0.name == current }),
+               index + 1 < buckets.count {
                 manualBucket = buckets[index + 1].name
             } else {
                 manualBucket = nil   // wrap back to automatic
             }
-        } else {
-            manualBucket = buckets[0].name
         }
-        return manualBucket ?? "Automatic"
+        return activeDisplayName
     }
 
     /// Propagation (the claude.md analogy): move an entry between levels.
