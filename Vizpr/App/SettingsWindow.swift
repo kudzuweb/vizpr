@@ -287,8 +287,8 @@ struct VocabularyPane: View {
             // sidebar selection below only chooses what you're editing.
             HStack {
                 Picker("Active dictionary:", selection: activeBinding) {
-                    Text("Automatic (per-app)").tag(String?.none)
                     Text("Global only").tag(String?.some(VocabularyLibrary.globalOnly))
+                    Text("Automatic (per-app)").tag(String?.none)
                     Divider()
                     ForEach(vocab.library.buckets) { bucket in
                         Text(bucket.name).tag(String?.some(bucket.name))

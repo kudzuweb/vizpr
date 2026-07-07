@@ -137,7 +137,8 @@ struct VocabularyLibraryTests {
                 VocabularyBucket(name: "coding", entries: [entry("api", "Api"), entry("repo", "repository")]),
                 VocabularyBucket(name: "casual", entries: [entry("lol", "lol")]),
             ],
-            appAssignments: ["com.microsoft.VSCode": "coding"]
+            appAssignments: ["com.microsoft.VSCode": "coding"],
+            manualBucket: nil   // tests exercise Automatic unless stated
         )
     }
 
@@ -164,14 +165,21 @@ struct VocabularyLibraryTests {
         #expect(v.apply(to: "the api") == "the API", "manual bucket replaced the assigned one")
     }
 
-    @Test("Hotkey cycle: automatic -> global only -> each bucket -> automatic")
+    @Test("Hotkey cycle: global only -> automatic -> each bucket -> global only")
     func cycle() {
         var lib = library
-        #expect(lib.cycleManualBucket() == "Global only")
+        lib.manualBucket = VocabularyLibrary.globalOnly   // the default state
+        #expect(lib.cycleManualBucket() == "Automatic")
         #expect(lib.cycleManualBucket() == "coding")
         #expect(lib.cycleManualBucket() == "casual")
-        #expect(lib.cycleManualBucket() == "Automatic")
-        #expect(lib.manualBucket == nil)
+        #expect(lib.cycleManualBucket() == "Global only")
+        #expect(lib.isGlobalOnly)
+    }
+
+    @Test("A fresh library defaults to global-only")
+    func freshDefault() {
+        #expect(VocabularyLibrary().isGlobalOnly)
+        #expect(VocabularyLibrary(global: []).isGlobalOnly)
     }
 
     @Test("Global-only ignores app assignments entirely")
@@ -228,7 +236,8 @@ struct StyleRulesTests {
                 VocabularyBucket(name: "casual", styleRules: "no capitalization"),
                 VocabularyBucket(name: "email", styleRules: "formal punctuation; expand contractions"),
             ],
-            appAssignments: ["com.apple.mail": "email"]
+            appAssignments: ["com.apple.mail": "email"],
+            manualBucket: nil
         )
         lib.globalStyleRules = "never censor profanity"
         return lib

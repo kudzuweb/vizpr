@@ -25,8 +25,10 @@ struct VocabularyLibrary: Codable, Equatable, Sendable {
     /// bundle id → bucket name.
     var appAssignments: [String: String] = [:]
     /// Manual override (hotkey cycle / menu pick). nil = automatic (use the
-    /// app assignment); the reserved sentinel = global-only.
-    var manualBucket: String?
+    /// app assignment); the reserved sentinel = global-only. DEFAULTS to
+    /// global-only (Mauria: global is the foundation — everything else adds
+    /// on top, and some people never want buckets).
+    var manualBucket: String? = VocabularyLibrary.globalOnly
 
     /// Reserved manualBucket value meaning "use ONLY the global dictionary —
     /// ignore app assignments" (a sentinel rather than a new field keeps the
@@ -78,20 +80,21 @@ struct VocabularyLibrary: Codable, Equatable, Sendable {
 
     /// Hotkey cycle: automatic → bucket 1 → bucket 2 → … → automatic.
     /// Returns the new state's display name for the menu/overlay.
-    /// Cycle order: Automatic → Global only → bucket 1 → … → Automatic.
+    /// Cycle order: Global only → Automatic → bucket 1 → … → Global only
+    /// (global-first, matching the default).
     @discardableResult
     mutating func cycleManualBucket() -> String {
         switch manualBucket {
-        case nil:
-            manualBucket = Self.globalOnly
         case Self.globalOnly:
-            manualBucket = buckets.first?.name   // nil (Automatic) if none
+            manualBucket = nil   // Automatic
+        case nil:
+            manualBucket = buckets.first?.name ?? Self.globalOnly
         case let current?:
             if let index = buckets.firstIndex(where: { $0.name == current }),
                index + 1 < buckets.count {
                 manualBucket = buckets[index + 1].name
             } else {
-                manualBucket = nil   // wrap back to automatic
+                manualBucket = Self.globalOnly   // wrap back to the start
             }
         }
         return activeDisplayName
