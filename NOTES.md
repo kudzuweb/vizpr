@@ -310,7 +310,13 @@ rendering differs. Shares the overlay color theme.
    bucket rules, bucket last). Caveat recorded: prompt-enforced
    (best-effort on a 4B) and only where cleanup runs; a per-bucket
    "always clean" flag is the future lever for aggressive restyling.**
-4. **Preflight-edit toggle:** optionally edit the transcript before injection
+4. **Mistake-driven vocabulary capture (Mauria, 2026-07-07):** an easier
+   way to add vocab from mistakes actually experienced, rather than typing
+   entries cold. Shape TBD (she explicitly deferred designing it until the
+   app is finished) — the dev JSONL's raw-vs-injected pairs are the obvious
+   feedstock, and the injector's post-injection edit capture idea (parked
+   in the plan) is adjacent.
+5. **Preflight-edit toggle:** optionally edit the transcript before injection
    (hold at the overlay, edit, then commit). Motivating case: TUIs — can't
    select-and-delete in a terminal input line, only backspace. Interacts
    carefully with WYSIWYG (an edited preview is still displayed==injected)

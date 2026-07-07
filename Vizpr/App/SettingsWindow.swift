@@ -281,12 +281,37 @@ struct VocabularyPane: View {
     @State private var newReplacement = ""
 
     var body: some View {
-        HSplitView {
-            sidebar
-                .frame(minWidth: 150, maxWidth: 190)
-            detail
-                .frame(minWidth: 320, maxWidth: .infinity)
+        VStack(alignment: .leading, spacing: 8) {
+            // USING is separate from EDITING (Mauria): this picker sets the
+            // active dictionary (same state the menu/hotkey cycle drives);
+            // sidebar selection below only chooses what you're editing.
+            HStack {
+                Picker("Active dictionary:", selection: activeBinding) {
+                    Text("Automatic (per-app)").tag(String?.none)
+                    ForEach(vocab.library.buckets) { bucket in
+                        Text(bucket.name).tag(String?.some(bucket.name))
+                    }
+                }
+                .frame(maxWidth: 320)
+                Spacer()
+            }
+            Text("Automatic uses each app's assignment; picking a bucket pins it everywhere. Selecting a level below only chooses what to edit.")
+                .font(.caption).foregroundStyle(.secondary)
+            Divider()
+            HSplitView {
+                sidebar
+                    .frame(minWidth: 150, maxWidth: 190)
+                detail
+                    .frame(minWidth: 320, maxWidth: .infinity)
+            }
         }
+    }
+
+    private var activeBinding: Binding<String?> {
+        Binding(
+            get: { vocab.library.manualBucket },
+            set: { vocab.library.manualBucket = $0 }
+        )
     }
 
     // MARK: Sidebar — levels, always visible
@@ -297,8 +322,16 @@ struct VocabularyPane: View {
                 Label("Global", systemImage: "globe").tag(VocabLevel.global)
                 Section("Buckets") {
                     ForEach(vocab.library.buckets) { bucket in
-                        Label(bucket.name, systemImage: "tray")
-                            .tag(VocabLevel.bucket(bucket.name))
+                        HStack {
+                            Label(bucket.name, systemImage: "tray")
+                            if vocab.library.manualBucket == bucket.name {
+                                Spacer()
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(.tint)
+                                    .help("Active dictionary")
+                            }
+                        }
+                        .tag(VocabLevel.bucket(bucket.name))
                     }
                 }
             }
@@ -388,10 +421,7 @@ struct VocabularyPane: View {
                     .padding(6)
             } else {
                 List(assigned, id: \.self) { app in
-                    HStack {
-                        Text(appDisplayName(app))
-                        Text(app).font(.caption).foregroundStyle(.secondary)
-                    }
+                    Text(appDisplayName(app))
                 }
                 .alternatingRowBackgrounds()
                 .frame(height: min(CGFloat(assigned.count) * 26 + 12, 110))
@@ -543,6 +573,7 @@ struct VocabularyPane: View {
     private func appDisplayName(_ bundleID: String) -> String {
         guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
         else { return bundleID }
-        return FileManager.default.displayName(atPath: url.path)
+        let name = FileManager.default.displayName(atPath: url.path)
+        return name.hasSuffix(".app") ? String(name.dropLast(4)) : name
     }
 }
