@@ -39,6 +39,9 @@ final class AudioPipeline {
     /// field occurrence 2026-07-06 burned a whole test session). The caller
     /// surfaces a notice; fail-silent here would look like broken dictation.
     var onSilentSession: (() -> Void)?
+    /// Live setting (PR 11): attempt the built-in-mic failover when the
+    /// selected route delivers silence (default on).
+    var silentInputFallback = true
 
     private var sessionTask: Task<Void, Never>?
 
@@ -101,11 +104,24 @@ final class AudioPipeline {
             #if DICT_DEV_LOG
             var chunkCount = 0
             #endif
+            var fallbackAttempted = false
+            var sessionChunks = 0
 
             do {
                 let stream = try await source.start()
                 for await samples in stream {
                     guard !Task.isCancelled else { break }
+                    sessionChunks += 1
+                    // Dead-air failover (field case: a phone call owned the
+                    // AirPods; the route delivered zeros). ~1.3 s of exactly
+                    // zero raw peak on a non-built-in engine -> swap to the
+                    // built-in mic once, same stream, session continues.
+                    if self.silentInputFallback, !fallbackAttempted, sessionChunks == 5,
+                       let capture = source as? MicrophoneCapture,
+                       capture.rawPeakLevel.value == 0 {
+                        fallbackAttempted = true
+                        _ = capture.fallBackToBuiltInMic()
+                    }
                     fanOut.audio?.yield(samples)
                     for update in try await detector.process(samples) {
                         #if DICT_DEV_LOG

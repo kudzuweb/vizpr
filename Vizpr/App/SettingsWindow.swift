@@ -103,6 +103,8 @@ struct BehaviorPane: View {
                 Toggle("Restore clipboard after paste", isOn: bind(store, \.restoreClipboard))
                 Toggle("Inviz mode (indicator only, no live preview)",
                        isOn: bind(store, \.invizMode))
+                Toggle("Fall back to built-in mic if input is silent",
+                       isOn: bind(store, \.silentInputFallback))
             }
         }
         .formStyle(.grouped)

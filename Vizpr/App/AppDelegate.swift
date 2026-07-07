@@ -194,6 +194,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func applySettings(_ settings: VizprSettings) {
         hotkeyMonitor.setHoldThreshold(.milliseconds(settings.holdThresholdMs))
         audioPipeline?.setAutoStopTimeout(.seconds(settings.autoStopSeconds))
+        audioPipeline?.silentInputFallback = settings.silentInputFallback
         textInjector.setRestoreEnabled(settings.restoreClipboard)
         overlay.setTheme(OverlayTheme.from(settings))
         overlay.setInviz(settings.invizMode)
