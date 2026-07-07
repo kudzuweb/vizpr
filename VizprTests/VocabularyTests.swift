@@ -175,7 +175,7 @@ struct VocabularyLibraryTests {
     }
 
     @Test("Global-only ignores app assignments entirely")
-    func globalOnly() {
+    func globalOnlyMode() {
         var lib = library
         lib.manualBucket = VocabularyLibrary.globalOnly
         let v = lib.resolved(bundleID: "com.microsoft.VSCode")
