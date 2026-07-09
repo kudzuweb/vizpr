@@ -45,6 +45,14 @@ struct VizprSettings: Codable, Equatable, Sendable {
     var cleanupEnabled: Bool = true
     var codeModeOverride: Bool = false
 
+    // MARK: Models (PR 11 Models pane)
+    /// Selected user model ids; nil = the bundled model. An id that no longer
+    /// resolves to a usable folder fails SOFT to bundled at engine build —
+    /// selection can never leave the app without a model. Model loading stays
+    /// local-only regardless of value (the registry never downloads).
+    var asrModelID: String?
+    var cleanupModelID: String?
+
     // MARK: Injection
     /// ON: original clipboard restored after paste. OFF: transcript stays on
     /// the clipboard (Mauria, PR 8 field request).
@@ -92,6 +100,8 @@ struct VizprSettings: Codable, Equatable, Sendable {
         s.secondaryModifiers = s.secondaryModifiers.filter { Self.validModifiers.contains($0) }
         if s.secondaryModifiers.count < 2 { s.secondaryModifiers = ["control", "option"] }
         if s.primaryTrigger != "fn" { s.primaryTrigger = "fn" }   // only Fn yet
+        if s.asrModelID?.isEmpty == true { s.asrModelID = nil }
+        if s.cleanupModelID?.isEmpty == true { s.cleanupModelID = nil }
         s.settleSentences = min(max(s.settleSentences, 1), 6)
         s.autoStopSeconds = min(max(s.autoStopSeconds, 2), 60)
         s.settleCapMs = min(max(s.settleCapMs, 0), 1_000)

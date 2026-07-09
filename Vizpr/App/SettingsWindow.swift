@@ -7,13 +7,13 @@ import SwiftUI
 final class SettingsWindowController {
     private var window: NSWindow?
 
-    func show(settings: SettingsStore, vocabulary: VocabularyModel) {
+    func show(settings: SettingsStore, vocabulary: VocabularyModel, models: ModelsModel) {
         if let window {
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             return
         }
-        let view = SettingsRootView(store: settings, vocab: vocabulary)
+        let view = SettingsRootView(store: settings, vocab: vocabulary, models: models)
         let hosting = NSHostingController(rootView: view)
         let window = NSWindow(contentViewController: hosting)
         window.title = "Vizpr Settings"
@@ -30,6 +30,7 @@ final class SettingsWindowController {
 struct SettingsRootView: View {
     @ObservedObject var store: SettingsStore
     @ObservedObject var vocab: VocabularyModel
+    @ObservedObject var models: ModelsModel
     @State private var confirmReset = false
 
     var body: some View {
@@ -40,6 +41,8 @@ struct SettingsRootView: View {
                 .tabItem { Label("Appearance", systemImage: "paintpalette") }
             VocabularyPane(vocab: vocab)
                 .tabItem { Label("Vocabulary", systemImage: "character.book.closed") }
+            ModelsPane(store: store, models: models)
+                .tabItem { Label("Models", systemImage: "cpu") }
         }
         .frame(minWidth: 560, minHeight: 460)
         .padding()
@@ -624,5 +627,106 @@ struct VocabularyPane: View {
         else { return bundleID }
         let name = FileManager.default.displayName(atPath: url.path)
         return name.hasSuffix(".app") ? String(name.dropLast(4)) : name
+    }
+}
+
+// MARK: - Models
+
+/// The Models pane (§14): two single-select lists (ASR, cleanup), bundled +
+/// user models, invalid folders shown disabled with the registry's reason
+/// verbatim. The list updates live via the FS watcher; selecting swaps the
+/// engine without a relaunch.
+struct ModelsPane: View {
+    @ObservedObject var store: SettingsStore
+    @ObservedObject var models: ModelsModel
+
+    var body: some View {
+        Form {
+            Section("Speech recognition") {
+                modelList(kind: .asr, selection: \.asrModelID)
+            }
+            Section("Cleanup") {
+                modelList(kind: .cleanup, selection: \.cleanupModelID)
+            }
+            Section {
+                LabeledContent("Add models") {
+                    Button("Show Models Folder in Finder") {
+                        NSWorkspace.shared.activateFileViewerSelecting([models.userRoot])
+                    }
+                }
+                Text("Drop a model folder (with its manifest.json) into "
+                     + "Models/asr or Models/cleanup — it appears here "
+                     + "immediately. Models load from disk only; nothing is "
+                     + "ever downloaded.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+        .onAppear { models.rescan() }
+    }
+
+    @ViewBuilder
+    private func modelList(
+        kind: ModelKind, selection: WritableKeyPath<VizprSettings, String?> & Sendable
+    ) -> some View {
+        let entries = models.entries(kind: kind)
+        if entries.isEmpty {
+            Text("No models found.").foregroundStyle(.secondary)
+        }
+        ForEach(Array(entries.enumerated()), id: \.offset) { _, entry in
+            modelRow(entry, kind: kind, selection: selection)
+        }
+    }
+
+    @ViewBuilder
+    private func modelRow(
+        _ entry: ModelEntry, kind: ModelKind,
+        selection: WritableKeyPath<VizprSettings, String?> & Sendable
+    ) -> some View {
+        let selectedID = store.settings[keyPath: selection]
+        // nil selection = the bundled model of this kind.
+        let isSelected = entry.manifest?.id == selectedID
+            || (selectedID == nil && entry.origin == .bundled)
+        HStack(alignment: .firstTextBaseline) {
+            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entry.manifest?.displayName ?? entry.directory.lastPathComponent)
+                Text(detailLine(entry))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if let reason = entry.disabledReason {
+                    Text(reason)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+            }
+            Spacer()
+        }
+        .opacity(entry.isUsable ? 1 : 0.55)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard entry.isUsable else { return }
+            // Selecting the bundled model stores nil (the default), so a
+            // fresh settings file and "picked bundled" mean the same thing.
+            let newID = entry.origin == .bundled ? nil : entry.manifest?.id
+            MainActor.assumeIsolated {
+                store.update { $0[keyPath: selection] = newID }
+            }
+        }
+    }
+
+    private func detailLine(_ entry: ModelEntry) -> String {
+        var parts: [String] = []
+        if let manifest = entry.manifest {
+            parts.append(manifest.runtime)
+            parts.append(manifest.language)
+        }
+        if let size = entry.sizeBytes {
+            parts.append(ByteCountFormatter.string(fromByteCount: size, countStyle: .file))
+        }
+        parts.append(entry.origin == .bundled ? "bundled" : "user")
+        return parts.joined(separator: " · ")
     }
 }

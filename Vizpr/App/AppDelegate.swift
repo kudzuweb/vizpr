@@ -30,6 +30,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Hierarchical vocabulary (PR 11): global + named buckets + app
     /// assignments; resolved per session against the focused bundle id.
     private let vocabularyModel = VocabularyModel()
+    /// Model discovery for the Models pane; also resolves the selected model
+    /// ids into directories at pipeline build (PR 11).
+    private let modelsModel = ModelsModel()
+    /// The model ids the running pipeline was built with — a settings change
+    /// away from these triggers a live pipeline rebuild (engine swap).
+    private var appliedASRModelID: String?
+    private var appliedCleanupModelID: String?
     private let settingsWindow = SettingsWindowController()
     /// The focused field's context, captured at session start (PR 10).
     private var currentField: FieldContext = .empty
@@ -70,6 +77,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // is unambiguous regardless of how the process was launched.
         NSApp.setActivationPolicy(.accessory)
         setUpStatusItem()
+        modelsModel.startWatching()
         setUpAudioPipeline()
         applySettings(settingsStore.settings)
         settingsStore.onChange { [weak self] settings in
@@ -96,11 +104,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotkeyMonitor.stop()
     }
 
-    /// Build the capture→VAD→ASR→auto-stop pipeline against the bundled models.
-    /// Load failures mean a broken bundle: fail loudly (invariant — never limp
-    /// along without a model).
+    /// Build the capture→VAD→ASR→auto-stop pipeline against the selected
+    /// models (bundled by default). Bundled load failures mean a broken
+    /// bundle: fail loudly (invariant — never limp along without a model).
+    /// A failed USER model instead reverts the selection to bundled.
     private func setUpAudioPipeline() {
-        let engine = FluidAudioASR()
+        let settings = settingsStore.settings
+        appliedASRModelID = settings.asrModelID
+        appliedCleanupModelID = settings.cleanupModelID
+        let asrDirectory = modelsModel.directory(forID: settings.asrModelID, kind: .asr)
+        let cleanupDirectory = modelsModel.directory(
+            forID: settings.cleanupModelID, kind: .cleanup
+        )
+
+        let engine = FluidAudioASR(modelsDirectory: asrDirectory)
         asrEngine = engine
 
         // The cleanup leg (PR 6): events flow ASR -> SmartCleanup (vocab
@@ -124,7 +141,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let cleanup = SmartCleanup(
             tokenStream: tokenStream,
-            engine: MLXCleanup(),
+            engine: MLXCleanup(modelDirectory: cleanupDirectory),
             vocabulary: vocabulary,
             onOutcome: onOutcome
         )
@@ -172,11 +189,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Missing models = broken build. (Two plain Tasks, not a task group —
         // the Swift 6 region-isolation checker rejects @MainActor addTask
         // closures here as an unanalyzable pattern.)
-        warmEngine(devLogLabel: "asr engine prepared") { try await engine.prepare() }
-        warmEngine(devLogLabel: "cleanup engine prepared") { try await cleanup.prepareEngine() }
+        // A user-selected model that fails to load reverts its selection to
+        // bundled (which rebuilds the pipeline) instead of terminating; only
+        // a bundled failure is a broken build.
+        var revertASR: (@MainActor @Sendable () -> Void)?
+        if asrDirectory != nil {
+            revertASR = { [weak self] in self?.settingsStore.update { $0.asrModelID = nil } }
+        }
+        var revertCleanup: (@MainActor @Sendable () -> Void)?
+        if cleanupDirectory != nil {
+            revertCleanup = { [weak self] in self?.settingsStore.update { $0.cleanupModelID = nil } }
+        }
+        warmEngine(devLogLabel: "asr engine prepared", revertOnFailure: revertASR) {
+            try await engine.prepare()
+        }
+        warmEngine(devLogLabel: "cleanup engine prepared", revertOnFailure: revertCleanup) {
+            try await cleanup.prepareEngine()
+        }
 
         // The display path: every snapshot renders on the overlay (§13); the
-        // dev logger observes the same stream.
+        // dev logger observes the same stream. On a rebuild the previous
+        // loop is cancelled first — exactly one renderer at a time.
+        snapshotTask?.cancel()
         snapshotTask = Task { @MainActor [tokenStream, overlay] in
             for await snapshot in await tokenStream.makeSnapshotStream() {
                 overlay.apply(snapshot)
@@ -192,6 +226,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Push settings into every live consumer (PR 11: everything applies
     /// without relaunch; timing values take effect at the next session).
     private func applySettings(_ settings: VizprSettings) {
+        // Model selection changed → live engine swap (PR 11 Models pane).
+        // Rebuild FIRST so the rest of this method configures the new
+        // pipeline, not the one being torn down.
+        if settings.asrModelID != appliedASRModelID
+            || settings.cleanupModelID != appliedCleanupModelID {
+            rebuildPipeline()
+        }
         hotkeyMonitor.setHoldThreshold(.milliseconds(settings.holdThresholdMs))
         hotkeyMonitor.setSecondaryMask(Self.modifierMask(settings.secondaryModifiers))
         if settings.hotkeyEnabled {
@@ -212,6 +253,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
             await asrEngine?.setDraftMinTail(milliseconds: settings.draftMinTailMs)
         }
+    }
+
+    /// Live engine swap: tear the pipeline down and rebuild it against the
+    /// newly selected models. Any in-flight session is cancelled (nothing is
+    /// injected — same contract as Escape); selection normally happens from
+    /// the Settings window, not mid-dictation.
+    private func rebuildPipeline() {
+        audioPipeline?.stop()
+        settleGate.releaseAll()
+        overlay.dismiss()
+        Task { [tokenStream] in await tokenStream.cancelSession() }
+        setUpAudioPipeline()
+        #if DICT_DEV_LOG
+        VizprTranscriptLogger.note(
+            "pipeline rebuilt: asr=\(settingsStore.settings.asrModelID ?? "bundled") "
+                + "cleanup=\(settingsStore.settings.cleanupModelID ?? "bundled")")
+        #endif
     }
 
     static func modifierMask(_ names: [String]) -> CGEventFlags {
@@ -283,9 +341,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// One warm leg: run the prepare, dev-log readiness, fail loudly on error.
     /// If both legs fail, the first alert's termination wins; the second modal
-    /// never shows.
+    /// never shows. With `revertOnFailure` set (the engine was built from a
+    /// USER model folder), a load failure alerts and reverts the selection to
+    /// bundled instead of terminating — a bad drop-in must never brick the app.
     private func warmEngine(
-        devLogLabel: String, _ prepare: @escaping @Sendable () async throws -> Void
+        devLogLabel: String,
+        revertOnFailure: (@MainActor @Sendable () -> Void)? = nil,
+        _ prepare: @escaping @Sendable () async throws -> Void
     ) {
         Task { @MainActor in
             do {
@@ -294,10 +356,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 VizprTranscriptLogger.note(devLogLabel)
                 #endif
             } catch {
-                self.failLoudly(
-                    "Vizpr's speech models failed to load.",
-                    detail: "Run scripts/fetch-models.sh and rebuild, or reinstall. (\(error))"
-                )
+                if let revertOnFailure {
+                    let alert = NSAlert()
+                    alert.messageText = "The selected model failed to load."
+                    alert.informativeText = "Reverting to the bundled model. (\(error))"
+                    alert.runModal()
+                    revertOnFailure()
+                } else {
+                    self.failLoudly(
+                        "Vizpr's speech models failed to load.",
+                        detail: "Run scripts/fetch-models.sh and rebuild, or reinstall. (\(error))"
+                    )
+                }
             }
         }
     }
@@ -410,7 +480,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func openSettings() {
-        settingsWindow.show(settings: settingsStore, vocabulary: vocabularyModel)
+        settingsWindow.show(
+            settings: settingsStore, vocabulary: vocabularyModel, models: modelsModel
+        )
     }
 
     @objc private func cycleVocabulary() {
