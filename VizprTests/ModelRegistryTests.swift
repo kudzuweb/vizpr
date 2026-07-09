@@ -256,6 +256,37 @@ struct ModelsModelTests {
         #expect(model.entries(kind: .cleanup).isEmpty)
     }
 
+    @Test("Active badge: a manifest-less entry is never active (nil id != bundled default)")
+    func activeBadgeNilCollision() throws {
+        let root = try makeRoot()
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent("asr/test"), withIntermediateDirectories: true
+        )
+        try writeModel(
+            root, kindDir: "asr", folder: "good",
+            manifest: """
+            {"id": "good-asr", "displayName": "Good", "kind": "asr",
+             "runtime": "fluidaudio-coreml", "language": "en", "files": []}
+            """
+        )
+        let model = ModelsModel(userRoot: root, bundled: ModelRegistry.bundledEntries())
+        let entries = model.entries(kind: .asr)
+        let bundled = try #require(entries.first { $0.origin == .bundled })
+        let broken = try #require(entries.first { $0.manifest == nil })
+        let good = try #require(entries.first { $0.manifest?.id == "good-asr" })
+
+        // Default selection (nil): ONLY the bundled model is active.
+        #expect(ModelsModel.isActive(bundled, selectedID: nil))
+        #expect(!ModelsModel.isActive(broken, selectedID: nil),
+                "field catch 2026-07-09: nil==nil badged a broken drop-in as Active")
+        #expect(!ModelsModel.isActive(good, selectedID: nil))
+
+        // Explicit selection: only the matching usable entry is active.
+        #expect(ModelsModel.isActive(good, selectedID: "good-asr"))
+        #expect(!ModelsModel.isActive(bundled, selectedID: "good-asr"))
+        #expect(!ModelsModel.isActive(broken, selectedID: "good-asr"))
+    }
+
     @Test("Model-id settings clamp: empty string becomes nil (bundled)")
     func modelIDClamp() {
         var s = VizprSettings.default

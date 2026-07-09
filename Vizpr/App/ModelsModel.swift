@@ -38,6 +38,17 @@ final class ModelsModel: ObservableObject {
         entries.filter { $0.kind == kind }
     }
 
+    /// Whether an entry is the active model for its list, given the selected
+    /// id (nil = bundled). The nil branch is explicit — a manifest-less
+    /// (disabled) entry also has a nil manifest id, and comparing nil == nil
+    /// once badged a broken drop-in as Active alongside the bundled model
+    /// (field catch, 2026-07-09). Only a usable entry can be active.
+    nonisolated static func isActive(_ entry: ModelEntry, selectedID: String?) -> Bool {
+        guard entry.isUsable else { return false }
+        guard let selectedID else { return entry.origin == .bundled }
+        return entry.manifest?.id == selectedID
+    }
+
     /// Resolve a selected model id to its directory — usable entries only.
     /// nil id (bundled default) and any unresolvable id return nil, and the
     /// engine falls back to its bundled model: selection fails soft, never

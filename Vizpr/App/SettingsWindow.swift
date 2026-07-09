@@ -685,9 +685,7 @@ struct ModelsPane: View {
         selection: WritableKeyPath<VizprSettings, String?> & Sendable
     ) -> some View {
         let selectedID = store.settings[keyPath: selection]
-        // nil selection = the bundled model of this kind.
-        let isActive = entry.manifest?.id == selectedID
-            || (selectedID == nil && entry.origin == .bundled)
+        let isActive = ModelsModel.isActive(entry, selectedID: selectedID)
         HStack(alignment: .firstTextBaseline) {
             Image(systemName: isActive ? "checkmark.circle.fill" : "circle")
                 .foregroundStyle(isActive ? Color.accentColor : .secondary)
