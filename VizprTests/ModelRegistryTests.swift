@@ -72,6 +72,31 @@ struct ModelRegistryTests {
 
         #expect(entries.count == 1)
         #expect(entries[0].disabledReason == "no manifest.json")
+        // Field catch (Mauria, 2026-07-09): a manifest-less folder has no
+        // manifest kind, so the pane's per-kind lists dropped it entirely —
+        // "i put a test folder in asr and don't see anything". The kind must
+        // come from the FOLDER so the row appears where it was dropped.
+        #expect(entries[0].kind == .cleanup)
+    }
+
+    @Test("Manifest kind contradicting its folder is disabled with both named")
+    func manifestFolderKindMismatch() async throws {
+        let root = try makeRoot { root in
+            try write(
+                """
+                {"id": "misfiled", "displayName": "Misfiled", "kind": "cleanup",
+                 "runtime": "mlx", "language": "en", "files": []}
+                """,
+                to: root.appendingPathComponent("asr/misfiled/manifest.json")
+            )
+        }
+        let registry = ModelRegistry(userModelsRoot: root, bundled: [])
+        let entries = await registry.scan()
+
+        #expect(entries.count == 1)
+        #expect(entries[0].kind == .asr, "shown in the list it was dropped into")
+        #expect(entries[0].disabledReason
+            == "manifest says kind 'cleanup' but the folder is under asr/")
     }
 
     @Test("Declared file missing on disk disables with the file named")
@@ -213,6 +238,22 @@ struct ModelsModelTests {
         #expect(asrIDs == [ModelRegistry.bundledASRID])
         #expect(cleanupIDs == [ModelRegistry.bundledCleanupID])
         #expect(!asrIDs.contains("silero-vad") && !cleanupIDs.contains("silero-vad"))
+    }
+
+    @Test("A manifest-less folder still appears in the list it was dropped into")
+    func manifestlessFolderListed() throws {
+        let root = try makeRoot()
+        let dir = root.appendingPathComponent("asr/mystery")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try "not a model".write(
+            to: dir.appendingPathComponent("stuff.txt"), atomically: true, encoding: .utf8
+        )
+        let model = ModelsModel(userRoot: root, bundled: [])
+
+        let asrEntries = model.entries(kind: .asr)
+        #expect(asrEntries.count == 1)
+        #expect(asrEntries[0].disabledReason == "no manifest.json")
+        #expect(model.entries(kind: .cleanup).isEmpty)
     }
 
     @Test("Model-id settings clamp: empty string becomes nil (bundled)")

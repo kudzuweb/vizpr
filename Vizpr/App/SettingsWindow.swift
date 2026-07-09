@@ -650,7 +650,7 @@ struct ModelsPane: View {
             }
             Section {
                 LabeledContent("Add models") {
-                    Button("Show Models Folder in Finder") {
+                    Button("Show in Finder") {
                         NSWorkspace.shared.activateFileViewerSelecting([models.userRoot])
                     }
                 }
@@ -686,11 +686,11 @@ struct ModelsPane: View {
     ) -> some View {
         let selectedID = store.settings[keyPath: selection]
         // nil selection = the bundled model of this kind.
-        let isSelected = entry.manifest?.id == selectedID
+        let isActive = entry.manifest?.id == selectedID
             || (selectedID == nil && entry.origin == .bundled)
         HStack(alignment: .firstTextBaseline) {
-            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+            Image(systemName: isActive ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(isActive ? Color.accentColor : .secondary)
             VStack(alignment: .leading, spacing: 2) {
                 Text(entry.manifest?.displayName ?? entry.directory.lastPathComponent)
                 Text(detailLine(entry))
@@ -702,17 +702,25 @@ struct ModelsPane: View {
                         .foregroundStyle(.red)
                 }
             }
+            .opacity(entry.isUsable ? 1 : 0.55)
             Spacer()
-        }
-        .opacity(entry.isUsable ? 1 : 0.55)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            guard entry.isUsable else { return }
-            // Selecting the bundled model stores nil (the default), so a
-            // fresh settings file and "picked bundled" mean the same thing.
-            let newID = entry.origin == .bundled ? nil : entry.manifest?.id
-            MainActor.assumeIsolated {
-                store.update { $0[keyPath: selection] = newID }
+            // Explicit activation (Mauria): adding a model never activates
+            // it — the user sets the active one per list, and it applies
+            // live (the engine swaps on the spot).
+            if isActive {
+                Text("Active")
+                    .font(.caption.bold())
+                    .foregroundStyle(Color.accentColor)
+            } else if entry.isUsable {
+                Button("Set Active") {
+                    // Activating the bundled model stores nil (the default),
+                    // so a fresh settings file and "picked bundled" mean the
+                    // same thing.
+                    let newID = entry.origin == .bundled ? nil : entry.manifest?.id
+                    MainActor.assumeIsolated {
+                        store.update { $0[keyPath: selection] = newID }
+                    }
+                }
             }
         }
     }

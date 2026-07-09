@@ -44,6 +44,11 @@ struct ModelEntry: Sendable, Equatable {
     let manifest: ModelManifest?
     let directory: URL
     let origin: Origin
+    /// Which Settings list this entry belongs in. Derived from the FOLDER the
+    /// model sits in (asr/ or cleanup/), never the manifest — a folder with a
+    /// missing or broken manifest still has a folder, so it still shows up
+    /// (disabled, with the reason) instead of vanishing from both lists.
+    let kind: ModelKind
     /// nil when the entry is usable; otherwise why it is disabled.
     let disabledReason: String?
     /// On-disk footprint, filled in by scan (nil when the folder is absent).
@@ -103,6 +108,7 @@ actor ModelRegistry {
                 ),
                 directory: dir,
                 origin: .bundled,
+                kind: kind,
                 disabledReason: present ? nil : "bundled model missing from app bundle"
             )
         }
@@ -139,14 +145,14 @@ actor ModelRegistry {
         var found = bundled
 
         let fm = FileManager.default
-        for kindDir in ["asr", "cleanup"] {
-            let root = userModelsRoot.appendingPathComponent(kindDir, isDirectory: true)
+        for folderKind in [ModelKind.asr, .cleanup] {
+            let root = userModelsRoot.appendingPathComponent(folderKind.rawValue, isDirectory: true)
             guard let children = try? fm.contentsOfDirectory(
                 at: root, includingPropertiesForKeys: [.isDirectoryKey]
             ) else { continue }
 
             for dir in children where (try? dir.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
-                found.append(entry(for: dir))
+                found.append(entry(for: dir, folderKind: folderKind))
             }
         }
 
@@ -157,23 +163,37 @@ actor ModelRegistry {
         }
     }
 
-    /// Validate one user model folder into an entry.
-    private nonisolated static func entry(for directory: URL) -> ModelEntry {
+    /// Validate one user model folder into an entry. `folderKind` (which list
+    /// the folder sits under) is the entry's kind no matter what the manifest
+    /// says — every problem is shown IN the list the user dropped into.
+    private nonisolated static func entry(
+        for directory: URL, folderKind: ModelKind
+    ) -> ModelEntry {
+        func disabled(_ manifest: ModelManifest?, _ reason: String) -> ModelEntry {
+            ModelEntry(
+                manifest: manifest, directory: directory, origin: .user,
+                kind: folderKind, disabledReason: reason
+            )
+        }
         let manifestURL = directory.appendingPathComponent("manifest.json")
 
         guard let data = try? Data(contentsOf: manifestURL) else {
-            return ModelEntry(
-                manifest: nil, directory: directory, origin: .user,
-                disabledReason: "no manifest.json"
-            )
+            return disabled(nil, "no manifest.json")
         }
         let manifest: ModelManifest
         do {
             manifest = try JSONDecoder().decode(ModelManifest.self, from: data)
         } catch {
-            return ModelEntry(
-                manifest: nil, directory: directory, origin: .user,
-                disabledReason: "malformed manifest.json: \(error.localizedDescription)"
+            return disabled(nil, "malformed manifest.json: \(error.localizedDescription)")
+        }
+
+        // The manifest must agree with the folder it was dropped into — a
+        // cleanup model under asr/ would be listed as ASR but resolve wrong.
+        if manifest.kind != folderKind {
+            return disabled(
+                manifest,
+                "manifest says kind '\(manifest.kind.rawValue)' but the folder "
+                    + "is under \(folderKind.rawValue)/"
             )
         }
 
@@ -181,22 +201,16 @@ actor ModelRegistry {
         // match the model's kind — an MLX "asr" model would be selectable but
         // unloadable, so it is disabled here with the mismatch named.
         guard let runtime = ModelRuntime(rawValue: manifest.runtime) else {
-            return ModelEntry(
-                manifest: manifest, directory: directory, origin: .user,
-                disabledReason: "unsupported runtime: \(manifest.runtime)"
-            )
+            return disabled(manifest, "unsupported runtime: \(manifest.runtime)")
         }
-        guard let required = ModelRuntime.required(for: manifest.kind) else {
-            return ModelEntry(
-                manifest: manifest, directory: directory, origin: .user,
-                disabledReason: "\(manifest.kind.rawValue) models are not user-swappable"
-            )
+        guard let required = ModelRuntime.required(for: folderKind) else {
+            return disabled(manifest, "\(folderKind.rawValue) models are not user-swappable")
         }
         if runtime != required {
-            return ModelEntry(
-                manifest: manifest, directory: directory, origin: .user,
-                disabledReason: "runtime '\(runtime.rawValue)' can't drive an "
-                    + "\(manifest.kind.rawValue) model — needs '\(required.rawValue)'"
+            return disabled(
+                manifest,
+                "runtime '\(runtime.rawValue)' can't drive an "
+                    + "\(folderKind.rawValue) model — needs '\(required.rawValue)'"
             )
         }
 
@@ -205,14 +219,14 @@ actor ModelRegistry {
         for file in manifest.files {
             let path = directory.appendingPathComponent(file).path
             if !FileManager.default.fileExists(atPath: path) {
-                return ModelEntry(
-                    manifest: manifest, directory: directory, origin: .user,
-                    disabledReason: "missing declared file: \(file)"
-                )
+                return disabled(manifest, "missing declared file: \(file)")
             }
         }
 
-        return ModelEntry(manifest: manifest, directory: directory, origin: .user, disabledReason: nil)
+        return ModelEntry(
+            manifest: manifest, directory: directory, origin: .user,
+            kind: folderKind, disabledReason: nil
+        )
     }
 
     /// Total allocated bytes under a folder; nil when it doesn't exist.

@@ -31,8 +31,11 @@ final class ModelsModel: ObservableObject {
     }
 
     /// Entries the pane lists for one selectable kind (vad is infrastructure).
+    /// Keyed on the entry's folder-derived kind, NOT the manifest — folders
+    /// with a missing or broken manifest still appear (disabled) in the list
+    /// they were dropped into.
     func entries(kind: ModelKind) -> [ModelEntry] {
-        entries.filter { $0.manifest?.kind == kind }
+        entries.filter { $0.kind == kind }
     }
 
     /// Resolve a selected model id to its directory — usable entries only.
@@ -42,7 +45,7 @@ final class ModelsModel: ObservableObject {
     func directory(forID id: String?, kind: ModelKind) -> URL? {
         guard let id else { return nil }
         return entries.first {
-            $0.isUsable && $0.manifest?.id == id && $0.manifest?.kind == kind
+            $0.isUsable && $0.manifest?.id == id && $0.kind == kind
         }?.directory
     }
 }
