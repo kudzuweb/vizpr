@@ -36,3 +36,14 @@ to allow it once under **System Settings → Privacy & Security → Open Anyway*
 Because the app requests microphone and Accessibility access (system-wide text
 injection), the most trustworthy path is to **build it yourself** from source as
 above — Xcode signs it with your own local identity and Gatekeeper stays quiet.
+
+## License
+
+vizpr is source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE.md):
+**free for personal and noncommercial use** (hobby, study, personal
+productivity, charitable/educational/government organizations), and free to
+modify and share on the same terms. **Any commercial use requires a paid
+commercial license** — contact mauria.d.parker@gmail.com.
+
+Bundled third-party components keep their own licenses; see
+[THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md).
