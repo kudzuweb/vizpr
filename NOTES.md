@@ -357,6 +357,13 @@ Events no-op ONCE at hotkey readiness (the moment the user just finished
 granting), so the prompt lands at a consent moment, not under dictated text.
 UserDefaults-flagged; TCC remembers a decline, we never re-ask.
 
+**Dvorak: CLOSED as accepted-untested (Mauria, 2026-07-09):** "I'm never
+testing the Dvorak keyboard. That's just not gonna happen." The PR 8 matrix
+cell is closed, not deferred. Confidence rests on the code path, not field
+proof: keyCodeForV scans the ASCII-capable layout's translation table (unit-
+tested), and the AppleScript fallback types layout-independently. If a Dvorak
+user ever reports a mis-paste, that report is the field test.
+
 **Egress scan interpretation:** "target zero findings" cannot be literal for
 the linked binary — FluidAudio links statically and its never-invoked
 download code imports URLSession and carries endpoint URLs. The scan is
