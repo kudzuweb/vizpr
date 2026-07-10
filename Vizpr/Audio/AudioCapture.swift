@@ -1,6 +1,7 @@
 // @preconcurrency: AVFAudio's tap/converter block types predate Sendable
 // annotations; the audio objects they pass are used only within the callback.
 @preconcurrency import AVFoundation
+import CoreAudio
 import Synchronization
 
 /// Sendable wrapper around a move-only `Atomic` counter so the tap callback
@@ -8,6 +9,7 @@ import Synchronization
 final class AtomicCounter: Sendable {
     private let storage = Atomic<Int>(0)
     func increment() { storage.add(1, ordering: .relaxed) }
+    func reset() { storage.store(0, ordering: .relaxed) }
     func storeMax(_ candidate: Int) {
         var current = storage.load(ordering: .relaxed)
         while candidate > current {
@@ -79,6 +81,15 @@ final class MicrophoneCapture: CaptureSource, @unchecked Sendable {
             throw AudioCaptureError.microphonePermissionDenied
         }
 
+        // Per-session diagnostics (field bug: cumulative counters carried
+        // session 1's real audio peak into session 2, masking its silence —
+        // the fallback trigger and the stop() log both need per-session
+        // values).
+        tapInvocations.reset()
+        convertedBatches.reset()
+        droppedBatches.reset()
+        rawPeakLevel.reset()
+
         let engine = AVAudioEngine()
         let input = engine.inputNode
         let hardwareFormat = input.outputFormat(forBus: 0)
@@ -131,6 +142,105 @@ final class MicrophoneCapture: CaptureSource, @unchecked Sendable {
         VizprTranscriptLogger.note("capture: engine started, isRunning=\(engine.isRunning)")
         #endif
         return stream
+    }
+
+    /// Mid-session failover to the built-in microphone (field case,
+    /// 2026-07-06: a phone call owned the AirPods; macOS kept handing us the
+    /// AirPods input route, which delivered pure zeros). Tears the engine
+    /// down and rebuilds it pinned to the built-in device, feeding the SAME
+    /// stream continuation — the consumer never notices. Only the dead air
+    /// is lost, and it was dead.
+    @MainActor
+    func fallBackToBuiltInMic() -> Bool {
+        guard let oldEngine = engine, let continuation else { return false }
+        guard let builtIn = Self.builtInInputDeviceID() else { return false }
+
+        oldEngine.inputNode.removeTap(onBus: 0)
+        oldEngine.stop()
+
+        let newEngine = AVAudioEngine()
+        let input = newEngine.inputNode
+        // Pin the input node's underlying audio unit to the built-in device
+        // BEFORE reading formats or installing the tap.
+        var deviceID = builtIn
+        guard let unit = input.audioUnit,
+              AudioUnitSetProperty(
+                  unit, kAudioOutputUnitProperty_CurrentDevice,
+                  kAudioUnitScope_Global, 0,
+                  &deviceID, UInt32(MemoryLayout<AudioDeviceID>.size)
+              ) == noErr else { return false }
+
+        let hardwareFormat = input.outputFormat(forBus: 0)
+        guard let targetFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32, sampleRate: Self.sampleRate,
+            channels: 1, interleaved: false
+        ), let converter = AVAudioConverter(from: hardwareFormat, to: targetFormat)
+        else { return false }
+
+        let tapBlock = Self.makeTapBlock(context: TapContext(
+            converter: converter,
+            targetFormat: targetFormat,
+            hardwareSampleRate: hardwareFormat.sampleRate,
+            continuation: continuation,
+            taps: tapInvocations,
+            converts: convertedBatches,
+            dropped: droppedBatches,
+            rawPeak: rawPeakLevel
+        ))
+        input.installTap(onBus: 0, bufferSize: 4096, format: hardwareFormat, block: tapBlock)
+        newEngine.prepare()
+        guard (try? newEngine.start()) != nil else { return false }
+        engine = newEngine
+        #if DICT_DEV_LOG
+        VizprTranscriptLogger.note(
+            "capture: FELL BACK to built-in mic (previous route was silent)")
+        #endif
+        return true
+    }
+
+    /// CoreAudio lookup: the first input-capable device with built-in
+    /// transport.
+    private static func builtInInputDeviceID() -> AudioDeviceID? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(
+            AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size
+        ) == noErr else { return nil }
+        var devices = [AudioDeviceID](
+            repeating: 0, count: Int(size) / MemoryLayout<AudioDeviceID>.size
+        )
+        guard AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &devices
+        ) == noErr else { return nil }
+
+        for device in devices {
+            var transport: UInt32 = 0
+            var transportSize = UInt32(MemoryLayout<UInt32>.size)
+            var transportAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyTransportType,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            guard AudioObjectGetPropertyData(
+                device, &transportAddress, 0, nil, &transportSize, &transport
+            ) == noErr, transport == kAudioDeviceTransportTypeBuiltIn else { continue }
+
+            var streamsAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyStreams,
+                mScope: kAudioObjectPropertyScopeInput,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            var streamsSize: UInt32 = 0
+            guard AudioObjectGetPropertyDataSize(
+                device, &streamsAddress, 0, nil, &streamsSize
+            ) == noErr, streamsSize > 0 else { continue }
+            return device
+        }
+        return nil
     }
 
     @MainActor

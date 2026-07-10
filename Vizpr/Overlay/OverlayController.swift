@@ -14,6 +14,23 @@ final class OverlayController {
     /// Once the capsule caps, stop measuring: the O(session-length)
     /// boundingRect result is clamped anyway (review finding).
     private var hitCap = false
+    private var theme = OverlayTheme.standard
+    private var lastSnapshot = DisplaySnapshot.empty
+
+    private var inviz = false
+
+    /// Live setting (PR 11): inviz mode swaps the transcript for the
+    /// indicator; applies to the next render.
+    func setInviz(_ enabled: Bool) {
+        inviz = enabled
+        if panel.isVisible { render(lastSnapshot) }
+    }
+
+    /// Live setting (PR 11): re-renders immediately so the picker previews.
+    func setTheme(_ newTheme: OverlayTheme) {
+        theme = newTheme
+        if panel.isVisible { render(lastSnapshot) }
+    }
 
     private var reduceMotion: Bool {
         NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
@@ -77,11 +94,14 @@ final class OverlayController {
     }
 
     private func render(_ snapshot: DisplaySnapshot) {
+        lastSnapshot = snapshot
         let view = OverlayView(
             snapshot: snapshot,
             recording: recording,
             capsuleHeight: capsuleHeight(for: snapshot),
-            animated: !reduceMotion
+            animated: !reduceMotion,
+            theme: theme,
+            inviz: inviz
         )
         if let hosting {
             hosting.rootView = view

@@ -19,16 +19,70 @@ struct OverlayView: View {
     let capsuleHeight: CGFloat
     /// False under Reduce Motion — the capsule snaps instead of animating.
     let animated: Bool
+    var theme: OverlayTheme = .standard
+    /// Inviz mode: render the minimal indicator instead of the transcript.
+    var inviz: Bool = false
+
+    /// Trust-contract styles: system labels by default; a custom base keeps
+    /// the LOCKED settled:mutable opacity ratio (only the hue is the user's).
+    private var settledStyle: AnyShapeStyle {
+        theme.textBase.map { AnyShapeStyle($0) } ?? AnyShapeStyle(.primary)
+    }
+    private var mutableStyle: AnyShapeStyle {
+        theme.textBase.map {
+            AnyShapeStyle($0.opacity(VizprSettings.mutableOpacityRatio))
+        } ?? AnyShapeStyle(.secondary)
+    }
 
     private static let capsuleShape = RoundedRectangle(cornerRadius: 22, style: .continuous)
 
     var body: some View {
+        if inviz {
+            indicator
+        } else {
+            transcript
+        }
+    }
+
+    /// The inviz-mode "talking is happening" pill: mid-stage, theme-tinted,
+    /// pulsing while recording. No text — that's the point.
+    private var indicator: some View {
+        VStack {
+            Spacer(minLength: 0)
+            ZStack {
+                GlassBackground(theme: theme)
+                HStack(spacing: 6) {
+                    ForEach(0..<3, id: \.self) { index in
+                        Circle()
+                            .fill(theme.tint)
+                            .frame(width: 8, height: 8)
+                            .opacity(recording ? 1 : 0.3)
+                            .scaleEffect(recording ? 1 : 0.7)
+                            .animation(
+                                animated && recording
+                                    ? .easeInOut(duration: 0.6)
+                                        .repeatForever(autoreverses: true)
+                                        .delay(Double(index) * 0.2)
+                                    : .default,
+                                value: recording
+                            )
+                    }
+                }
+                .accessibilityLabel(recording ? "Dictating" : "Idle")
+            }
+            .frame(width: 84, height: 36)
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    @ViewBuilder private var transcript: some View {
         let resting = snapshot == .empty
         // Bottom-aligned within the fixed panel: the capsule's TOP edge rises.
         VStack {
             Spacer(minLength: 0)
             ZStack(alignment: .bottomLeading) {
-                GlassBackground()
+                GlassBackground(theme: theme)
                 ScrollView(.vertical) {
                     // WYSIWYG: render EXACTLY the decomposition of
                     // snapshot.displayed — the bytes commit injects. Never a
@@ -36,8 +90,8 @@ struct OverlayView: View {
                     // the user proofread a string with one more space than
                     // the injection).
                     (
-                        Text(snapshot.settled).foregroundStyle(.primary)
-                        + Text(snapshot.mutableSuffix).foregroundStyle(.secondary)
+                        Text(snapshot.settled).foregroundStyle(settledStyle)
+                        + Text(snapshot.mutableSuffix).foregroundStyle(mutableStyle)
                     )
                     .font(.system(size: 16, weight: .regular, design: .rounded))
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -56,7 +110,7 @@ struct OverlayView: View {
 
                 if recording {
                     Circle()
-                        .fill(GlassBackground.tint)
+                        .fill(theme.tint)
                         .frame(width: 7, height: 7)
                         .padding(10)
                         .accessibilityLabel("Recording")

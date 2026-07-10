@@ -121,3 +121,150 @@ struct VocabularyStoreTests {
         #expect(throws: (any Error).self) { try VocabularyStore(url: url).load() }
     }
 }
+
+import Foundation
+
+@Suite("VocabularyLibrary")
+struct VocabularyLibraryTests {
+    private func entry(_ p: String, _ r: String) -> VocabularyEntry {
+        VocabularyEntry(pattern: p, replacement: r, kind: .canonical)
+    }
+
+    private var library: VocabularyLibrary {
+        VocabularyLibrary(
+            global: [entry("api", "API"), entry("github", "GitHub")],
+            buckets: [
+                VocabularyBucket(name: "coding", entries: [entry("api", "Api"), entry("repo", "repository")]),
+                VocabularyBucket(name: "casual", entries: [entry("lol", "lol")]),
+            ],
+            appAssignments: ["com.microsoft.VSCode": "coding"],
+            manualBucket: nil   // tests exercise Automatic unless stated
+        )
+    }
+
+    @Test("Resolution: app assignment picks the bucket; bucket wins conflicts")
+    func appAssignment() {
+        let v = library.resolved(bundleID: "com.microsoft.VSCode")
+        #expect(v.apply(to: "the api") == "the Api", "bucket must override global")
+        #expect(v.apply(to: "on github") == "on GitHub", "global must fill through")
+        #expect(v.apply(to: "the repo") == "the repository")
+    }
+
+    @Test("Resolution: unassigned app gets global only")
+    func globalOnly() {
+        let v = library.resolved(bundleID: "com.apple.TextEdit")
+        #expect(v.apply(to: "the api") == "the API")
+        #expect(v.apply(to: "the repo") == "the repo", "bucket entries must not leak")
+    }
+
+    @Test("Manual override outranks the app assignment")
+    func manualWins() {
+        var lib = library
+        lib.manualBucket = "casual"
+        let v = lib.resolved(bundleID: "com.microsoft.VSCode")
+        #expect(v.apply(to: "the api") == "the API", "manual bucket replaced the assigned one")
+    }
+
+    @Test("Hotkey cycle: global only -> automatic -> each bucket -> global only")
+    func cycle() {
+        var lib = library
+        lib.manualBucket = VocabularyLibrary.globalOnly   // the default state
+        #expect(lib.cycleManualBucket() == "Automatic")
+        #expect(lib.cycleManualBucket() == "coding")
+        #expect(lib.cycleManualBucket() == "casual")
+        #expect(lib.cycleManualBucket() == "Global only")
+        #expect(lib.isGlobalOnly)
+    }
+
+    @Test("A fresh library defaults to global-only")
+    func freshDefault() {
+        #expect(VocabularyLibrary().isGlobalOnly)
+        #expect(VocabularyLibrary(global: []).isGlobalOnly)
+    }
+
+    @Test("Global-only ignores app assignments entirely")
+    func globalOnlyMode() {
+        var lib = library
+        lib.manualBucket = VocabularyLibrary.globalOnly
+        let v = lib.resolved(bundleID: "com.microsoft.VSCode")
+        #expect(v.apply(to: "the api") == "the API", "bucket leaked through global-only")
+        #expect(v.apply(to: "the repo") == "the repo")
+        #expect(lib.resolvedStyleRules(bundleID: "com.microsoft.VSCode") == nil
+                || lib.resolvedStyleRules(bundleID: "com.microsoft.VSCode")?.contains("coding") == false)
+    }
+
+    @Test("Promote/demote move entries between levels without duplicates")
+    func propagation() {
+        var lib = library
+        lib.promoteToGlobal(pattern: "repo", fromBucket: "coding")
+        #expect(lib.global.contains { $0.pattern == "repo" })
+        #expect(!lib.buckets[0].entries.contains { $0.pattern == "repo" })
+        lib.demoteFromGlobal(pattern: "github", toBucket: "casual")
+        #expect(!lib.global.contains { $0.pattern == "github" })
+        #expect(lib.buckets[1].entries.contains { $0.pattern == "github" })
+    }
+
+    @Test("Migration: a pre-PR-11 flat file loads as the global level")
+    func migration() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vocab-migrate-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let flat = [entry("api", "API")]
+        try JSONEncoder().encode(flat).write(to: url)
+        let store = VocabularyStore(url: url)
+        let lib = try store.loadLibrary()
+        #expect(lib.global == flat)
+        #expect(lib.buckets.isEmpty)
+
+        // Round-trip the library format (single instance: bucket ids are
+        // minted at init, so equality needs the SAME value both sides).
+        let full = VocabularyLibrary(
+            global: [entry("x", "X")],
+            buckets: [VocabularyBucket(name: "b", entries: [])],
+            appAssignments: ["a": "b"]
+        )
+        try store.saveLibrary(full)
+        #expect(try store.loadLibrary() == full)
+    }
+}
+
+@Suite("VocabularyBucket style rules")
+struct StyleRulesTests {
+    private var library: VocabularyLibrary {
+        var lib = VocabularyLibrary(
+            buckets: [
+                VocabularyBucket(name: "casual", styleRules: "no capitalization"),
+                VocabularyBucket(name: "email", styleRules: "formal punctuation; expand contractions"),
+            ],
+            appAssignments: ["com.apple.mail": "email"],
+            manualBucket: nil
+        )
+        lib.globalStyleRules = "never censor profanity"
+        return lib
+    }
+
+    @Test("Global + bucket rules combine, bucket last")
+    func combined() {
+        let rules = library.resolvedStyleRules(bundleID: "com.apple.mail")
+        #expect(rules == "never censor profanity\nformal punctuation; expand contractions")
+    }
+
+    @Test("Unassigned app gets global rules only; manual override wins")
+    func fallbackAndOverride() {
+        #expect(library.resolvedStyleRules(bundleID: "com.apple.TextEdit")
+                == "never censor profanity")
+        var lib = library
+        lib.manualBucket = "casual"
+        #expect(lib.resolvedStyleRules(bundleID: "com.apple.mail")?
+            .contains("no capitalization") == true)
+    }
+
+    @Test("No rules anywhere resolves to nil, and the prompt omits the section")
+    func nilAndPrompt() {
+        #expect(VocabularyLibrary.empty.resolvedStyleRules(bundleID: nil) == nil)
+        var context = CleanupContext.empty
+        #expect(!CleanupPrompt.system(for: context).contains("STYLE RULES"))
+        context.styleRules = "no capitalization"
+        #expect(CleanupPrompt.system(for: context).contains("no capitalization"))
+    }
+}

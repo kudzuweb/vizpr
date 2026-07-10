@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let permissionProbe = PermissionProbe()
     private var actionsTask: Task<Void, Never>?
     private var audioPipeline: AudioPipeline?
+    private var asrEngine: FluidAudioASR?
     private let tokenStream = TokenStream()
     private let textInjector = TextInjector(
         pasteboard: SystemPasteboard(),
@@ -25,8 +26,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let overlay = OverlayController()
     private let settleGate = SettleGate()
     private let fieldReader = FieldContextReader()
+    private let settingsStore = SettingsStore()
+    /// Hierarchical vocabulary (PR 11): global + named buckets + app
+    /// assignments; resolved per session against the focused bundle id.
+    private let vocabularyModel = VocabularyModel()
+    /// Model discovery for the Models pane; also resolves the selected model
+    /// ids into directories at pipeline build (PR 11).
+    private let modelsModel = ModelsModel()
+    /// The model ids the running pipeline was built with — a settings change
+    /// away from these triggers a live pipeline rebuild (engine swap).
+    private var appliedASRModelID: String?
+    private var appliedCleanupModelID: String?
+    private let settingsWindow = SettingsWindowController()
     /// The focused field's context, captured at session start (PR 10).
     private var currentField: FieldContext = .empty
+    /// Set when the last session's mic delivered pure silence (AirPods
+    /// held-route trap); shown in the menu until a session gets real audio.
+    private var lastSessionWasSilent = false
     #if DICT_DEV_LOG
     private let dictationTracker = DevDictationTracker()
     /// Dictation-record handshake: the record needs the committed text (known
@@ -61,7 +77,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // is unambiguous regardless of how the process was launched.
         NSApp.setActivationPolicy(.accessory)
         setUpStatusItem()
+        modelsModel.startWatching()
         setUpAudioPipeline()
+        applySettings(settingsStore.settings)
+        settingsStore.onChange { [weak self] settings in
+            self?.applySettings(settings)
+        }
         consumeHotkeyActions()
         startHotkeyIfPermitted()
 
@@ -83,18 +104,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotkeyMonitor.stop()
     }
 
-    /// Build the capture→VAD→ASR→auto-stop pipeline against the bundled models.
-    /// Load failures mean a broken bundle: fail loudly (invariant — never limp
-    /// along without a model).
+    /// Build the capture→VAD→ASR→auto-stop pipeline against the selected
+    /// models (bundled by default). Bundled load failures mean a broken
+    /// bundle: fail loudly (invariant — never limp along without a model).
+    /// A failed USER model instead reverts the selection to bundled.
     private func setUpAudioPipeline() {
-        let engine = FluidAudioASR()
+        let settings = settingsStore.settings
+        appliedASRModelID = settings.asrModelID
+        appliedCleanupModelID = settings.cleanupModelID
+        let asrDirectory = modelsModel.directory(forID: settings.asrModelID, kind: .asr)
+        let cleanupDirectory = modelsModel.directory(
+            forID: settings.cleanupModelID, kind: .cleanup
+        )
+
+        let engine = FluidAudioASR(modelsDirectory: asrDirectory)
+        asrEngine = engine
 
         // The cleanup leg (PR 6): events flow ASR -> SmartCleanup (vocab
         // pre-pass + confidence gate) -> TokenStream (regions + generation
         // gate); commit/cancel drive the stream's atomic gate below. In dev
         // builds the same event stream and outcome seam feed the §14 JSONL
         // records; Release leaves both hooks unset.
-        let vocabulary = (try? VocabularyStore().load()) ?? .empty
+        let vocabulary = vocabularyModel.library.resolved(bundleID: nil)
         #if DICT_DEV_LOG
         let tracker = dictationTracker
         let onOutcome: (@Sendable (CleanupOutcome) async -> Void)? = { outcome in
@@ -110,7 +141,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let cleanup = SmartCleanup(
             tokenStream: tokenStream,
-            engine: MLXCleanup(),
+            engine: MLXCleanup(modelDirectory: cleanupDirectory),
             vocabulary: vocabulary,
             onOutcome: onOutcome
         )
@@ -127,6 +158,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         #endif
 
+        defer {
+            audioPipeline?.onSilentSession = { [weak self] in
+                self?.lastSessionWasSilent = true
+                NSSound.beep()
+                #if DICT_DEV_LOG
+                VizprTranscriptLogger.note(
+                    "SILENT SESSION: mic delivered zero audio — check input device")
+                #endif
+            }
+        }
         audioPipeline = AudioPipeline.makeDefault(
             engine: engine,
             onTokenEvent: onTokenEvent,
@@ -148,11 +189,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Missing models = broken build. (Two plain Tasks, not a task group —
         // the Swift 6 region-isolation checker rejects @MainActor addTask
         // closures here as an unanalyzable pattern.)
-        warmEngine(devLogLabel: "asr engine prepared") { try await engine.prepare() }
-        warmEngine(devLogLabel: "cleanup engine prepared") { try await cleanup.prepareEngine() }
+        // A user-selected model that fails to load reverts its selection to
+        // bundled (which rebuilds the pipeline) instead of terminating; only
+        // a bundled failure is a broken build.
+        var revertASR: (@MainActor @Sendable () -> Void)?
+        if asrDirectory != nil {
+            revertASR = { [weak self] in self?.settingsStore.update { $0.asrModelID = nil } }
+        }
+        var revertCleanup: (@MainActor @Sendable () -> Void)?
+        if cleanupDirectory != nil {
+            revertCleanup = { [weak self] in self?.settingsStore.update { $0.cleanupModelID = nil } }
+        }
+        warmEngine(devLogLabel: "asr engine prepared", revertOnFailure: revertASR) {
+            try await engine.prepare()
+        }
+        warmEngine(devLogLabel: "cleanup engine prepared", revertOnFailure: revertCleanup) {
+            try await cleanup.prepareEngine()
+        }
 
         // The display path: every snapshot renders on the overlay (§13); the
-        // dev logger observes the same stream.
+        // dev logger observes the same stream. On a rebuild the previous
+        // loop is cancelled first — exactly one renderer at a time.
+        snapshotTask?.cancel()
         snapshotTask = Task { @MainActor [tokenStream, overlay] in
             for await snapshot in await tokenStream.makeSnapshotStream() {
                 overlay.apply(snapshot)
@@ -163,6 +221,69 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 #endif
             }
         }
+    }
+
+    /// Push settings into every live consumer (PR 11: everything applies
+    /// without relaunch; timing values take effect at the next session).
+    private func applySettings(_ settings: VizprSettings) {
+        // Model selection changed → live engine swap (PR 11 Models pane).
+        // Rebuild FIRST so the rest of this method configures the new
+        // pipeline, not the one being torn down.
+        if settings.asrModelID != appliedASRModelID
+            || settings.cleanupModelID != appliedCleanupModelID {
+            rebuildPipeline()
+        }
+        hotkeyMonitor.setHoldThreshold(.milliseconds(settings.holdThresholdMs))
+        hotkeyMonitor.setSecondaryMask(Self.modifierMask(settings.secondaryModifiers))
+        if settings.hotkeyEnabled {
+            if permissionProbe.evaluate() == .ready { _ = hotkeyMonitor.start() }
+        } else {
+            hotkeyMonitor.stop()
+        }
+        audioPipeline?.setAutoStopTimeout(.seconds(settings.autoStopSeconds))
+        audioPipeline?.silentInputFallback = settings.silentInputFallback
+        textInjector.setRestoreEnabled(settings.restoreClipboard)
+        overlay.setTheme(OverlayTheme.from(settings))
+        overlay.setInviz(settings.invizMode)
+        Task { [tokenStream, smartCleanup, asrEngine] in
+            await tokenStream.setSettleSentences(settings.settleSentences)
+            await smartCleanup?.setRuntime(
+                enabled: settings.cleanupEnabled,
+                codeModeOverride: settings.codeModeOverride
+            )
+            await asrEngine?.setDraftMinTail(milliseconds: settings.draftMinTailMs)
+        }
+    }
+
+    /// Live engine swap: tear the pipeline down and rebuild it against the
+    /// newly selected models. Any in-flight session is cancelled (nothing is
+    /// injected — same contract as Escape); selection normally happens from
+    /// the Settings window, not mid-dictation.
+    private func rebuildPipeline() {
+        audioPipeline?.stop()
+        settleGate.releaseAll()
+        overlay.dismiss()
+        Task { [tokenStream] in await tokenStream.cancelSession() }
+        setUpAudioPipeline()
+        #if DICT_DEV_LOG
+        VizprTranscriptLogger.note(
+            "pipeline rebuilt: asr=\(settingsStore.settings.asrModelID ?? "bundled") "
+                + "cleanup=\(settingsStore.settings.cleanupModelID ?? "bundled")")
+        #endif
+    }
+
+    static func modifierMask(_ names: [String]) -> CGEventFlags {
+        var mask: CGEventFlags = []
+        for name in names {
+            switch name {
+            case "control": mask.insert(.maskControl)
+            case "option": mask.insert(.maskAlternate)
+            case "shift": mask.insert(.maskShift)
+            case "command": mask.insert(.maskCommand)
+            default: break
+            }
+        }
+        return mask
     }
 
     /// Session drain (AudioPipeline hook): releases the settle window, then
@@ -220,9 +341,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// One warm leg: run the prepare, dev-log readiness, fail loudly on error.
     /// If both legs fail, the first alert's termination wins; the second modal
-    /// never shows.
+    /// never shows. With `revertOnFailure` set (the engine was built from a
+    /// USER model folder), a load failure alerts and reverts the selection to
+    /// bundled instead of terminating — a bad drop-in must never brick the app.
     private func warmEngine(
-        devLogLabel: String, _ prepare: @escaping @Sendable () async throws -> Void
+        devLogLabel: String,
+        revertOnFailure: (@MainActor @Sendable () -> Void)? = nil,
+        _ prepare: @escaping @Sendable () async throws -> Void
     ) {
         Task { @MainActor in
             do {
@@ -231,10 +356,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 VizprTranscriptLogger.note(devLogLabel)
                 #endif
             } catch {
-                self.failLoudly(
-                    "Vizpr's speech models failed to load.",
-                    detail: "Run scripts/fetch-models.sh and rebuild, or reinstall. (\(error))"
-                )
+                if let revertOnFailure {
+                    let alert = NSAlert()
+                    alert.messageText = "The selected model failed to load."
+                    alert.informativeText = "Reverting to the bundled model. (\(error))"
+                    alert.runModal()
+                    revertOnFailure()
+                } else {
+                    self.failLoudly(
+                        "Vizpr's speech models failed to load.",
+                        detail: "Run scripts/fetch-models.sh and rebuild, or reinstall. (\(error))"
+                    )
+                }
             }
         }
     }
@@ -272,13 +405,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 #endif
                 switch action {
                 case .startDictation:
+                    self?.lastSessionWasSilent = false
                     await self?.tokenStream.beginSession()
                     let sessionEpoch = self?.settleGate.beginSession() ?? 0
                     // Read the focused field BEFORE the overlay appears —
                     // read-only AX, one shot per session (PR 10).
                     let field = self?.fieldReader.read() ?? .empty
                     self?.currentField = field
-                    await self?.smartCleanup?.beginSession(field: field)
+                    let vocab = self?.vocabularyModel.library.resolved(bundleID: field.bundleID)
+                    let style = self?.vocabularyModel.library.resolvedStyleRules(bundleID: field.bundleID)
+                    await self?.smartCleanup?.beginSession(
+                        field: field, vocabulary: vocab, styleRules: style
+                    )
                     self?.overlay.show(targetWindowFrame: field.focusedWindowFrame)
                     #if DICT_DEV_LOG
                     await self?.beginDictationRecord()
@@ -291,7 +429,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     // snapshotting, bounded so a hung engine can't hold the
                     // commit hostage. WYSIWYG holds: displayed==injected,
                     // "at stop" is now "at stop + settle".
-                    await self?.settleGate.awaitDrain(cap: .milliseconds(350))
+                    let cap = self?.settingsStore.settings.settleCapMs ?? 350
+                    await self?.settleGate.awaitDrain(cap: .milliseconds(cap))
                     // Atomic WYSIWYG gate: snapshot displayed text, cancel
                     // in-flight cleanup. The injector receives exactly this
                     // string and transforms nothing (§12).
@@ -338,6 +477,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
+    }
+
+    @objc private func openSettings() {
+        settingsWindow.show(
+            settings: settingsStore, vocabulary: vocabularyModel, models: modelsModel
+        )
+    }
+
+    @objc private func cycleVocabulary() {
+        let name = vocabularyModel.cycle()
+        #if DICT_DEV_LOG
+        VizprTranscriptLogger.note("vocabulary cycled to: \(name)")
+        #endif
+        refreshMenu()
     }
 
     @objc private func grantAccessibility() {
@@ -392,6 +545,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             menu.addItem(.separator())
         }
 
+        if lastSessionWasSilent {
+            let warning = NSMenuItem(
+                title: "⚠ Mic delivered silence — check Sound input",
+                action: nil, keyEquivalent: ""
+            )
+            warning.isEnabled = false
+            menu.addItem(warning)
+            menu.addItem(.separator())
+        }
+
+        let dictionary = NSMenuItem(
+            title: "Dictionary: \(vocabularyModel.library.activeDisplayName)",
+            action: #selector(cycleVocabulary), keyEquivalent: ""
+        )
+        dictionary.target = self
+        menu.addItem(dictionary)
+
+        let settings = NSMenuItem(
+            title: "Settings…", action: #selector(openSettings), keyEquivalent: ","
+        )
+        settings.target = self
+        menu.addItem(settings)
+        menu.addItem(.separator())
+
         menu.addItem(
             NSMenuItem(
                 title: "Quit Vizpr",
@@ -399,6 +576,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 keyEquivalent: "q"
             )
         )
+        // PR 2 review carry: re-evaluate capability every time the menu
+        // opens, so an external grant in System Settings reflects without
+        // clicking anything.
+        menu.delegate = self
         statusItem?.menu = menu
+    }
+}
+
+
+extension AppDelegate: NSMenuDelegate {
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        refreshMenu()
     }
 }

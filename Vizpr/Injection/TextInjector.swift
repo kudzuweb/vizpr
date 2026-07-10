@@ -33,7 +33,13 @@ final class TextInjector {
     /// Time to let the target app service the paste before the ownership-
     /// guarded restore (§12.5). Zero in tests.
     private let restoreDelay: Duration
-    private let restoreEnabled: Bool
+    private var restoreEnabled: Bool
+
+    /// Live setting (PR 11): ON restores the prior clipboard after paste;
+    /// OFF leaves the transcript on it (Mauria's clipboard-keep request).
+    func setRestoreEnabled(_ enabled: Bool) {
+        restoreEnabled = enabled
+    }
     private let now: @Sendable () -> Date
 
     /// Tail of the last successfully pasted string, for inter-segment spacing.

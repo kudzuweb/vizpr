@@ -64,8 +64,16 @@ actor FluidAudioASR: TranscriptionEngine {
     /// drafts no longer matter.
     private static let samplesPerConfirmedWindow = Int(lockedConfig.chunkSeconds * 16_000)
 
+    /// Live setting (PR 11): min audio before the first draft decode —
+    /// Mauria's "first draft faster?" lever. Applies from the next session.
+    private var draftMinTailSamples = 24_000
+
+    func setDraftMinTail(milliseconds: Int) {
+        draftMinTailSamples = max(1, milliseconds) * 16   // 16 kHz
+    }
+
     private func beginSession() {
-        tailTracker = DraftTailTracker()
+        tailTracker = DraftTailTracker(minTailSamples: draftMinTailSamples)
         sessionBuffer.removeAll(keepingCapacity: true)
         bufferStartSample = 0
         confirmedWindows = 0

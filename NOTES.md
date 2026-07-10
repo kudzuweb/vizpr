@@ -248,6 +248,26 @@ TextEdit -> default. Fail-soft acceptance held: context-less sessions fully
 functional. Multi-display placement untested (single display); pure geometry
 is table-tested.
 
+## PR 11 design decisions (Mauria, 2026-07-05)
+
+- **Tint:** keep #A16FDF @13% as the DEFAULT, expose a tint picker in
+  Settings. This deliberately amends the §15 lock: the decision becomes
+  "lavender default, user-tunable" rather than a fixed constant.
+- **Text colors:** the settled/mutable pair is changeable — even derivable
+  from the background tint like a theme — but their RATIO is locked: the
+  contrast relationship between final and provisional text is the trust
+  contract and no theme may collapse it. v1 shape: "System" theme (primary/
+  secondary label colors, adaptive) or "Custom" (one base color; settled =
+  base, mutable = base at a fixed opacity ratio).
+
+## Inviz mode (Mauria, 2026-07-05 — implemented in PR 11)
+
+No live transcript preview: a small theme-tinted "talking is happening"
+pill mid-screen; text appears finalized in place at commit. An EXPLICIT
+opt-out of proofread-as-you-speak (§ WYSIWYG's premise) — the pipeline
+(settle window, commit snapshot, seams, cleanup) is unchanged; only the
+rendering differs. Shares the overlay color theme.
+
 ## Future directions (Mauria, 2026-07-05 — recorded, not scheduled)
 
 1. **Verbatim mode:** "I should be able to talk casually and have it show up
@@ -257,13 +277,82 @@ is table-tested.
    further — verbatim fidelity is partly model behavior, so it needs its own
    design pass. The seam matcher's contraction expansion is ALIGNMENT-only
    (never rewrites surface forms) and stays regardless.
-2. **Preflight-edit toggle:** optionally edit the transcript before injection
+2. **PR 13 — optimization pass (post-PR-12):** bird's-eye latency audit of
+   the whole harness once feature-complete. Constraints: MODEL-AGNOSTIC and
+   ACCURACY-PRESERVING — "the fastest VTT harness for whatever model gets
+   dropped in," fastest WITHOUT losing accuracy (speed gains that cost
+   transcription quality are rejected): pipeline overhead,
+   decode scheduling, draft cadence, settle timing, engine-swap cost — never
+   model-specific tricks. Feedstock already exists: the dev JSONL timings and
+   the PR 0 spike harness.
+3. **Context-dependent vocabularies / "code switching" (Mauria,
+   2026-07-05):** different dictionaries may work better in different
+   contexts; switching between named vocabulary sets — eventually
+   automatically (per-app, per-mode) — could be a signature dictation
+   feature. **Hierarchical, not flat (Mauria's refinement): a GLOBAL
+   dictionary plus context-specific ones, with definitions movable/
+   propagatable between levels — "like a global claude.md and
+   project-level, but for how to interpret speech in context."**
+   **Refined design (Mauria): three layers with an indirection —
+   (1) global, (2) named generic buckets the user creates ("coding",
+   "casual", "professional email"), (3) app -> bucket assignments.**
+   Dictionaries belong to CONTEXTS, not apps; apps are assigned to a
+   context to inherit its dictionary. Resolution: global + assigned
+   bucket, bucket wins conflicts. PR 11 ships the storage + per-session
+   resolution (bundle id from FieldContextReader picks the bucket);
+   bucket-management/propagation UI grows over time. **Plus manual
+   override: hotkey CYCLING between dictionaries (Mauria) — resolution
+   order is manual override > app assignment > global-only; a cycle
+   chord rotates buckets (incl. back to automatic). Plus STYLE RULES per
+   bucket (Mauria): buckets are full context profiles — casual = no
+   caps, professional email = proper punctuation + expanded contractions
+   — injected into the cleanup prompt when active (global rules +
+   bucket rules, bucket last). Caveat recorded: prompt-enforced
+   (best-effort on a 4B) and only where cleanup runs; a per-bucket
+   "always clean" flag is the future lever for aggressive restyling.**
+4. **Mistake-driven vocabulary capture (Mauria, 2026-07-07):** an easier
+   way to add vocab from mistakes actually experienced, rather than typing
+   entries cold. Shape TBD (she explicitly deferred designing it until the
+   app is finished) — the dev JSONL's raw-vs-injected pairs are the obvious
+   feedstock, and the injector's post-injection edit capture idea (parked
+   in the plan) is adjacent.
+5. **Preflight-edit toggle:** optionally edit the transcript before injection
    (hold at the overlay, edit, then commit). Motivating case: TUIs — can't
    select-and-delete in a terminal input line, only backspace. Interacts
    carefully with WYSIWYG (an edited preview is still displayed==injected)
    and with the overlay's non-activating panel (an editable field needs key
    focus — likely a separate activating edit window summoned on demand).
    Adjacent to the plan's parked "post-injection edit capture" idea.
+
+## Trigger reassignment (Mauria, 2026-07-07 — designed-in, deliberate follow-up)
+
+"I guess you should be able to reassign the trigger too. I like Fn but maybe
+other people want other button. especially vim guys."
+
+Deliberately NOT shipped in the PR 11 hotkey slice. The fail-open invariant
+("consume a keystroke ONLY if it's our trigger") is written specifically
+around Fn's flagsChanged behavior — Fn arrives as a modifier-flag transition,
+not a keyDown, so the current HotkeyStateMachine never has to decide whether
+to swallow a character-producing key. Reassignment to an arbitrary key (or a
+modifier chord as primary) means parameterizing that state machine, and the
+property tests that pin fail-open (`HotkeyStateMachineTests`) must be
+regenerated around the parameterized trigger, not just extended. **Do NOT
+rush this one** — a wrong trigger match eats user keystrokes system-wide.
+
+Plan when it lands:
+1. Parameterize `HotkeyStateMachine` over a trigger descriptor (flag-based
+   like Fn, chord-based like the secondary, or plain-keycode).
+2. Modifier-mask triggers first (Right-Option, Right-Command, Globe) — same
+   flagsChanged shape as Fn, smallest step, covers most "other button" asks.
+3. Plain-keycode triggers (the vim ask) last: these require keyDown
+   consumption and a new class of fail-open property tests (never swallow a
+   key that ISN'T the trigger; always swallow one that IS; secure-input and
+   tap-timeout behavior re-proven).
+
+Already provisioned NOW so the settings format is stable:
+`VizprSettings.primaryTrigger: String = "fn"` — reserved field, decode-clamps
+to "fn" until the machine is parameterized. The Behavior pane displays the
+binding read-only with a "Trigger reassignment is coming." caption.
 
 ## Carried forward to PR 11 (Settings)
 

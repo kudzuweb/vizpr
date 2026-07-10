@@ -4,6 +4,9 @@ import Foundation
 enum ModelKind: String, Codable, Sendable {
     case asr
     case cleanup
+    /// Voice-activity detection. Infrastructure, not user-swappable: it ships
+    /// bundled and never appears in a Settings selection list.
+    case vad
 }
 
 /// The inference runtime a model requires. A model of a supported runtime is
@@ -11,14 +14,26 @@ enum ModelKind: String, Codable, Sendable {
 enum ModelRuntime: String, Codable, Sendable {
     case fluidAudioCoreML = "fluidaudio-coreml"
     case mlx
+
+    /// Which runtime each swappable kind's engine can drive today.
+    static func required(for kind: ModelKind) -> ModelRuntime? {
+        switch kind {
+        case .asr: return .fluidAudioCoreML
+        case .cleanup: return .mlx
+        case .vad: return nil
+        }
+    }
 }
 
 /// Per-folder manifest, `manifest.json` in each user model directory.
+/// `runtime` stays a raw string so a manifest declaring a runtime this build
+/// can't drive is shown disabled WITH the runtime named, instead of decoding
+/// as "malformed manifest.json".
 struct ModelManifest: Codable, Sendable, Equatable {
     let id: String
     let displayName: String
     let kind: ModelKind
-    let runtime: ModelRuntime
+    let runtime: String
     let language: String
     let files: [String]
 }
@@ -29,8 +44,15 @@ struct ModelEntry: Sendable, Equatable {
     let manifest: ModelManifest?
     let directory: URL
     let origin: Origin
+    /// Which Settings list this entry belongs in. Derived from the FOLDER the
+    /// model sits in (asr/ or cleanup/), never the manifest — a folder with a
+    /// missing or broken manifest still has a folder, so it still shows up
+    /// (disabled, with the reason) instead of vanishing from both lists.
+    let kind: ModelKind
     /// nil when the entry is usable; otherwise why it is disabled.
     let disabledReason: String?
+    /// On-disk footprint, filled in by scan (nil when the folder is absent).
+    var sizeBytes: Int64?
 
     enum Origin: Sendable, Equatable {
         case bundled
@@ -40,17 +62,22 @@ struct ModelEntry: Sendable, Equatable {
     var isUsable: Bool { disabledReason == nil }
 }
 
-/// Scans model directories and publishes what is available (PLAN.md §11, PR 4
-/// skeleton). Bundled models are registered programmatically (they ship in the
-/// read-only app bundle, pinned by the build — no manifest needed); user models
-/// live under Application Support and each needs a `manifest.json`. Filesystem
-/// watching for live updates is stubbed until PR 11 (Settings).
+/// Scans model directories and publishes what is available (PLAN.md §11).
+/// Bundled models are registered programmatically (they ship in the read-only
+/// app bundle, pinned by the build — no manifest needed); user models live
+/// under Application Support and each needs a `manifest.json`. The scan core
+/// is a nonisolated static so the Settings UI (MainActor) can rescan
+/// synchronously on filesystem events; the actor wrapper remains for
+/// pipeline-side callers.
 /// The registry never downloads anything: it only reads local folders.
 actor ModelRegistry {
     private(set) var entries: [ModelEntry] = []
 
     private let userModelsRoot: URL
     private let bundledModels: [ModelEntry]
+
+    static let bundledASRID = "parakeet-tdt-0.6b-v2"
+    static let bundledCleanupID = "qwen3-4b-instruct-2507-4bit"
 
     /// Default user models root: ~/Library/Application Support/Vizpr/Models/.
     static var defaultUserRoot: URL {
@@ -60,35 +87,43 @@ actor ModelRegistry {
 
     init(userModelsRoot: URL = ModelRegistry.defaultUserRoot, bundled: [ModelEntry]? = nil) {
         self.userModelsRoot = userModelsRoot
-        self.bundledModels = bundled ?? Self.defaultBundledEntries()
+        self.bundledModels = bundled ?? Self.bundledEntries()
     }
 
-    /// The two models this build ships with. Registered without manifests: the
+    /// The models this build ships with. Registered without manifests: the
     /// build itself is their provenance, and their disabled state is derived
     /// from actual on-disk presence (a missing ASR bundle is visible in the
     /// registry rather than only exploding at engine load).
-    private static func defaultBundledEntries() -> [ModelEntry] {
-        func bundledEntry(id: String, name: String, kind: ModelKind, subdirectory: String) -> ModelEntry {
+    static func bundledEntries() -> [ModelEntry] {
+        func bundledEntry(
+            id: String, name: String, kind: ModelKind, runtime: ModelRuntime,
+            subdirectory: String
+        ) -> ModelEntry {
             let dir = Bundle.main.resourceURL!.appendingPathComponent("Models/\(subdirectory)")
             let present = FileManager.default.fileExists(atPath: dir.path)
             return ModelEntry(
                 manifest: ModelManifest(
                     id: id, displayName: name, kind: kind,
-                    runtime: .fluidAudioCoreML, language: "en", files: []
+                    runtime: runtime.rawValue, language: "en", files: []
                 ),
                 directory: dir,
                 origin: .bundled,
+                kind: kind,
                 disabledReason: present ? nil : "bundled model missing from app bundle"
             )
         }
         return [
             bundledEntry(
-                id: "parakeet-tdt-0.6b-v2", name: "Parakeet TDT v2 (bundled)",
-                kind: .asr, subdirectory: "parakeet-tdt-0.6b-v2"
+                id: bundledASRID, name: "Parakeet TDT v2 (bundled)",
+                kind: .asr, runtime: .fluidAudioCoreML, subdirectory: "parakeet-tdt-0.6b-v2"
+            ),
+            bundledEntry(
+                id: bundledCleanupID, name: "Qwen3 4B Instruct (bundled)",
+                kind: .cleanup, runtime: .mlx, subdirectory: "cleanup-llm"
             ),
             bundledEntry(
                 id: "silero-vad", name: "Silero VAD (bundled)",
-                kind: .asr, subdirectory: "silero-vad"
+                kind: .vad, runtime: .fluidAudioCoreML, subdirectory: "silero-vad"
             )
         ]
     }
@@ -98,41 +133,84 @@ actor ModelRegistry {
     /// simply yields the bundled list.
     @discardableResult
     func scan() -> [ModelEntry] {
-        var found = bundledModels
+        entries = Self.performScan(userModelsRoot: userModelsRoot, bundled: bundledModels)
+        return entries
+    }
+
+    /// The synchronous scan core (also called directly by ModelsModel on the
+    /// main actor — a scan is a directory listing plus a few manifest decodes).
+    nonisolated static func performScan(
+        userModelsRoot: URL, bundled: [ModelEntry]
+    ) -> [ModelEntry] {
+        var found = bundled
 
         let fm = FileManager.default
-        for kindDir in ["asr", "cleanup"] {
-            let root = userModelsRoot.appendingPathComponent(kindDir, isDirectory: true)
+        for folderKind in [ModelKind.asr, .cleanup] {
+            let root = userModelsRoot.appendingPathComponent(folderKind.rawValue, isDirectory: true)
             guard let children = try? fm.contentsOfDirectory(
                 at: root, includingPropertiesForKeys: [.isDirectoryKey]
             ) else { continue }
 
             for dir in children where (try? dir.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
-                found.append(entry(for: dir))
+                found.append(entry(for: dir, folderKind: folderKind))
             }
         }
 
-        entries = found
-        return found
+        return found.map { entry in
+            var sized = entry
+            sized.sizeBytes = folderSize(entry.directory)
+            return sized
+        }
     }
 
-    /// Validate one user model folder into an entry.
-    private func entry(for directory: URL) -> ModelEntry {
+    /// Validate one user model folder into an entry. `folderKind` (which list
+    /// the folder sits under) is the entry's kind no matter what the manifest
+    /// says — every problem is shown IN the list the user dropped into.
+    private nonisolated static func entry(
+        for directory: URL, folderKind: ModelKind
+    ) -> ModelEntry {
+        func disabled(_ manifest: ModelManifest?, _ reason: String) -> ModelEntry {
+            ModelEntry(
+                manifest: manifest, directory: directory, origin: .user,
+                kind: folderKind, disabledReason: reason
+            )
+        }
         let manifestURL = directory.appendingPathComponent("manifest.json")
 
         guard let data = try? Data(contentsOf: manifestURL) else {
-            return ModelEntry(
-                manifest: nil, directory: directory, origin: .user,
-                disabledReason: "no manifest.json"
-            )
+            return disabled(nil, "no manifest.json")
         }
         let manifest: ModelManifest
         do {
             manifest = try JSONDecoder().decode(ModelManifest.self, from: data)
         } catch {
-            return ModelEntry(
-                manifest: nil, directory: directory, origin: .user,
-                disabledReason: "malformed manifest.json: \(error.localizedDescription)"
+            return disabled(nil, "malformed manifest.json: \(error.localizedDescription)")
+        }
+
+        // The manifest must agree with the folder it was dropped into — a
+        // cleanup model under asr/ would be listed as ASR but resolve wrong.
+        if manifest.kind != folderKind {
+            return disabled(
+                manifest,
+                "manifest says kind '\(manifest.kind.rawValue)' but the folder "
+                    + "is under \(folderKind.rawValue)/"
+            )
+        }
+
+        // The runtime must be one this build's engines can drive, and it must
+        // match the model's kind — an MLX "asr" model would be selectable but
+        // unloadable, so it is disabled here with the mismatch named.
+        guard let runtime = ModelRuntime(rawValue: manifest.runtime) else {
+            return disabled(manifest, "unsupported runtime: \(manifest.runtime)")
+        }
+        guard let required = ModelRuntime.required(for: folderKind) else {
+            return disabled(manifest, "\(folderKind.rawValue) models are not user-swappable")
+        }
+        if runtime != required {
+            return disabled(
+                manifest,
+                "runtime '\(runtime.rawValue)' can't drive an "
+                    + "\(folderKind.rawValue) model — needs '\(required.rawValue)'"
             )
         }
 
@@ -141,13 +219,28 @@ actor ModelRegistry {
         for file in manifest.files {
             let path = directory.appendingPathComponent(file).path
             if !FileManager.default.fileExists(atPath: path) {
-                return ModelEntry(
-                    manifest: manifest, directory: directory, origin: .user,
-                    disabledReason: "missing declared file: \(file)"
-                )
+                return disabled(manifest, "missing declared file: \(file)")
             }
         }
 
-        return ModelEntry(manifest: manifest, directory: directory, origin: .user, disabledReason: nil)
+        return ModelEntry(
+            manifest: manifest, directory: directory, origin: .user,
+            kind: folderKind, disabledReason: nil
+        )
+    }
+
+    /// Total allocated bytes under a folder; nil when it doesn't exist.
+    nonisolated static func folderSize(_ url: URL) -> Int64? {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: url.path),
+              let enumerator = fm.enumerator(
+                  at: url, includingPropertiesForKeys: [.totalFileAllocatedSizeKey]
+              ) else { return nil }
+        var total: Int64 = 0
+        for case let file as URL in enumerator {
+            let values = try? file.resourceValues(forKeys: [.totalFileAllocatedSizeKey])
+            total += Int64(values?.totalFileAllocatedSize ?? 0)
+        }
+        return total
     }
 }
