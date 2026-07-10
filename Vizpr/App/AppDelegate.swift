@@ -450,9 +450,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     self?.lastSessionWasSilent = false
                     await self?.tokenStream.beginSession()
                     let sessionEpoch = self?.settleGate.beginSession() ?? 0
+                    #if DICT_DEV_LOG
+                    await self?.beginDictationRecord()
+                    #endif
+                    // Capture starts FIRST (PR 13): the AX field read is
+                    // blocking IPC into the target app, and serializing the
+                    // mic behind it cost ~250 ms of lost speech onset. The
+                    // pipeline needs nothing from the field context.
+                    self?.audioPipeline?.start(sessionEpoch: sessionEpoch)
                     // Read the focused field BEFORE the overlay appears —
-                    // read-only AX, one shot per session (PR 10).
-                    let field = self?.fieldReader.read() ?? .empty
+                    // read-only AX, one shot per session (PR 10), off-main so
+                    // the capture spin-up isn't queued behind the IPC. The
+                    // session's first token event is bounded below by the
+                    // draft floor (~1.5 s), so cleanup's session begin (which
+                    // needs the field) always wins this race by an order of
+                    // magnitude.
+                    let field = await self?.fieldReader.readOffMain() ?? .empty
                     self?.currentField = field
                     let vocab = self?.vocabularyModel.library.resolved(bundleID: field.bundleID)
                     let style = self?.vocabularyModel.library.resolvedStyleRules(bundleID: field.bundleID)
@@ -460,10 +473,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         field: field, vocabulary: vocab, styleRules: style
                     )
                     self?.overlay.show(targetWindowFrame: field.focusedWindowFrame)
-                    #if DICT_DEV_LOG
-                    await self?.beginDictationRecord()
-                    #endif
-                    self?.audioPipeline?.start(sessionEpoch: sessionEpoch)
                 case .commit:
                     self?.audioPipeline?.stop()
                     // Flush-settle window (§15 amendment): let the ASR flush

@@ -29,14 +29,32 @@ struct FieldContext: Sendable, Equatable {
 struct FieldContextReader {
     /// Bound on the surrounding-text read (§10's prompt slot doesn't want
     /// documents, it wants vicinity).
-    static let maxLength = 500
+    nonisolated static let maxLength = 500
 
     func read() -> FieldContext {
         guard let app = NSWorkspace.shared.frontmostApplication else { return .empty }
-        var context = FieldContext.empty
-        context.bundleID = app.bundleIdentifier
+        return Self.read(pid: app.processIdentifier, bundleID: app.bundleIdentifier)
+    }
 
-        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+    /// Off-main variant (PR 13): the AX walk is blocking IPC into the target
+    /// app (hundreds of ms against a busy target, measured on the session
+    /// hot path). The frontmost-app lookup stays on main (NSWorkspace);
+    /// the tree walk itself runs detached — AX one-shot reads are
+    /// thread-safe C calls (only observers need a run loop).
+    func readOffMain() async -> FieldContext {
+        guard let app = NSWorkspace.shared.frontmostApplication else { return .empty }
+        let pid = app.processIdentifier
+        let bundleID = app.bundleIdentifier
+        return await Task.detached(priority: .userInitiated) {
+            Self.read(pid: pid, bundleID: bundleID)
+        }.value
+    }
+
+    private nonisolated static func read(pid: pid_t, bundleID: String?) -> FieldContext {
+        var context = FieldContext.empty
+        context.bundleID = bundleID
+
+        let appElement = AXUIElementCreateApplication(pid)
 
         var focusedWindow: CFTypeRef?
         if AXUIElementCopyAttributeValue(
@@ -70,7 +88,7 @@ struct FieldContextReader {
         return String(text.suffix(limit))
     }
 
-    private static func frame(of window: AXUIElement) -> CGRect? {
+    private nonisolated static func frame(of window: AXUIElement) -> CGRect? {
         var positionRef: CFTypeRef?
         var sizeRef: CFTypeRef?
         guard AXUIElementCopyAttributeValue(
@@ -90,13 +108,13 @@ struct FieldContextReader {
 
     /// CF downcasts: type-checked before the cast (CF types have no
     /// conditional-cast support, so the force cast is gated on CFGetTypeID).
-    private static func axElement(_ ref: CFTypeRef) -> AXUIElement? {
+    private nonisolated static func axElement(_ ref: CFTypeRef) -> AXUIElement? {
         guard CFGetTypeID(ref) == AXUIElementGetTypeID() else { return nil }
         // swiftlint:disable:next force_cast
         return (ref as! AXUIElement)
     }
 
-    private static func axValue(_ ref: CFTypeRef) -> AXValue? {
+    private nonisolated static func axValue(_ ref: CFTypeRef) -> AXValue? {
         guard CFGetTypeID(ref) == AXValueGetTypeID() else { return nil }
         // swiftlint:disable:next force_cast
         return (ref as! AXValue)

@@ -94,10 +94,15 @@ final class MicrophoneCapture: CaptureSource, @unchecked Sendable {
         let input = engine.inputNode
         let hardwareFormat = input.outputFormat(forBus: 0)
         #if DICT_DEV_LOG
-        let device = AVCaptureDevice.default(for: .audio)?.localizedName ?? "unknown"
-        VizprTranscriptLogger.note(
-            "capture: hw format \(hardwareFormat.sampleRate)Hz x\(hardwareFormat.channelCount)ch device=\(device)"
-        )
+        // Device name resolves OFF the hot path (PR 13): AVCaptureDevice
+        // discovery cost real milliseconds per session start for a log
+        // decoration. Same line, logged a beat later.
+        Task.detached(priority: .utility) {
+            let device = AVCaptureDevice.default(for: .audio)?.localizedName ?? "unknown"
+            VizprTranscriptLogger.note(
+                "capture: hw format \(hardwareFormat.sampleRate)Hz x\(hardwareFormat.channelCount)ch device=\(device)"
+            )
+        }
         #endif
 
         guard let targetFormat = AVAudioFormat(
