@@ -388,8 +388,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func startHotkeyIfPermitted() {
         if permissionProbe.evaluate() == .ready {
             hotkeyMonitor.start()
+            preGrantAutomationIfNeeded()
         }
         refreshMenu()
+    }
+
+    /// One-time Automation (System Events) pre-grant (PR 12, NOTES "accepted
+    /// risks"): the injection fallback's first NSAppleScript use raises the
+    /// Automation TCC prompt SYNCHRONOUSLY mid-paste, freezing the run loop
+    /// under the user's dictated text. Trigger the same prompt once here — at
+    /// hotkey readiness, an explicit-consent moment the user just opted into —
+    /// with an innocuous no-op script, so the mid-injection path never blocks
+    /// on consent. Not a permission escalation: the exact same prompt, moved
+    /// to a controlled moment. Declined is remembered by TCC and never re-asked
+    /// by us (the fallback then fails soft, clipboard still holds the text).
+    private func preGrantAutomationIfNeeded() {
+        let key = "AutomationPreGrantAttempted"
+        guard !UserDefaults.standard.bool(forKey: key) else { return }
+        UserDefaults.standard.set(true, forKey: key)
+        Task { @MainActor in
+            let script = "tell application \"System Events\" to count processes"
+            var error: NSDictionary?
+            NSAppleScript(source: script)?.executeAndReturnError(&error)
+            #if DICT_DEV_LOG
+            VizprTranscriptLogger.note(
+                "automation pre-grant: \(error == nil ? "granted" : "declined or unavailable")")
+            #endif
+        }
     }
 
     /// Drain dictation actions. There is no pipeline yet (PRs 3–9); for now this
@@ -506,6 +531,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             permissionProbe.openSettings(for: capability)
         case .ready:
             hotkeyMonitor.start()
+            preGrantAutomationIfNeeded()
         }
         refreshMenu()
     }

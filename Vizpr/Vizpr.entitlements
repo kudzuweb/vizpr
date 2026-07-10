@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Entitlements written against actual API usage (PLAN.md PR 12).
+	     Line-by-line cross-check recorded in NOTES.md "PR 12 entitlement
+	     cross-check". Zero exception entitlements: no library-validation
+	     disable, no JIT, no unsigned executable memory, no app sandbox
+	     escape hatches (the app is not sandboxed - the CGEvent tap,
+	     synthetic paste chord, and read-only AX are incompatible with it;
+	     TCC prompts are the consent mechanism). -->
+
+	<!-- Microphone capture: AVAudioEngine input node (MicrophoneCapture).
+	     Required under Hardened Runtime for audio input. -->
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+
+	<!-- Apple Events: the injection fallback (SystemInjectionIO
+	     .fallbackPaste, PLAN.md 12.6) sends one keystroke via System
+	     Events when the synthesized CGEvent chord cannot be used. Hardened
+	     Runtime blocks Apple Events without this entitlement. Scoped by
+	     TCC: the user still grants Automation per target app. -->
+	<key>com.apple.security.automation.apple-events</key>
+	<true/>
+</dict>
+</plist>

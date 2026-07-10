@@ -324,6 +324,48 @@ rendering differs. Shares the overlay color theme.
    focus — likely a separate activating edit window summoned on demand).
    Adjacent to the plan's parked "post-injection edit capture" idea.
 
+## PR 12 — entitlement cross-check (recorded per acceptance)
+
+Every entitlement traced to the API that requires it; every capability the
+app uses traced to its consent mechanism. Checked 2026-07-09 against HEAD.
+
+| Key | Required by | Where in code |
+|---|---|---|
+| `com.apple.security.device.audio-input` | AVAudioEngine mic input under Hardened Runtime | `MicrophoneCapture` (AudioCapture.swift) |
+| `com.apple.security.automation.apple-events` | NSAppleScript → System Events under Hardened Runtime | `SystemInjectionIO.fallbackPaste` (§12.6) |
+
+NOT entitlements (TCC prompts, identity-bound): Accessibility (event tap +
+read-only AX), Input Monitoring (conditional, tap creation), Microphone
+(prompt on first capture), Automation (prompt per target app, pre-granted at
+hotkey readiness — see below). Zero exception entitlements: no
+library-validation disable, no JIT, no unsigned-memory, no sandbox (the tap,
+synthetic paste chord, and AX reads are incompatible with App Sandbox).
+
+**Spec deviation, recorded:** PLAN §PR-12 said "`audio-input` and nothing
+else", but it also ships §12.6's AppleScript fallback, which Hardened Runtime
+blocks without `automation.apple-events` — the entitlement list was
+incomplete, not the code wrong. "Written against actual API usage" is the
+governing clause. Also amended (agreed earlier): NO notarization / Developer
+ID — signed with the free Apple Development identity, distribution is
+build-it-yourself; the "Gatekeeper on a clean machine" acceptance is waived
+accordingly.
+
+**Automation pre-grant (PR 12, from PR 8 accepted-risks):** the fallback's
+first NSAppleScript use raised the Automation prompt synchronously
+mid-injection. `preGrantAutomationIfNeeded` now fires an innocuous System
+Events no-op ONCE at hotkey readiness (the moment the user just finished
+granting), so the prompt lands at a consent moment, not under dictated text.
+UserDefaults-flagged; TCC remembers a decline, we never re-ask.
+
+**Egress scan interpretation:** "target zero findings" cannot be literal for
+the linked binary — FluidAudio links statically and its never-invoked
+download code imports URLSession and carries endpoint URLs. The scan is
+therefore: stage 1 first-party source = literal zero; stage 2 binary =
+every network symbol/URL must match scripts/egress-allowlist.txt (each entry
+annotated with provenance), so anything NEW fails. The download paths are
+runtime-disarmed (`DownloadUtils.enforceOffline = true` at launch, checked as
+a precondition in `FluidAudioASR.prepare` before any model API).
+
 ## Trigger reassignment (Mauria, 2026-07-07 — designed-in, deliberate follow-up)
 
 "I guess you should be able to reassign the trigger too. I like Fn but maybe
