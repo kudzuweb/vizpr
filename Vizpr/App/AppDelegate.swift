@@ -403,16 +403,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// to a controlled moment. Declined is remembered by TCC and never re-asked
     /// by us (the fallback then fails soft, clipboard still holds the text).
     private func preGrantAutomationIfNeeded() {
-        let key = "AutomationPreGrantAttempted"
+        let key = "AutomationPreGrantAnswered"
         guard !UserDefaults.standard.bool(forKey: key) else { return }
-        UserDefaults.standard.set(true, forKey: key)
-        Task { @MainActor in
-            let script = "tell application \"System Events\" to count processes"
-            var error: NSDictionary?
-            NSAppleScript(source: script)?.executeAndReturnError(&error)
+        // AEDeterminePermissionToAutomateTarget, NOT NSAppleScript: the
+        // prompt blocks its calling thread until answered, and blocking the
+        // main run loop would stall the event tap callback long enough for
+        // the system to disable the tap. A detached task waits instead.
+        Task.detached(priority: .utility) {
+            var target = AEAddressDesc()
+            let bundleID = "com.apple.systemevents"
+            let created = bundleID.utf8CString.withUnsafeBufferPointer { buffer in
+                AECreateDesc(
+                    typeApplicationBundleID, buffer.baseAddress, buffer.count - 1, &target
+                )
+            }
+            guard created == noErr else { return }
+            defer { AEDisposeDesc(&target) }
+            let status = AEDeterminePermissionToAutomateTarget(
+                &target, typeWildCard, typeWildCard, true
+            )
+            // Only a definitive answer (granted 0 / declined -1743) ends the
+            // attempts; transient states (System Events not running) retry at
+            // the next hotkey readiness.
+            if status == noErr || status == -1743 {
+                UserDefaults.standard.set(true, forKey: key)
+            }
             #if DICT_DEV_LOG
-            VizprTranscriptLogger.note(
-                "automation pre-grant: \(error == nil ? "granted" : "declined or unavailable")")
+            VizprTranscriptLogger.note("automation pre-grant status: \(status)")
             #endif
         }
     }
