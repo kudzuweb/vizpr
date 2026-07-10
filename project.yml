@@ -32,8 +32,9 @@ settings:
     CODE_SIGN_STYLE: Automatic
     MARKETING_VERSION: "0.1.0"
     CURRENT_PROJECT_VERSION: "1"
-    # Hardened Runtime + entitlements are written in PR 12, against actual API use.
-    ENABLE_HARDENED_RUNTIME: NO
+    # Entitlements (PR 12): audio-input + apple-events, written against actual
+    # API use — see Vizpr/Vizpr.entitlements for the per-key justification.
+    CODE_SIGN_ENTITLEMENTS: Vizpr/Vizpr.entitlements
   configs:
     Debug:
       # DICT_DEV_LOG compiles the dev transcript logger into Debug only; it is
@@ -41,9 +42,20 @@ settings:
       SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG DICT_DEV_LOG
       SWIFT_OPTIMIZATION_LEVEL: "-Onone"
       ONLY_ACTIVE_ARCH: YES
+      # Hardened Runtime stays off in Debug: automatic signing injects
+      # get-task-allow for the debugger, and dev builds attach tools freely.
+      ENABLE_HARDENED_RUNTIME: NO
     Release:
       SWIFT_ACTIVE_COMPILATION_CONDITIONS: ""
       SWIFT_OPTIMIZATION_LEVEL: "-O"
+      # Hardened Runtime + library validation on for the shipped build
+      # (PR 12). Library validation is the hardened-runtime default; no
+      # exception entitlements exist to weaken it.
+      ENABLE_HARDENED_RUNTIME: YES
+      # Without this, a direct (non-archive) Release build gets get-task-allow
+      # injected by automatic signing — a debugger-attach exception the
+      # shipped build must not carry. Debug keeps the default (debuggable).
+      CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO
 
 configs:
   Debug: debug
@@ -64,6 +76,10 @@ targets:
       - path: Vizpr/Resources/Models
         type: folder
         buildPhase: resources
+      # Third-party attributions ship inside the bundle (PR 12): Parakeet's
+      # CC-BY-4.0 requires the attribution to travel with the distribution.
+      - path: THIRD-PARTY-LICENSES.md
+        buildPhase: resources
     info:
       path: Vizpr/Info.plist
       properties:
@@ -78,6 +94,9 @@ targets:
         NSMicrophoneUsageDescription: >-
           Vizpr converts your speech to text entirely on this Mac.
           Audio never leaves the device.
+        NSAppleEventsUsageDescription: >-
+          Vizpr uses System Events to paste your dictated text into apps
+          where the standard paste shortcut cannot be delivered.
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kudzuweb.vizpr

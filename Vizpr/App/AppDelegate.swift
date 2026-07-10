@@ -388,8 +388,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func startHotkeyIfPermitted() {
         if permissionProbe.evaluate() == .ready {
             hotkeyMonitor.start()
+            preGrantAutomationIfNeeded()
         }
         refreshMenu()
+    }
+
+    /// One-time Automation (System Events) pre-grant (PR 12, NOTES "accepted
+    /// risks"): the injection fallback's first NSAppleScript use raises the
+    /// Automation TCC prompt SYNCHRONOUSLY mid-paste, freezing the run loop
+    /// under the user's dictated text. Trigger the same prompt once here — at
+    /// hotkey readiness, an explicit-consent moment the user just opted into —
+    /// with an innocuous no-op script, so the mid-injection path never blocks
+    /// on consent. Not a permission escalation: the exact same prompt, moved
+    /// to a controlled moment. Declined is remembered by TCC and never re-asked
+    /// by us (the fallback then fails soft, clipboard still holds the text).
+    private func preGrantAutomationIfNeeded() {
+        let key = "AutomationPreGrantAnswered"
+        guard !UserDefaults.standard.bool(forKey: key) else { return }
+        // AEDeterminePermissionToAutomateTarget, NOT NSAppleScript: the
+        // prompt blocks its calling thread until answered, and blocking the
+        // main run loop would stall the event tap callback long enough for
+        // the system to disable the tap. A detached task waits instead.
+        Task.detached(priority: .utility) {
+            var target = AEAddressDesc()
+            let bundleID = "com.apple.systemevents"
+            let created = bundleID.utf8CString.withUnsafeBufferPointer { buffer in
+                AECreateDesc(
+                    typeApplicationBundleID, buffer.baseAddress, buffer.count - 1, &target
+                )
+            }
+            guard created == noErr else { return }
+            defer { AEDisposeDesc(&target) }
+            let status = AEDeterminePermissionToAutomateTarget(
+                &target, typeWildCard, typeWildCard, true
+            )
+            // Only a definitive answer (granted 0 / declined -1743) ends the
+            // attempts; transient states (System Events not running) retry at
+            // the next hotkey readiness.
+            if status == noErr || status == -1743 {
+                UserDefaults.standard.set(true, forKey: key)
+            }
+            #if DICT_DEV_LOG
+            VizprTranscriptLogger.note("automation pre-grant status: \(status)")
+            #endif
+        }
     }
 
     /// Drain dictation actions. There is no pipeline yet (PRs 3–9); for now this
@@ -506,6 +548,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             permissionProbe.openSettings(for: capability)
         case .ready:
             hotkeyMonitor.start()
+            preGrantAutomationIfNeeded()
         }
         refreshMenu()
     }

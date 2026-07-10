@@ -1,0 +1,41 @@
+# Egress-scan allowlist (scripts/check-egress.sh stage 2).
+#
+# Every entry is a network symbol or URL string present in the linked Release
+# binary, traced to never-invoked third-party code. First-party code is held
+# to literal zero by stage 1. Adding to this file requires tracing the finding
+# to its source and recording the provenance here. Audited 2026-07-09.
+#
+# --- NSURLSession (Swift async extensions + ObjC class refs) ---------------
+# Provenance: (a) FluidAudio's model downloader (DownloadUtils) — statically
+# linked, hard-disabled at launch via DownloadUtils.enforceOffline = true,
+# checked as a precondition in FluidAudioASR.prepare before any model API;
+# (b) swift-transformers Hub download client, statically linked via
+# mlx-swift-lm's Tokenizers product — never invoked: QwenTokenizerLoader
+# reads tokenizer files from the app bundle (see QwenTokenizer.swift header).
+sym _$sSo12NSURLSessionC10FoundationE4data3for8delegateAC4DataV_So13NSURLResponseCtAC10URLRequestV_So0A12TaskDelegate_pSgtYaKF
+sym _$sSo12NSURLSessionC10FoundationE4data3for8delegateAC4DataV_So13NSURLResponseCtAC10URLRequestV_So0A12TaskDelegate_pSgtYaKFTu
+sym _$sSo12NSURLSessionC10FoundationE4data4from8delegateAC4DataV_So13NSURLResponseCtAC3URLV_So0A12TaskDelegate_pSgtYaKF
+sym _$sSo12NSURLSessionC10FoundationE4data4from8delegateAC4DataV_So13NSURLResponseCtAC3URLV_So0A12TaskDelegate_pSgtYaKFTu
+sym _$sSo12NSURLSessionC10FoundationE8download3for8delegateAC3URLV_So13NSURLResponseCtAC10URLRequestV_So0A12TaskDelegate_pSgtYaKF
+sym _$sSo12NSURLSessionC10FoundationE8download3for8delegateAC3URLV_So13NSURLResponseCtAC10URLRequestV_So0A12TaskDelegate_pSgtYaKFTu
+sym _$sSo12NSURLSessionC10FoundationE8download4from8delegateAC3URLV_So13NSURLResponseCtAH_So0A12TaskDelegate_pSgtYaKF
+sym _$sSo12NSURLSessionC10FoundationE8download4from8delegateAC3URLV_So13NSURLResponseCtAH_So0A12TaskDelegate_pSgtYaKFTu
+sym _OBJC_CLASS_$_NSURLSession
+sym _OBJC_CLASS_$_NSURLSessionConfiguration
+#
+# --- BSD sockets ------------------------------------------------------------
+# Provenance: mlx-swift Cmlx distributed backend (mlx/distributed/{utils,
+# ring,nccl}) — multi-machine training rings, compiled into Cmlx but never
+# invoked: Vizpr uses single-device MLX inference only and never initializes
+# a distributed group.
+sym _connect
+sym _getaddrinfo
+sym _socket
+#
+# --- URL strings -------------------------------------------------------------
+# Provenance: huggingface.co is swift-transformers' Hub endpoint constant
+# (download client above, never invoked). The other two are inert
+# documentation/issue-tracker links inside MLX error message text.
+url https://github.com/ml-explore/mlx/issues.
+url https://huggingface.co
+url https://ml-explore.github.io/mlx/build/html/usage/compile.html#pure-functions.
