@@ -70,6 +70,10 @@ targets:
         excludes:
           - "**/.gitkeep"
           - "Resources/**"
+          # Referenced by CODE_SIGN_ENTITLEMENTS; including it as a member
+          # would also copy it as a resource, which trips Xcode's
+          # entitlements-modified-during-build signature check.
+          - "Vizpr.entitlements"
       # Bundled models ship as a folder reference copied verbatim: .mlmodelc is
       # already-compiled CoreML output, not something Xcode should process.
       # Lands at Contents/Resources/Models/ in the app bundle.
