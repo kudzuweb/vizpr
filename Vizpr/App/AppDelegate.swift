@@ -205,10 +205,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if cleanupDirectory != nil {
             revertCleanup = { [weak self] in self?.settingsStore.update { $0.cleanupModelID = nil } }
         }
-        warmEngine(devLogLabel: "asr engine prepared", revertOnFailure: revertASR) {
+        warmEngine(
+            devLogLabel: "asr engine prepared",
+            failureMessage: "Vizpr's speech recognition model failed to load.",
+            revertOnFailure: revertASR
+        ) {
             try await engine.prepare()
         }
-        warmEngine(devLogLabel: "cleanup engine prepared", revertOnFailure: revertCleanup) {
+        warmEngine(
+            devLogLabel: "cleanup engine prepared",
+            failureMessage: "Vizpr's cleanup model failed to load.",
+            revertOnFailure: revertCleanup
+        ) {
             try await cleanup.prepareEngine()
         }
 
@@ -366,6 +374,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// bundled instead of terminating — a bad drop-in must never brick the app.
     private func warmEngine(
         devLogLabel: String,
+        failureMessage: String,
         revertOnFailure: (@MainActor @Sendable () -> Void)? = nil,
         _ prepare: @escaping @Sendable () async throws -> Void
     ) {
@@ -384,7 +393,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     revertOnFailure()
                 } else {
                     self.failLoudly(
-                        "Vizpr's speech models failed to load.",
+                        failureMessage,
                         detail: "Run scripts/fetch-models.sh and rebuild, or reinstall. (\(error))"
                     )
                 }
