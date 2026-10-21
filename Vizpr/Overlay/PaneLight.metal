@@ -2,13 +2,15 @@
 #include <SwiftUI/SwiftUI_Metal.h>
 using namespace metal;
 
-// Light for the opaque pane slab. Every term is added to the mesh color, so
-// alpha stays whatever the mesh produced (opaque).
+// Light drawn over any pane surface, as premultiplied color: light is
+// (a, a, a, a), darkening is (0, 0, 0, a). Composited over the surface, it
+// leaves the surface's own alpha alone where the layer is clear.
 
 constant float kBevelBand = 10.0;     // points inside the edge that the bevel covers
 constant float kBevelPeak = 0.2;
-constant float kGlowFalloff = 14.0;   // points from the top edge
-constant float kGlowPeak = 0.5;
+constant float kEdgeFalloff = 14.0;   // points from the top edge
+constant float kEdgePeak = 0.5;
+constant float kGlossPeak = 0.35;
 constant float kSheenSlope = 0.6;
 constant float kSheenWidth = 0.12;
 constant float kSheenPeak = 0.4;
@@ -20,7 +22,8 @@ static float roundedBoxDistance(float2 p, float2 halfSize, float radius) {
     return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - radius;
 }
 
-// Lighter toward the top, darker toward the bottom, only near the edge.
+// Signed light: positive lightens, negative darkens. Lighter toward the top,
+// darker toward the bottom, only near the edge.
 static float bevelLight(float2 position, float2 size, float cornerRadius, float strength) {
     float distance = roundedBoxDistance(position - size * 0.5, size * 0.5, cornerRadius);
     float band = 1.0 - smoothstep(0.0, kBevelBand, -distance);
@@ -29,11 +32,20 @@ static float bevelLight(float2 position, float2 size, float cornerRadius, float 
 }
 
 // Soft white light falling off from the top edge, fading out toward the corners.
-static float edgeGlowLight(float2 position, float2 size, float strength) {
-    float falloff = exp(-position.y / kGlowFalloff);
+static float edgeLight(float2 position, float2 size, float strength) {
+    float falloff = exp(-position.y / kEdgeFalloff);
     float across = position.x / size.x;
     float fade = smoothstep(0.0, 0.2, across) * (1.0 - smoothstep(0.8, 1.0, across));
-    return falloff * fade * kGlowPeak * strength;
+    return falloff * fade * kEdgePeak * strength;
+}
+
+// A still, soft elliptical highlight across the top third: about 70% of the
+// width wide, gaussian falloff.
+static float glossLight(float2 position, float2 size, float strength) {
+    float2 center = float2(size.x * 0.5, size.y * 0.12);
+    float2 radii = float2(size.x * 0.35, max(size.y * 0.24, 8.0));
+    float2 d = (position - center) / radii;
+    return exp(-dot(d, d) * 1.5) * kGlossPeak * strength;
 }
 
 // A diagonal band that sweeps across and then rests offscreen for the rest of the cycle.
@@ -52,14 +64,15 @@ static float grainNoise(float2 position, float time, float amount) {
     return (hash - 0.5) * amount;
 }
 
-[[ stitchable ]] half4 paneSlab(
-    float2 position, half4 color, float2 size, float time,
-    float sheenStrength, float sheenSweepSeconds, float edgeGlow,
-    float bevel, float grain, float cornerRadius
+[[ stitchable ]] half4 paneLight(
+    float2 position, half4 color, float2 size, float time, float cornerRadius,
+    float edge, float bevel, float gloss, float sheen, float sheenSweepSeconds, float grain
 ) {
     float light = bevelLight(position, size, cornerRadius, bevel)
-        + edgeGlowLight(position, size, edgeGlow)
-        + sheenLight(position, size, time, sheenSweepSeconds, sheenStrength)
+        + edgeLight(position, size, edge)
+        + glossLight(position, size, gloss)
+        + sheenLight(position, size, time, sheenSweepSeconds, sheen)
         + grainNoise(position, time, grain);
-    return half4(color.rgb + half(light) * color.a, color.a);
+    float alpha = min(abs(light), 1.0);
+    return light >= 0 ? half4(half3(alpha), half(alpha)) : half4(0, 0, 0, half(alpha));
 }

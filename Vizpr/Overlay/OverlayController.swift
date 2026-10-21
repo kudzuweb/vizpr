@@ -31,7 +31,25 @@ final class OverlayController {
         look = newLook
         // Font size and design change the measured height.
         hitCap = false
-        if panel.isVisible { render(lastSnapshot) }
+        if panel.isVisible {
+            // Glow, shadow and width change how much room the panel needs.
+            positionPanel()
+            render(lastSnapshot)
+        }
+    }
+
+    /// The panel spans the pane's fixed bottom edge to the cap, plus the look's
+    /// effect margin on every side; only the SwiftUI capsule inside animates.
+    private func positionPanel() {
+        guard let layout else { return }
+        panel.setFrame(
+            layout.frame(
+                contentHeight: layout.maxHeight,
+                paneWidth: look.style.pane.width,
+                margin: PaneEffects.margin(for: look.style)
+            ),
+            display: true
+        )
     }
 
     private var reduceMotion: Bool {
@@ -60,7 +78,7 @@ final class OverlayController {
         // The panel is a FIXED transparent stage spanning bottom edge to cap;
         // only the SwiftUI capsule inside animates (field catch: animating
         // the window frame lagged the text and clipped it mid-growth).
-        panel.setFrame(layout.frame(contentHeight: layout.maxHeight), display: true)
+        positionPanel()
         render(.empty)
         panel.orderFrontRegardless()
     }
@@ -123,16 +141,7 @@ final class OverlayController {
         if hitCap { return layout.maxHeight }
         let text = snapshot.displayed
         guard !text.isEmpty else { return OverlayLayout.restingSize.height }
-        let width = OverlayLayout.readingWidth - 36
-        let font = look.measuringFont
-        let bounds = (text as NSString).boundingRect(
-            with: NSSize(width: width, height: .greatestFiniteMagnitude),
-            options: [.usesLineFragmentOrigin, .usesFontLeading],
-            attributes: [.font: font]
-        )
-        // Extra line of headroom: growth leads the text instead of trailing
-        // it, so a wrapping word never renders against the clipped edge.
-        let measured = ceil(bounds.height) + 24 + ceil(font.ascender - font.descender)
+        let measured = look.paneHeight(fitting: text)
         let clamped = min(max(measured, OverlayLayout.restingSize.height), layout.maxHeight)
         if clamped >= layout.maxHeight { hitCap = true }
         return clamped
