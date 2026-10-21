@@ -74,6 +74,32 @@ the one open cell; layout-resolution path is review-hardened, retest
 opportunistically or at PR 12. One field catch fixed in-PR: the secure-skip
 breadcrumb leaked dictated text into debug.log (now redacted).
 
+**Restore rule (2026-10-21, after two lost dictations):** the prior clipboard
+is restored only when the focused element plausibly accepted the paste.
+Twice a commit landed with focus on a window with no text field (once
+mid-drag of a screenshot): the chord was posted, the outcome was `.injected`,
+and the 300 ms restore deleted the only other copy of the text. A paste
+cannot be observed, so `FocusedFieldProbe` (Injection/SystemInjectionIO.swift)
+makes one read-only AX query of the frontmost app's focused element, off the
+main thread, started before the chord so it adds nothing to the commit path.
+It counts as text-accepting when the element exposes
+`kAXSelectedTextRangeAttribute`, has a settable `kAXValueAttribute`, or has
+role text field, text area or combo box. Each AX call is bounded to 150 ms.
+- The paste is attempted either way: terminals and Electron apps accept
+  pastes while exposing poor AX trees, and a paste into a non-text window is
+  harmless. Only the restore changes.
+- Unknown counts as not accepting (AX error, no focused element, timeout):
+  losing the old clipboard is the cheaper failure.
+- When the restore is skipped for this reason the outcome is
+  `.injected(usedFallback:clipboard: .keptNoTextField)` and the commit
+  handler beeps once so she knows the text is on the clipboard. The setting
+  off or concealed clipboard content give `.notCaptured` (no beep, no probe).
+- Secure-input skip, the concealed-content rule and the ownership guard are
+  unchanged.
+- Unverified: the heuristic's accuracy across real apps (no web-content
+  editable role exists in the AX headers; web editors are expected to pass
+  through `kAXSelectedTextRangeAttribute`).
+
 **Accepted risks (documented, not fixed):**
 - "Chord posted but target app ignored it" is undetectable without AX; the
   fallback fires on untrusted/creation-failure only. The PR 8 manual matrix

@@ -83,6 +83,18 @@ private final class FakeSecureInput: SecureInputProbing {
     var isSecureInputActive = false
 }
 
+@MainActor
+private final class FakeFocusProbe: FocusedFieldProbing {
+    var acceptsText = true
+    private(set) var probeCount = 0
+
+    func beginAcceptsTextCheck() -> Task<Bool, Never> {
+        probeCount += 1
+        let answer = acceptsText
+        return Task { answer }
+    }
+}
+
 private func plainText(_ text: String) -> PasteboardContents {
     PasteboardContents(items: [[PasteboardEntry(
         type: "public.utf8-plain-text", data: Data(text.utf8)
@@ -99,11 +111,13 @@ struct TextInjectorTests {
         pasteboard: FakePasteboard,
         poster: FakePoster,
         secure: FakeSecureInput = FakeSecureInput(),
+        focus: FakeFocusProbe = FakeFocusProbe(),
         restoreEnabled: Bool = true,
         now: Date = Date(timeIntervalSince1970: 1_000)
     ) -> TextInjector {
         TextInjector(
             pasteboard: pasteboard, poster: poster, secureInput: secure,
+            focusProbe: focus,
             restoreDelay: .zero, restoreEnabled: restoreEnabled, now: { now }
         )
     }
@@ -117,7 +131,7 @@ struct TextInjectorTests {
         let snapshot = "naïve café — 日本語 🎉 e\u{301} end "
         let outcome = await injector.inject(snapshot)
 
-        #expect(outcome == .injected(usedFallback: false))
+        #expect(outcome == .injected(usedFallback: false, clipboard: .restoreScheduled))
         #expect(pasteboard.writtenText == snapshot)
     }
 
@@ -148,6 +162,58 @@ struct TextInjectorTests {
         #expect(pasteboard.restored == prior)
     }
 
+    @Test("Focus does not accept text: paste, no restore, transcript stays on the clipboard")
+    func keepsTranscriptWhenFocusRejectsText() async {
+        let pasteboard = FakePasteboard()
+        pasteboard.seed(plainText("mine"))
+        let poster = FakePoster()
+        let focus = FakeFocusProbe()
+        focus.acceptsText = false
+        let injector = makeInjector(pasteboard: pasteboard, poster: poster, focus: focus)
+
+        let outcome = await injector.inject("hello.")
+        await injector.settleForTesting()
+        #expect(outcome == .injected(usedFallback: false, clipboard: .keptNoTextField))
+        #expect(poster.chordCount == 1, "the paste attempt must still happen")
+        #expect(pasteboard.restored == nil)
+        #expect(pasteboard.writtenText == "hello.")
+        #expect(pasteboard.hasTag(pasteboard.writtenTag ?? ""), "transcript left the clipboard")
+    }
+
+    @Test("A probe that cannot tell (failure) counts as not accepting text")
+    func probeFailureKeepsTranscript() async {
+        // The seam reports every failure mode (AX error, no focused element,
+        // timeout) as false, so a failed probe and a rejecting one are the
+        // same input to the injector.
+        let pasteboard = FakePasteboard()
+        pasteboard.seed(plainText("mine"))
+        let focus = FakeFocusProbe()
+        focus.acceptsText = false
+        let injector = makeInjector(pasteboard: pasteboard, poster: FakePoster(), focus: focus)
+
+        _ = await injector.inject("hello.")
+        await injector.settleForTesting()
+        #expect(pasteboard.restored == nil)
+    }
+
+    @Test("Restore setting off keeps the transcript whatever the focus, without probing")
+    func restoreOffIgnoresFocus() async {
+        for accepts in [true, false] {
+            let pasteboard = FakePasteboard()
+            pasteboard.seed(plainText("mine"))
+            let focus = FakeFocusProbe()
+            focus.acceptsText = accepts
+            let injector = makeInjector(
+                pasteboard: pasteboard, poster: FakePoster(), focus: focus, restoreEnabled: false
+            )
+            let outcome = await injector.inject("hello.")
+            await injector.settleForTesting()
+            #expect(outcome == .injected(usedFallback: false, clipboard: .notCaptured))
+            #expect(pasteboard.restored == nil)
+            #expect(focus.probeCount == 0)
+        }
+    }
+
     @Test("Ownership guard: a user copy mid-paste is never clobbered")
     func noClobberOnUserCopy() async {
         let pasteboard = FakePasteboard()
@@ -158,7 +224,7 @@ struct TextInjectorTests {
 
         let outcome = await injector.inject("hello.")
         await injector.settleForTesting()
-        #expect(outcome == .injected(usedFallback: false))
+        #expect(outcome == .injected(usedFallback: false, clipboard: .restoreScheduled))
         #expect(pasteboard.restored == nil, "restore ran over the user's copy")
     }
 
@@ -194,7 +260,10 @@ struct TextInjectorTests {
 
         let outcome = await injector.inject("hello.")
         await injector.settleForTesting()
-        #expect(outcome == .injected(usedFallback: false), "paste itself must proceed")
+        #expect(
+            outcome == .injected(usedFallback: false, clipboard: .notCaptured),
+            "paste itself must proceed"
+        )
         #expect(pasteboard.snapshotCount == 0, "captured a concealed secret")
         #expect(pasteboard.restored == nil)
     }
@@ -234,7 +303,7 @@ struct TextInjectorTests {
         let injector = makeInjector(pasteboard: pasteboard, poster: poster)
 
         let outcome = await injector.inject("hello.")
-        #expect(outcome == .injected(usedFallback: true))
+        #expect(outcome == .injected(usedFallback: true, clipboard: .restoreScheduled))
         #expect(poster.fallbackCount == 1)
     }
 
@@ -260,13 +329,17 @@ struct TextInjectorTests {
         let poster = FakePoster()
         let secure = FakeSecureInput()
         secure.isSecureInputActive = true
-        let injector = makeInjector(pasteboard: pasteboard, poster: poster, secure: secure)
+        let focus = FakeFocusProbe()
+        let injector = makeInjector(
+            pasteboard: pasteboard, poster: poster, secure: secure, focus: focus
+        )
 
         #expect(await injector.inject("p4ssw0rd oops") == .skippedSecureInput)
         // §12.1 outranks the empty check: a secure field still notifies.
         #expect(await injector.inject("") == .skippedSecureInput)
         #expect(pasteboard.writtenText == nil)
         #expect(poster.chordCount == 0)
+        #expect(focus.probeCount == 0, "probed the focused element of a secure field")
     }
 
     @Test("Secure input engaging between chord failure and fallback skips the fallback")

@@ -19,7 +19,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let textInjector = TextInjector(
         pasteboard: SystemPasteboard(),
         poster: CGEventPoster(),
-        secureInput: SecureInputProbe()
+        secureInput: SecureInputProbe(),
+        focusProbe: FocusedFieldProbe()
     )
     private var smartCleanup: SmartCleanup?
     private var snapshotTask: Task<Void, Never>?
@@ -551,6 +552,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     case .failed:
                         // Total failure is no quieter: the text is on the
                         // clipboard for a manual paste.
+                        NSSound.beep()
+                    case .injected(_, .keptNoTextField):
+                        // The paste may have landed nowhere; the transcript
+                        // stays on the clipboard, so tell the user.
                         NSSound.beep()
                     case .injected, .skippedEmpty, nil:
                         break

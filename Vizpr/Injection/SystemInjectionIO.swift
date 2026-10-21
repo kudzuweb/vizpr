@@ -173,6 +173,59 @@ final class CGEventPoster: EventPosting {
     }
 }
 
+/// Read-only Accessibility check of the focused element (follows
+/// `FieldContextReader`: frontmost-app lookup on main, AX IPC detached).
+/// Unknown (any AX error) is reported as false.
+@MainActor
+struct FocusedFieldProbe: FocusedFieldProbing {
+    /// Bound on each AX call into a busy or hung target app.
+    private nonisolated static let messagingTimeout: Float = 0.15
+
+    private nonisolated static let textRoles: Set<String> = [
+        kAXTextFieldRole, kAXTextAreaRole, kAXComboBoxRole
+    ]
+
+    func beginAcceptsTextCheck() -> Task<Bool, Never> {
+        guard let app = NSWorkspace.shared.frontmostApplication else {
+            return Task { false }
+        }
+        let pid = app.processIdentifier
+        return Task.detached(priority: .userInitiated) {
+            Self.focusedElementAcceptsText(pid: pid)
+        }
+    }
+
+    private nonisolated static func focusedElementAcceptsText(pid: pid_t) -> Bool {
+        let appElement = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(appElement, messagingTimeout)
+
+        var focused: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            appElement, kAXFocusedUIElementAttribute as CFString, &focused
+        ) == .success, let ref = focused,
+              let element = FieldContextReader.axElement(ref) else { return false }
+        AXUIElementSetMessagingTimeout(element, messagingTimeout)
+
+        var selection: CFTypeRef?
+        if AXUIElementCopyAttributeValue(
+            element, kAXSelectedTextRangeAttribute as CFString, &selection
+        ) == .success { return true }
+
+        var settable: DarwinBoolean = false
+        if AXUIElementIsAttributeSettable(
+            element, kAXValueAttribute as CFString, &settable
+        ) == .success, settable.boolValue { return true }
+
+        var role: CFTypeRef?
+        if AXUIElementCopyAttributeValue(
+            element, kAXRoleAttribute as CFString, &role
+        ) == .success, let roleName = role as? String {
+            return textRoles.contains(roleName)
+        }
+        return false
+    }
+}
+
 @MainActor
 struct SecureInputProbe: SecureInputProbing {
     var isSecureInputActive: Bool { IsSecureEventInputEnabled() }
