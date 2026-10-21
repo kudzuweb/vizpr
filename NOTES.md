@@ -288,19 +288,31 @@ change: the settled:mutable ratio stays locked in
   "Look: <name>" cycles built-ins then user looks.
 - Tint also colors the recording dot and the inviz pill on every surface.
 
-**Tolerant settings decoding (bug fix).** `VizprSettings` used synthesized
-`Decodable`, which throws `keyNotFound` for any key missing from
-`settings.json`; `SettingsStore.init` answered by falling back to `.default`.
-Adding any field therefore silently reset every setting for an existing user.
-Every key now decodes with a fallback to its default, and a malformed value
-costs only its own key.
+**Loading merges the saved JSON over the defaults (bug fix).** `VizprSettings`
+used synthesized `Decodable`, which throws `keyNotFound` for any key missing
+from `settings.json`; `SettingsStore.init` answered by falling back to
+`.default`. Adding any field therefore silently reset every setting for an
+existing user. `SettingsStore` now parses the file, merges it over the encoded
+`VizprSettings.default` (`SettingsMerge.merged`, recursing into nested objects
+such as a look's `slab`) and decodes the result with plain synthesized
+`Codable`. A new field needs no loading code: a file without it takes the
+default. Saved `looks` have no default of their own, so each is merged over
+`OverlayLook.mergeTemplate`. **A new look field's value in that template must be
+its no-visible-change value** (an effect at 0, a feature off, the existing
+behavior kept); built-in looks opt into new effects explicitly. Otherwise adding
+a field would silently restyle looks Mauria already made.
+
+Tradeoff: a wrong-typed value (`"autoStopSeconds": "soon"`) fails the whole
+load. The file is first copied to `settings.json.bad` (replacing an earlier
+copy) and defaults take over, so a bad load never destroys the saved settings.
 
 **Migration.** A file with no `looks` key is read as legacy. Each legacy
 `colorPresets` entry becomes a glass look (named by its tint hex when it had no
 name). If the legacy top-level colors differ from the old defaults (`A16FDF`,
 0.13, no text base, unlinked), they become a glass look "My colors", which
-becomes active. Legacy keys are read, never written back, so the next save
-leaves only the new format.
+becomes active. Migration runs after the merge, from a separate decode of the
+legacy keys, and the store saves once when the file carried any, so migrated
+look ids stay stable and the legacy keys leave the file.
 
 ## Future directions (Mauria, 2026-07-05 — recorded, not scheduled)
 

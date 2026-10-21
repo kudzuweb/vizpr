@@ -31,28 +31,6 @@ struct SlabStyle: Codable, Equatable, Sendable {
     ]
     static let `default` = SlabStyle()
 
-    init() {}
-
-    /// Missing keys fall back to defaults, so adding a field never
-    /// invalidates a saved settings file.
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        let fallback = SlabStyle.default
-        meshColorsHex = try container.decodeIfPresent([String].self, forKey: .meshColorsHex)
-            ?? fallback.meshColorsHex
-        meshDrift = try container.decodeIfPresent(Double.self, forKey: .meshDrift) ?? fallback.meshDrift
-        meshLoopSeconds = try container.decodeIfPresent(Double.self, forKey: .meshLoopSeconds)
-            ?? fallback.meshLoopSeconds
-        sheenStrength = try container.decodeIfPresent(Double.self, forKey: .sheenStrength)
-            ?? fallback.sheenStrength
-        sheenSweepSeconds = try container.decodeIfPresent(Double.self, forKey: .sheenSweepSeconds)
-            ?? fallback.sheenSweepSeconds
-        edgeGlow = try container.decodeIfPresent(Double.self, forKey: .edgeGlow) ?? fallback.edgeGlow
-        bevel = try container.decodeIfPresent(Double.self, forKey: .bevel) ?? fallback.bevel
-        grain = try container.decodeIfPresent(Double.self, forKey: .grain) ?? fallback.grain
-        shadow = try container.decodeIfPresent(Double.self, forKey: .shadow) ?? fallback.shadow
-    }
-
     func clamped() -> SlabStyle {
         var style = self
         let colors = style.meshColorsHex.compactMap(VizprSettings.sanitizeHex)

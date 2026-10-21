@@ -133,7 +133,7 @@ final class SettingsStore: ObservableObject {
         settings = .default
         guard let data = try? Data(contentsOf: url) else { return }
         do {
-            settings = try JSONDecoder().decode(VizprSettings.self, from: data).clamped()
+            settings = try VizprSettings.load(from: data)
             // Rewrite once so migrated looks keep their ids and the legacy
             // keys leave the file.
             if VizprSettings.hasLegacyKeys(data) { persist() }
@@ -243,80 +243,82 @@ final class SettingsStore: ObservableObject {
     }
 }
 
-// MARK: - Decoding
+// MARK: - Loading
 
 extension VizprSettings {
-    /// Every key is optional on disk and falls back to its default. The
-    /// synthesized decoder threw on any missing key, and `SettingsStore`
-    /// answered by discarding the whole file, so adding a field silently reset
-    /// every setting. Encoding writes only the current format.
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        let d = VizprSettings.default
-        hotkeyEnabled = container.value(.hotkeyEnabled, or: d.hotkeyEnabled)
-        holdThresholdMs = container.value(.holdThresholdMs, or: d.holdThresholdMs)
-        secondaryModifiers = container.value(.secondaryModifiers, or: d.secondaryModifiers)
-        primaryTrigger = container.value(.primaryTrigger, or: d.primaryTrigger)
-        settleSentences = container.value(.settleSentences, or: d.settleSentences)
-        autoStopSeconds = container.value(.autoStopSeconds, or: d.autoStopSeconds)
-        settleCapMs = container.value(.settleCapMs, or: d.settleCapMs)
-        draftMinTailMs = container.value(.draftMinTailMs, or: d.draftMinTailMs)
-        cleanupEnabled = container.value(.cleanupEnabled, or: d.cleanupEnabled)
-        codeModeOverride = container.value(.codeModeOverride, or: d.codeModeOverride)
-        asrModelID = container.value(.asrModelID, or: d.asrModelID)
-        cleanupModelID = container.value(.cleanupModelID, or: d.cleanupModelID)
-        restoreClipboard = container.value(.restoreClipboard, or: d.restoreClipboard)
-        invizMode = container.value(.invizMode, or: d.invizMode)
-        silentInputFallback = container.value(.silentInputFallback, or: d.silentInputFallback)
-        looks = container.value(.looks, or: d.looks)
-        activeLookID = container.value(.activeLookID, or: d.activeLookID)
-
-        // A file written before looks existed has no `looks` key.
-        if !container.contains(.looks) {
-            let legacy = try decoder.container(keyedBy: LegacyKeys.self)
-            migrateLegacyColors(from: legacy, keepsActiveLook: container.contains(.activeLookID))
+    /// Parses a saved settings file: the JSON is merged over the encoded
+    /// defaults (see `SettingsMerge`), decoded, clamped, and then any
+    /// pre-looks color keys are migrated to looks. Throws when the file is not
+    /// a JSON object or a value has the wrong type.
+    static func load(from data: Data, lookTemplate: OverlayLook = .mergeTemplate) throws -> VizprSettings {
+        guard let saved = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw DecodingError.dataCorrupted(
+                .init(codingPath: [], debugDescription: "Settings file is not a JSON object")
+            )
         }
+        let merged = SettingsMerge.merged(
+            saved: saved,
+            over: try jsonObject(of: VizprSettings.default),
+            elementDefaults: ["looks": try jsonObject(of: lookTemplate)]
+        )
+        var settings = try JSONDecoder().decode(
+            VizprSettings.self, from: JSONSerialization.data(withJSONObject: merged)
+        )
+        // A file written before looks existed has no `looks` key.
+        if saved["looks"] == nil {
+            let legacy = try JSONDecoder().decode(LegacyAppearance.self, from: data)
+            settings.migrate(legacy, keepsActiveLook: saved["activeLookID"] != nil)
+        }
+        return settings.clamped()
     }
 
-    private enum LegacyKeys: String, CodingKey, CaseIterable {
-        case tintHex, tintStrength, textBaseHex, colorsLinked, colorPresets
+    private static func jsonObject(of value: some Encodable) throws -> [String: Any] {
+        let data = try JSONEncoder().encode(value)
+        return try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
     }
 
-    /// True when `data` is a settings object still carrying pre-looks color keys.
+    /// True when `data` is a settings object still carrying pre-looks color
+    /// keys, so the store knows to save the migrated form.
     static func hasLegacyKeys(_ data: Data) -> Bool {
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
-        return LegacyKeys.allCases.contains { object[$0.rawValue] != nil }
+        return LegacyAppearance.keys.contains { object[$0] != nil }
     }
 
-    /// The pre-looks color preset, as it was saved.
-    private struct LegacyPreset: Decodable {
-        var name: String?
+    /// The pre-looks appearance keys, as they were saved.
+    private struct LegacyAppearance: Decodable {
+        struct Preset: Decodable {
+            var name: String?
+            var tintHex: String?
+            var tintStrength: Double?
+            var textBaseHex: String?
+            var colorsLinked: Bool?
+        }
+
+        static let keys = ["tintHex", "tintStrength", "textBaseHex", "colorsLinked", "colorPresets"]
+
         var tintHex: String?
         var tintStrength: Double?
         var textBaseHex: String?
         var colorsLinked: Bool?
+        var colorPresets: [Preset]?
     }
 
-    /// Stable id for the look migrated from the top-level colors, so the
-    /// active selection survives launches until the migrated file is saved.
+    /// Stable id for the look migrated from the top-level colors.
     private static let migratedColorsID = UUID(uuidString: "6B1E5A4C-0D2F-4C8E-9A57-3F1B7D20A0FF")!
 
     /// Legacy top-level colors that differ from the old defaults become a
     /// glass look named "My colors" (made active); each legacy preset becomes
-    /// a glass look of its own. Legacy keys are read here and never written.
-    private mutating func migrateLegacyColors(
-        from legacy: KeyedDecodingContainer<LegacyKeys>, keepsActiveLook: Bool
-    ) {
+    /// a glass look of its own.
+    private mutating func migrate(_ legacy: LegacyAppearance, keepsActiveLook: Bool) {
         let glass = OverlayLook.glass
         var migrated: [OverlayLook] = []
 
-        let tintHex = legacy.value(.tintHex, or: glass.tintHex)
-        let tintStrength = legacy.value(.tintStrength, or: glass.tintStrength)
-        let textBaseHex: String? = legacy.value(.textBaseHex, or: nil)
-        let colorsLinked = legacy.value(.colorsLinked, or: glass.colorsLinked)
+        let tintHex = legacy.tintHex ?? glass.tintHex
+        let tintStrength = legacy.tintStrength ?? glass.tintStrength
+        let colorsLinked = legacy.colorsLinked ?? glass.colorsLinked
         let customized = VizprSettings.sanitizeHex(tintHex) != glass.tintHex
             || abs(tintStrength - glass.tintStrength) > 1e-9
-            || textBaseHex != nil
+            || legacy.textBaseHex != nil
             || colorsLinked
         if customized {
             var mine = glass
@@ -324,12 +326,12 @@ extension VizprSettings {
             mine.name = "My colors"
             mine.tintHex = tintHex
             mine.tintStrength = tintStrength
-            mine.textBaseHex = textBaseHex
+            mine.textBaseHex = legacy.textBaseHex
             mine.colorsLinked = colorsLinked
             migrated.append(mine)
         }
 
-        for preset in legacy.value(.colorPresets, or: [LegacyPreset]()) {
+        for preset in legacy.colorPresets ?? [] {
             var look = glass
             look.id = UUID()
             look.tintHex = preset.tintHex ?? glass.tintHex

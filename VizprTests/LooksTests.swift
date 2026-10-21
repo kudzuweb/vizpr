@@ -8,7 +8,7 @@ import Testing
 @Suite("Looks and settings format")
 struct LooksTests {
     private func decode(_ json: String) throws -> VizprSettings {
-        try JSONDecoder().decode(VizprSettings.self, from: Data(json.utf8))
+        try VizprSettings.load(from: Data(json.utf8))
     }
 
     /// settings.json as written before looks: custom colors and two presets.
@@ -87,11 +87,64 @@ struct LooksTests {
         #expect(settings.secondaryModifiers == VizprSettings.default.secondaryModifiers)
     }
 
-    @Test("A malformed value costs only its own key")
-    func malformedValue() throws {
-        let settings = try decode(#"{"autoStopSeconds": "soon", "settleSentences": 4}"#)
-        #expect(settings.autoStopSeconds == VizprSettings.default.autoStopSeconds)
-        #expect(settings.settleSentences == 4)
+    @Test("A saved look missing a field gets that field's default and keeps the rest")
+    func lookMissingField() throws {
+        let settings = try decode("""
+        {"looks": [{"id": "5A1B6A52-6F42-4B7E-8D5C-2C0B5C1D9E01", "name": "Mine",
+                    "cornerRadius": 12, "fontDesign": "serif"}]}
+        """)
+        let look = try #require(settings.looks.first)
+        #expect(look.name == "Mine")
+        #expect(look.cornerRadius == 12)
+        #expect(look.fontDesign == .serif)
+        #expect(look.fontSize == OverlayLook.glass.fontSize)
+        #expect(look.tintHex == OverlayLook.glass.tintHex)
+    }
+
+    @Test("A look with every field decodes the same whatever the merge template holds")
+    func templateOnlyFillsMissingFields() throws {
+        var look = OverlayLook.slab
+        look.id = UUID()
+        look.name = "Full"
+        look.cornerRadius = 33
+        look.tintHex = "123456"
+        look.tintStrength = 0.4
+        look.textBaseHex = "ABCDEF"
+        look.colorsLinked = true
+        look.slab.grain = 0.1
+        look.fontDesign = .serif
+        look.fontSize = 20
+        look.wordAppearance = .fade
+        var settings = VizprSettings.default
+        settings.looks = [look]
+        let data = try JSONEncoder().encode(settings)
+
+        var other = OverlayLook.mergeTemplate
+        other.surface = .glass
+        other.cornerRadius = 8
+        other.tintHex = "000000"
+        other.tintStrength = 0.5
+        other.textBaseHex = "FFFFFF"
+        other.colorsLinked = false
+        other.slab.meshDrift = 0.5
+        other.fontDesign = .monospaced
+        other.fontSize = 28
+        other.wordAppearance = .blurIn
+
+        #expect(try VizprSettings.load(from: data) == settings)
+        #expect(try VizprSettings.load(from: data, lookTemplate: other) == settings)
+    }
+
+    @Test("A nested slab with only some keys merges with the rest defaulted")
+    func partialSlab() throws {
+        let settings = try decode("""
+        {"looks": [{"id": "5A1B6A52-6F42-4B7E-8D5C-2C0B5C1D9E01", "name": "Mine",
+                    "surface": "slab", "slab": {"grain": 0.1}}]}
+        """)
+        let slab = try #require(settings.looks.first).slab
+        #expect(slab.grain == 0.1)
+        #expect(slab.meshDrift == SlabStyle.default.meshDrift)
+        #expect(slab.meshColorsHex == SlabStyle.defaultMeshColors)
     }
 
     @Test("Encode then decode is lossless and writes no legacy keys")
@@ -216,6 +269,57 @@ struct LooksTests {
     }
 }
 
+@Suite("SettingsMerge")
+struct SettingsMergeTests {
+    private func merge(
+        _ saved: [String: Any], over defaults: [String: Any],
+        elements: [String: [String: Any]] = [:]
+    ) -> [String: Any] {
+        SettingsMerge.merged(saved: saved, over: defaults, elementDefaults: elements)
+    }
+
+    private func same(_ left: [String: Any], _ right: [String: Any]) -> Bool {
+        NSDictionary(dictionary: left).isEqual(to: right)
+    }
+
+    @Test("Keys only in the defaults stay, and keys only in the saved file pass through")
+    func unionOfKeys() {
+        let result = merge(["saved": 1, "both": 2], over: ["both": 0, "default": 3])
+        #expect(same(result, ["saved": 1, "both": 2, "default": 3]))
+    }
+
+    @Test("Dictionaries on both sides merge recursively")
+    func recursion() {
+        let result = merge(["slab": ["grain": 0.1]], over: ["slab": ["grain": 0.0, "bevel": 0.5]])
+        #expect(same(result, ["slab": ["grain": 0.1, "bevel": 0.5]]))
+    }
+
+    @Test("An array replaces the default array when its key has no element template")
+    func arrayReplacement() {
+        let result = merge(["mods": ["a"]], over: ["mods": ["x", "y"]])
+        #expect(same(result, ["mods": ["a"]]))
+    }
+
+    @Test("Each saved array element merges over its key's element template")
+    func elementDefaults() {
+        let result = merge(
+            ["looks": [["name": "One"], ["name": "Two", "size": 9]]],
+            over: ["looks": [[String: Any]]()],
+            elements: ["looks": ["name": "?", "size": 16, "nested": ["a": 1, "b": 2]]]
+        )
+        #expect(same(result, ["looks": [
+            ["name": "One", "size": 16, "nested": ["a": 1, "b": 2]],
+            ["name": "Two", "size": 9, "nested": ["a": 1, "b": 2]]
+        ]]))
+    }
+
+    @Test("A saved value of a different shape replaces the default")
+    func shapeMismatch() {
+        let result = merge(["slab": "none"], over: ["slab": ["grain": 0.0]])
+        #expect(same(result, ["slab": "none"]))
+    }
+}
+
 @MainActor
 @Suite("SettingsStore loading")
 struct SettingsStoreLoadingTests {
@@ -240,6 +344,15 @@ struct SettingsStoreLoadingTests {
 
         store.update { $0.autoStopSeconds = 9 }
         #expect(try String(contentsOf: backup, encoding: .utf8) == "{ not json")
+    }
+
+    @Test("A wrong-typed value loads defaults and keeps the file as settings.json.bad")
+    func wrongTypedValueIsBackedUp() throws {
+        let json = #"{"autoStopSeconds": "soon", "settleSentences": 4}"#
+        let url = try tempFile(json)
+        let store = SettingsStore(fileURL: url)
+        #expect(store.settings == .default)
+        #expect(try String(contentsOf: url.appendingPathExtension("bad"), encoding: .utf8) == json)
     }
 
     @Test("Loading a legacy file saves the migrated looks once, with stable ids and no legacy keys")

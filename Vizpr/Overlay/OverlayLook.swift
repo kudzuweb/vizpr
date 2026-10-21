@@ -52,6 +52,14 @@ struct OverlayLook: Codable, Equatable, Sendable, Identifiable {
 
     static let builtIns = [glass, slab]
 
+    /// Each saved look is merged over this when loading, so a field added in a
+    /// later build takes the value given here for every look saved before it
+    /// existed. A new field's value here must be its no-visible-change value
+    /// (an effect at 0, a feature off, the existing behavior kept); built-in
+    /// looks opt into new effects explicitly. Saved elements carry their own
+    /// id and name, so those two are placeholders.
+    static let mergeTemplate = OverlayLook(id: glass.id, name: "")
+
     static func isBuiltIn(_ id: UUID) -> Bool { builtIns.contains { $0.id == id } }
     var isBuiltIn: Bool { Self.isBuiltIn(id) }
 
@@ -121,26 +129,5 @@ extension OverlayLook.FontDesign {
         case .serif: .serif
         case .monospaced: .monospaced
         }
-    }
-}
-
-extension OverlayLook {
-    /// Missing keys fall back to defaults, so adding a field never
-    /// invalidates a saved settings file.
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        let fallback = OverlayLook.glass
-        id = container.value(.id, or: UUID())
-        name = container.value(.name, or: fallback.name)
-        surface = container.value(.surface, or: fallback.surface)
-        cornerRadius = container.value(.cornerRadius, or: fallback.cornerRadius)
-        tintHex = container.value(.tintHex, or: fallback.tintHex)
-        tintStrength = container.value(.tintStrength, or: fallback.tintStrength)
-        textBaseHex = container.value(.textBaseHex, or: fallback.textBaseHex)
-        colorsLinked = container.value(.colorsLinked, or: fallback.colorsLinked)
-        slab = container.value(.slab, or: fallback.slab)
-        fontDesign = container.value(.fontDesign, or: fallback.fontDesign)
-        fontSize = container.value(.fontSize, or: fallback.fontSize)
-        wordAppearance = container.value(.wordAppearance, or: fallback.wordAppearance)
     }
 }
