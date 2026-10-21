@@ -87,6 +87,20 @@ struct LooksTests {
         #expect(settings.secondaryModifiers == VizprSettings.default.secondaryModifiers)
     }
 
+    @Test("A file without overlayAnchors loads with an empty map")
+    func missingAnchors() throws {
+        #expect(try decode(#"{"invizMode": true}"#).overlayAnchors.isEmpty)
+        let saved = try decode(#"{"overlayAnchors": {"display-a": {"x": 0.2, "y": 0.7}}}"#)
+        #expect(saved.overlayAnchors == ["display-a": OverlayAnchor(x: 0.2, y: 0.7)])
+    }
+
+    @Test("Out-of-range anchors are clamped into 0...1")
+    func anchorsClamp() throws {
+        let settings = try decode(#"{"overlayAnchors": {"a": {"x": -3, "y": 9}, "b": {"x": 0.4, "y": 0.5}}}"#)
+        #expect(settings.overlayAnchors["a"] == OverlayAnchor(x: 0, y: 1))
+        #expect(settings.overlayAnchors["b"] == OverlayAnchor(x: 0.4, y: 0.5))
+    }
+
     @Test("A saved look missing a field gets that field's default and keeps the rest")
     func lookMissingField() throws {
         let settings = try decode("""
@@ -241,6 +255,7 @@ struct LooksTests {
         settings.restoreClipboard = false
         settings.invizMode = true
         settings.silentInputFallback = false
+        settings.overlayAnchors = ["display-a": OverlayAnchor(x: 0.3, y: 0.6)]
         var look = OverlayLook.slab
         look.id = UUID()
         look.name = "Everything"
