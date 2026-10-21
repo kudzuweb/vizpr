@@ -11,3 +11,14 @@ extension Color {
         )
     }
 }
+
+extension Color {
+    /// 6-digit RGB hex of the color in sRGB (nil if not convertible).
+    var hexString: String? {
+        guard let converted = NSColor(self).usingColorSpace(.sRGB) else { return nil }
+        let red = Int(round(converted.redComponent * 255))
+        let green = Int(round(converted.greenComponent * 255))
+        let blue = Int(round(converted.blueComponent * 255))
+        return String(format: "%02X%02X%02X", red, green, blue)
+    }
+}

@@ -340,7 +340,9 @@ becomes active. Migration runs after the merge, from a separate decode of the
 legacy keys, and the store saves once when the file carried any, so migrated
 look ids stay stable and the legacy keys leave the file.
 
-## PR 15 — Sculptable looks: `LookStyle` renders (2026-10-21)
+## PR 15 — Sculptable looks (2026-10-21)
+
+### Rendering
 
 `OverlayLook.style` (`LookStyle`, `Vizpr/Overlay/LookStyle.swift`) holds every
 adjustable aspect of a look beyond its surface body, and every field renders on
@@ -373,6 +375,26 @@ all come from the look, matching how `OverlayView` lays the text out.
 **Offscreen renders.** `NSHostingView.cacheDisplay` does not run Metal shader
 effects, so the light layer is absent from such frames. `ImageRenderer` runs
 them but cannot draw a `ScrollView`.
+### Look editor and fonts
+
+The Appearance pane edits every field of `LookStyle` (`Vizpr/Overlay/LookStyle.swift`,
+held in `OverlayLook.style`) with sliders, toggles and color pickers, one file
+per section in `Vizpr/App/Appearance/`. A live preview pinned above the
+controls renders the real `OverlayView` with the active look over a checkerboard
+while sample text types itself (`PreviewTranscript`); the typing runs in a
+`.task`, so it stops when the tab is left, and closing the Settings window
+releases the window and its views. Slider ranges live in `LookRanges` and a
+test fails when one drifts from its field's `clamped()` bound.
+
+**Fonts.** `FontLibrary` registers every `.ttf`, `.otf` and `.ttc` in
+`Application Support/Vizpr/Fonts` at launch with
+`CTFontManagerRegisterFontsForURL(url, .process, &error)`: Vizpr only, never
+installed system-wide. A file that is already registered returns error 105
+(`alreadyRegistered`), which counts as success. `NSFontManager.availableFontFamilies`
+does not list a newly registered family until a later run-loop turn (the
+CoreText family list does, at once), so `FontLibrary.families` adds the
+families it registered itself. A look stores a family name in
+`style.text.fontFamily`; nil is the system font in the look's `fontDesign`.
 
 ## Future directions (Mauria, 2026-07-05 — recorded, not scheduled)
 

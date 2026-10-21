@@ -36,6 +36,11 @@ Release builds exclude it entirely.
 look's evolution is visible in history. `design/references/` holds inspiration
 images; they are third-party work, so the folder is gitignored and stays local.
 
+A look can use any installed font, and any `.ttf`, `.otf` or `.ttc` file you put in
+`~/Library/Application Support/Vizpr/Fonts` (Settings → Appearance → Open Fonts
+Folder). Those fonts load into Vizpr only and are never installed system-wide;
+Reload Fonts picks up files added while the app is running.
+
 ## Installing (for others)
 
 This app is not notarized. To run a downloaded build, macOS Sequoia requires you
