@@ -386,10 +386,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 #endif
             } catch {
                 if let revertOnFailure {
-                    let alert = NSAlert()
-                    alert.messageText = "The selected model failed to load."
-                    alert.informativeText = "Reverting to the bundled model. (\(error))"
-                    alert.runModal()
+                    self.presentAlert(
+                        "The selected model failed to load.",
+                        detail: "Reverting to the bundled model. (\(error))"
+                    )
                     revertOnFailure()
                 } else {
                     self.failLoudly(
@@ -402,11 +402,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func failLoudly(_ message: String, detail: String) {
+        presentAlert(message, detail: detail)
+        // A test host that quit mid-run would fail the whole test run.
+        guard !Self.isHostedByTests else { return }
+        NSApp.terminate(nil)
+    }
+
+    /// `xcodebuild test` sets this (to an empty string) in the app that hosts the tests.
+    static let isHostedByTests = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+
+    /// Modal alert, except under a test host, where a dialog would block the run: log instead.
+    private func presentAlert(_ message: String, detail: String) {
+        if Self.isHostedByTests {
+            NSLog("Vizpr alert suppressed under test: %@ %@", message, detail)
+            return
+        }
         let alert = NSAlert()
         alert.messageText = message
         alert.informativeText = detail
         alert.runModal()
-        NSApp.terminate(nil)
     }
 
     // MARK: Hotkey wiring
