@@ -37,7 +37,8 @@ struct DevLogTests {
             context: DevDictationContext(
                 surroundingText: nil, bundleID: "com.apple.TextEdit", mode: "default"
             ),
-            modelTier: "qwen3-4b-instruct-2507-4bit"
+            modelTier: "qwen3-4b-instruct-2507-4bit",
+            timings: .none
         ))
         await writer.append(DevCleanupRecord(
             CleanupOutcome(
@@ -159,6 +160,101 @@ struct DevLogTests {
             timestamp: "2026-07-04T00:00:00Z"
         )
         #expect(record.rawASRText == "confirmed span. unconfirmed tail")
+    }
+
+    // MARK: Session timing marks (PR 13)
+
+    private let timingKeys = [
+        "t_capture_ms", "t_speech_onset_ms", "t_first_draft_ms", "t_first_preview_ms",
+        "t_commit_ms", "t_injected_ms", "draft_count",
+        "draft_interval_mean_ms", "draft_interval_max_ms"
+    ]
+
+    private func encodedObject(_ record: DevDictationRecord) throws -> [String: Any] {
+        let data = try JSONEncoder().encode(record)
+        return try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+
+    private func record(from tracker: DevDictationTracker) async -> DevDictationRecord {
+        await tracker.makeRecord(injectedText: "x", bundleID: nil, mode: "default", modelTier: "test")
+    }
+
+    @Test("Every row carries every timing key, null where the mark never happened")
+    func timingKeysAlwaysPresent() async throws {
+        let empty = try encodedObject(await record(from: DevDictationTracker()))
+        for key in timingKeys { #expect(empty[key] != nil, "missing \(key)") }
+        #expect(empty["t_capture_ms"] is NSNull)
+        #expect(empty["draft_interval_mean_ms"] is NSNull)
+        #expect((empty["draft_count"] as? Int) == 0)
+
+        let tracker = DevDictationTracker()
+        let start = ContinuousClock.now
+        await tracker.begin(at: start)
+        await tracker.mark(.captureStarted, at: start + .milliseconds(212))
+        let partial = try encodedObject(await record(from: tracker))
+        #expect((partial["t_capture_ms"] as? Int) == 212)
+        #expect(partial["t_injected_ms"] is NSNull)
+    }
+
+    @Test("A mark keeps its first occurrence, and marks before begin are ignored")
+    func marksKeepFirstOccurrence() async {
+        let tracker = DevDictationTracker()
+        let start = ContinuousClock.now
+        await tracker.mark(.speechOnset, at: start + .milliseconds(5))
+        await tracker.begin(at: start)
+        await tracker.mark(.speechOnset, at: start + .milliseconds(640))
+        await tracker.mark(.speechOnset, at: start + .milliseconds(900))
+        await tracker.mark(.commit, at: start + .milliseconds(5400))
+        await tracker.mark(.injected, at: start + .milliseconds(5570))
+        let timings = await record(from: tracker).timings
+
+        #expect(timings.speechOnsetMs == 640)
+        #expect(timings.commitMs == 5400)
+        #expect(timings.injectedMs == 5570)
+        #expect(timings.captureMs == nil)
+    }
+
+    @Test("Draft cadence is the mean and max gap between consecutive arrivals")
+    func draftIntervals() async {
+        let tracker = DevDictationTracker()
+        let start = ContinuousClock.now
+        await tracker.begin(at: start)
+        for offset in [2000, 3000, 4200, 5100] {
+            await tracker.observe(.draft(windowID: 0, text: "d"), at: start + .milliseconds(offset))
+        }
+        let timings = await record(from: tracker).timings
+
+        #expect(timings.firstDraftMs == 2000)
+        #expect(timings.draftCount == 4)
+        #expect(timings.draftIntervalMeanMs == 1033)   // (1000 + 1200 + 900) / 3
+        #expect(timings.draftIntervalMaxMs == 1200)
+    }
+
+    @Test("Fewer than two drafts leave the interval statistics null")
+    func singleDraftHasNoIntervals() async {
+        let tracker = DevDictationTracker()
+        let start = ContinuousClock.now
+        await tracker.begin(at: start)
+        await tracker.observe(.draft(windowID: 0, text: "d"), at: start + .milliseconds(2100))
+        let timings = await record(from: tracker).timings
+
+        #expect(timings.draftCount == 1)
+        #expect(timings.draftIntervalMeanMs == nil)
+        #expect(timings.draftIntervalMaxMs == nil)
+    }
+
+    @Test("A new session starts from a clean slate")
+    func beginResetsPreviousSession() async {
+        let tracker = DevDictationTracker()
+        let start = ContinuousClock.now
+        await tracker.begin(at: start)
+        await tracker.mark(.commit, at: start + .milliseconds(100))
+        await tracker.observe(.draft(windowID: 0, text: "d"), at: start + .milliseconds(50))
+        await tracker.begin(at: start + .seconds(10))
+        let timings = await record(from: tracker).timings
+
+        #expect(timings.commitMs == nil)
+        #expect(timings.draftCount == 0)
     }
 }
 #endif

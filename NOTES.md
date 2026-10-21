@@ -343,11 +343,18 @@ who starts speaking immediately; she waited ~0.4 s):
 | commit → inject | ~170 ms observed (settle window worked) | already good |
 | engine swap (Models pane) | pipeline rebuild + warm | rare; acceptable |
 
-Also: the dev JSONL carries NO timings (the "feedstock" claim in Future
-Directions was wrong) — records are text + dispositions only. PR 13 adds
-DICT_DEV_LOG-gated session timing marks to the dictation record so every
-dogfood measures itself. Baseline to beat: first preview ~1.6 s after
-speech onset, cadence ~1 s, commit→inject ~170 ms.
+Also: before PR 13 the dev JSONL carried no timings (the "feedstock" claim
+in Future Directions was wrong). PR 13 adds session timing marks to the
+dictation record (DICT_DEV_LOG builds only), so every dogfood measures
+itself. Each `t_*` field is integer milliseconds since the startDictation
+action, or `null` when the mark never happened: `t_capture_ms` (first audio
+chunk), `t_speech_onset_ms` (first VAD speech start), `t_first_draft_ms`
+(first draft reaches the tracker), `t_first_preview_ms` (first non-empty
+display snapshot rendered), `t_commit_ms` (commit action received) and
+`t_injected_ms` (inject returned). `draft_count` counts drafts;
+`draft_interval_mean_ms` and `draft_interval_max_ms` give the gaps between
+consecutive drafts, `null` below two drafts. Baseline to beat: first preview
+~1.6 s after speech onset, cadence ~1 s, commit→inject ~170 ms.
 
 ## PR 12 — entitlement cross-check (recorded per acceptance)
 

@@ -174,6 +174,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onSessionDrained: onSessionDrained,
             onAutoStop: { [hotkeyMonitor] in hotkeyMonitor.injectAutoStop() }
         )
+        #if DICT_DEV_LOG
+        audioPipeline?.onDevTimingMark = { [tracker] mark, instant in
+            Task { await tracker.mark(mark, at: instant) }
+        }
+        #endif
         guard audioPipeline != nil else {
             failLoudly(
                 "Vizpr's bundled voice-detection model failed to load.",
@@ -207,20 +212,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             try await cleanup.prepareEngine()
         }
 
-        // The display path: every snapshot renders on the overlay (§13); the
-        // dev logger observes the same stream. On a rebuild the previous
-        // loop is cancelled first — exactly one renderer at a time.
+        startSnapshotRenderer()
+    }
+
+    /// The display path: every snapshot renders on the overlay (§13); the
+    /// dev logger observes the same stream. On a rebuild the previous
+    /// loop is cancelled first — exactly one renderer at a time.
+    private func startSnapshotRenderer() {
         snapshotTask?.cancel()
-        snapshotTask = Task { @MainActor [tokenStream, overlay] in
+        #if DICT_DEV_LOG
+        let tracker = dictationTracker
+        snapshotTask = Task { @MainActor [tokenStream, overlay, tracker] in
             for await snapshot in await tokenStream.makeSnapshotStream() {
                 overlay.apply(snapshot)
-                #if DICT_DEV_LOG
+                if !snapshot.displayed.isEmpty {
+                    let renderedAt = ContinuousClock.now
+                    Task { await tracker.mark(.firstPreview, at: renderedAt) }
+                }
                 if snapshot != .empty {
                     VizprTranscriptLogger.note("display: \(snapshot.displayed)")
                 }
-                #endif
             }
         }
+        #else
+        snapshotTask = Task { @MainActor [tokenStream, overlay] in
+            for await snapshot in await tokenStream.makeSnapshotStream() {
+                overlay.apply(snapshot)
+            }
+        }
+        #endif
     }
 
     /// Push settings into every live consumer (PR 11: everything applies
@@ -298,10 +318,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     #if DICT_DEV_LOG
     // MARK: Dictation-record handshake (§14)
 
-    private func beginDictationRecord() async {
+    private func beginDictationRecord(startedAt: ContinuousClock.Instant) async {
         pendingInjection = nil
         sessionDrained = false
-        await dictationTracker.reset()
+        await dictationTracker.begin(at: startedAt)
     }
 
     /// Commit half: stash the injected text; write now if the drain already
@@ -447,11 +467,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 #endif
                 switch action {
                 case .startDictation:
+                    #if DICT_DEV_LOG
+                    let startedAt = ContinuousClock.now
+                    #endif
                     self?.lastSessionWasSilent = false
                     await self?.tokenStream.beginSession()
                     let sessionEpoch = self?.settleGate.beginSession() ?? 0
                     #if DICT_DEV_LOG
-                    await self?.beginDictationRecord()
+                    await self?.beginDictationRecord(startedAt: startedAt)
                     #endif
                     // Capture starts FIRST (PR 13): the AX field read is
                     // blocking IPC into the target app, and serializing the
@@ -474,6 +497,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     )
                     self?.overlay.show(targetWindowFrame: field.focusedWindowFrame)
                 case .commit:
+                    #if DICT_DEV_LOG
+                    let commitAt = ContinuousClock.now
+                    #endif
                     self?.audioPipeline?.stop()
                     // Flush-settle window (§15 amendment): let the ASR flush
                     // land on the display — in the mutable color — before
@@ -488,6 +514,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     let committed = await self?.tokenStream.commit() ?? ""
                     self?.overlay.dismiss()
                     let outcome = await self?.textInjector.inject(committed)
+                    #if DICT_DEV_LOG
+                    let injectedAt = ContinuousClock.now
+                    #endif
                     switch outcome {
                     case .skippedSecureInput:
                         // §12.1's quiet notice, headless edition — the
@@ -514,6 +543,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         VizprTranscriptLogger.note(
                             "COMMIT \(String(describing: outcome)): \(committed)"
                         )
+                        await self?.dictationTracker.mark(.commit, at: commitAt)
+                        await self?.dictationTracker.mark(.injected, at: injectedAt)
                         await self?.noteCommitted(committed)
                     }
                     #endif
