@@ -1,4 +1,6 @@
+import AppKit
 import Foundation
+import SwiftUI
 import Testing
 @testable import Vizpr
 
@@ -66,5 +68,82 @@ struct LookStyleTests {
     func paneWidthSetsPanelWidth() {
         #expect(layout.frame(contentHeight: 100, paneWidth: 700).width == 700)
         #expect(layout.frame(contentHeight: 0, paneWidth: 700).width == OverlayLayout.restingSize.width)
+    }
+}
+
+// MARK: Measurement
+
+/// The controller sizes the pane from `paneHeight(fitting:)`; a height smaller
+/// than the rendered text clips it, silently, so the measurement is checked
+/// against real SwiftUI layout for each way a look can set its font and spacing.
+@MainActor
+@Suite("Pane height fits the rendered text")
+struct PaneMeasurementTests {
+    private typealias Configure = @Sendable (inout OverlayLook) -> Void
+
+    private let text = String(
+        repeating: "The settled words read steadily while the newest draft words are still live. ", count: 6
+    )
+
+    private func look(_ configure: Configure) -> OverlayLook {
+        var look = OverlayLook.glass
+        configure(&look)
+        return look
+    }
+
+    private func renderedTextHeight(_ look: OverlayLook) -> CGFloat {
+        let style = look.style
+        let width = style.pane.width - 2 * style.pane.paddingHorizontal
+        let view = Text(text)
+            .font(look.font)
+            .lineSpacing(style.text.lineSpacing)
+            .frame(width: width, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
+        return NSHostingView(rootView: view).fittingSize.height
+    }
+
+    private static let options: [(String, Configure)] = [
+        ("system rounded", { _ in }),
+        ("system serif bold", { $0.fontDesign = .serif; $0.style.text.weight = .bold }),
+        ("Georgia semibold", { $0.style.text.fontFamily = "Georgia"; $0.style.text.weight = .semibold }),
+        ("line spacing 8", { $0.style.text.lineSpacing = 8 }),
+        ("padding 30, width 700", {
+            $0.style.pane.paddingVertical = 30
+            $0.style.pane.paddingHorizontal = 30
+            $0.style.pane.width = 700
+        }),
+        ("Georgia, spacing 8, padding 30", {
+            $0.style.text.fontFamily = "Georgia"
+            $0.style.text.lineSpacing = 8
+            $0.style.pane.paddingVertical = 30
+            $0.style.pane.paddingHorizontal = 30
+        })
+    ]
+
+    @Test("Measured height covers the text and stays within two lines of it")
+    func fits() {
+        for (name, configure) in Self.options {
+            let look = look(configure)
+            let rendered = renderedTextHeight(look)
+            let padding = 2 * look.style.pane.paddingVertical
+            let line = ceil(look.measuringFont.ascender - look.measuringFont.descender)
+            let measured = look.paneHeight(fitting: text)
+            #expect(measured >= rendered + padding, "\(name): text would clip")
+            #expect(measured <= rendered + padding + 2 * line + look.style.text.lineSpacing,
+                    "\(name): pane far taller than text")
+        }
+    }
+
+    @Test("A named family that is installed is used; a missing one falls back to the system font")
+    func familyFallback() {
+        let georgia = look { $0.style.text.fontFamily = "Georgia" }
+        #expect(georgia.measuringFont.familyName == "Georgia")
+        let missing = look { $0.style.text.fontFamily = "No Such Family 123" }
+        #expect(missing.measuringFont == look { _ in }.measuringFont)
+    }
+
+    @Test("Weight changes the measured font on the system path")
+    func weightReachesTheSystemFont() {
+        #expect(look { _ in }.measuringFont != look { $0.style.text.weight = .bold }.measuringFont)
     }
 }

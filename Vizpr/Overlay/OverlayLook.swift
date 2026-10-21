@@ -110,17 +110,82 @@ struct OverlayLook: Codable, Equatable, Sendable, Identifiable {
             ?? AnyShapeStyle(.secondary)
     }
 
+    /// The SwiftUI font. A configured family is shared with `measuringFont`
+    /// (the same NSFont); otherwise this is the system font in the look's
+    /// design, which `measuringFont` mirrors.
     var font: Font {
-        .system(size: fontSize, weight: .regular, design: fontDesign.swiftUIDesign)
+        if let family = familyFont { return Font(family as CTFont) }
+        return .system(size: fontSize, weight: style.text.weight.swiftUIWeight, design: fontDesign.swiftUIDesign)
     }
 
     /// The AppKit twin of `font`. The controller measures with this, so it
     /// must stay in step with `font`: a mismatch undersizes the pane and
     /// clips text.
     var measuringFont: NSFont {
-        let base = NSFont.systemFont(ofSize: fontSize, weight: .regular)
+        if let family = familyFont { return family }
+        let base = NSFont.systemFont(ofSize: fontSize, weight: style.text.weight.appKitWeight)
         return base.fontDescriptor.withDesign(fontDesign.appKitDesign)
             .flatMap { NSFont(descriptor: $0, size: fontSize) } ?? base
+    }
+
+    /// The configured family at the look's size and weight, or nil when none
+    /// is set or it is not installed (the look then uses the system font).
+    private var familyFont: NSFont? {
+        guard let family = style.text.fontFamily else { return nil }
+        return NSFontManager.shared.font(
+            withFamily: family, traits: [], weight: style.text.weight.fontManagerWeight, size: fontSize
+        )
+    }
+
+    /// Pane height needed for `text` at this look's width, font, line spacing
+    /// and padding, plus one extra line of headroom: growth leads the text
+    /// instead of trailing it, so a wrapping word never renders against the
+    /// clipped edge. OverlayView lays the text out with the same width,
+    /// padding, font and line spacing.
+    func paneHeight(fitting text: String) -> CGFloat {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineSpacing = style.text.lineSpacing
+        let font = measuringFont
+        let width = style.pane.width - 2 * style.pane.paddingHorizontal
+        let bounds = (text as NSString).boundingRect(
+            with: NSSize(width: width, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: font, .paragraphStyle: paragraph]
+        )
+        return ceil(bounds.height) + 2 * style.pane.paddingVertical + ceil(font.ascender - font.descender)
+    }
+}
+
+extension TextStyle.Weight {
+    var swiftUIWeight: Font.Weight {
+        switch self {
+        case .light: .light
+        case .regular: .regular
+        case .medium: .medium
+        case .semibold: .semibold
+        case .bold: .bold
+        }
+    }
+
+    var appKitWeight: NSFont.Weight {
+        switch self {
+        case .light: .light
+        case .regular: .regular
+        case .medium: .medium
+        case .semibold: .semibold
+        case .bold: .bold
+        }
+    }
+
+    /// NSFontManager's 0...15 weight scale (5 is regular, 9 is bold).
+    var fontManagerWeight: Int {
+        switch self {
+        case .light: 4
+        case .regular: 5
+        case .medium: 6
+        case .semibold: 8
+        case .bold: 9
+        }
     }
 }
 

@@ -141,16 +141,7 @@ final class OverlayController {
         if hitCap { return layout.maxHeight }
         let text = snapshot.displayed
         guard !text.isEmpty else { return OverlayLayout.restingSize.height }
-        let width = OverlayLayout.readingWidth - 36
-        let font = look.measuringFont
-        let bounds = (text as NSString).boundingRect(
-            with: NSSize(width: width, height: .greatestFiniteMagnitude),
-            options: [.usesLineFragmentOrigin, .usesFontLeading],
-            attributes: [.font: font]
-        )
-        // Extra line of headroom: growth leads the text instead of trailing
-        // it, so a wrapping word never renders against the clipped edge.
-        let measured = ceil(bounds.height) + 24 + ceil(font.ascender - font.descender)
+        let measured = look.paneHeight(fitting: text)
         let clamped = min(max(measured, OverlayLayout.restingSize.height), layout.maxHeight)
         if clamped >= layout.maxHeight { hitCap = true }
         return clamped

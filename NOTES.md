@@ -314,6 +314,40 @@ becomes active. Migration runs after the merge, from a separate decode of the
 legacy keys, and the store saves once when the file carried any, so migrated
 look ids stay stable and the legacy keys leave the file.
 
+## PR 15 — Sculptable looks: `LookStyle` renders (2026-10-21)
+
+`OverlayLook.style` (`LookStyle`, `Vizpr/Overlay/LookStyle.swift`) holds every
+adjustable aspect of a look beyond its surface body, and every field renders on
+every surface. Every default is the no-visible-change value, so `.neutral` is
+today's Glass and `OverlayLook.mergeTemplate` carries it.
+
+| Group | What it does |
+|---|---|
+| `fill` | Frost: Glass gets `colorHex` at opacity `frost` over the material (0 is the old Glass); the new `solid` surface fills at `max(frost, 0.05)`. |
+| `light` | One transparent layer (`LightLayer`, `PaneLight.metal`) over any surface: edge light, bevel, gloss (still highlight, matte 0 to shiny 1), moving sheen, grain. It draws nothing when all are 0 and ticks only for sheen or grain. |
+| `border`, `outerGlow`, `dropShadow` | `PaneEffects`. |
+| `pane` | Reading width and text padding. |
+| `text` | Font family (system font in the look's design when unset or not installed), weight, line spacing, text glow. |
+| `dot` | Recording dot color, size and pulse. |
+
+`SlabStyle` is now only the mesh body. The built-in Slab look carries its old
+light and shadow in `style.light` and `style.dropShadow`.
+
+**Glow and shadow draw only outside the pane.** Each is a blurred copy of the
+pane shape masked to the region outside the pane shape (`blendMode(.destinationOut)`
+in a `compositingGroup`), because a copy left behind see-through glass would
+tint its interior. The overlay panel grows on every side by the largest enabled
+effect extent (`PaneEffects.margin(for:)`), and the pane's frame inside it does
+not move.
+
+**Measurement.** `OverlayLook.paneHeight(fitting:)` is the one place that
+measures: width, padding, font, and line spacing (through `NSParagraphStyle`)
+all come from the look, matching how `OverlayView` lays the text out.
+
+**Offscreen renders.** `NSHostingView.cacheDisplay` does not run Metal shader
+effects, so the light layer is absent from such frames. `ImageRenderer` runs
+them but cannot draw a `ScrollView`.
+
 ## Future directions (Mauria, 2026-07-05 — recorded, not scheduled)
 
 1. **Verbatim mode:** "I should be able to talk casually and have it show up
