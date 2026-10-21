@@ -81,8 +81,7 @@ actor ModelRegistry {
 
     /// Default user models root: ~/Library/Application Support/Vizpr/Models/.
     static var defaultUserRoot: URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Vizpr/Models", isDirectory: true)
+        StorageRoot.url.appendingPathComponent("Models", isDirectory: true)
     }
 
     init(userModelsRoot: URL = ModelRegistry.defaultUserRoot, bundled: [ModelEntry]? = nil) {

@@ -409,7 +409,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// `xcodebuild test` sets this (to an empty string) in the app that hosts the tests.
-    static let isHostedByTests = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+    nonisolated static let isHostedByTests = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
 
     /// Modal alert, except under a test host, where a dialog would block the run: log instead.
     private func presentAlert(_ message: String, detail: String) {

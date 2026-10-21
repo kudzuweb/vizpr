@@ -126,9 +126,7 @@ final class SettingsStore: ObservableObject {
     private var observers: [(VizprSettings) -> Void] = []
 
     init(fileURL: URL? = nil) {
-        let url = fileURL ?? FileManager.default
-            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Vizpr/settings.json")
+        let url = fileURL ?? StorageRoot.url.appendingPathComponent("settings.json")
         self.fileURL = url
         settings = .default
         guard let data = try? Data(contentsOf: url) else { return }
