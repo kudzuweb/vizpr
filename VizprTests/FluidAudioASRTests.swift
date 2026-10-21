@@ -73,6 +73,10 @@ struct FluidAudioASRTests {
         let feedTask = Task {
             for start in stride(from: 0, to: composite.count, by: batchSize) {
                 feeder.yield(Array(composite[start ..< min(start + batchSize, composite.count)]))
+                // Drafts decode concurrently with ingestion and stop at end of
+                // input, so feed at a pace that gives the draft task time to
+                // run, as live capture does.
+                try? await Task.sleep(for: .milliseconds(40))
             }
             feeder.finish()
         }

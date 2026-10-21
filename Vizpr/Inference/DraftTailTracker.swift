@@ -1,19 +1,25 @@
-/// Pure bookkeeping for the draft track (PR 4.5).
+/// Pure bookkeeping for the draft track (PR 4.5, adaptive cadence PR 13).
 ///
 /// FluidAudio's sliding-window manager only emits after a full window + right
 /// context (~12 s) — its advertised 1 s hypothesis track is dead config in the
-/// pinned revision. The draft track fills that gap: every ~1 s of new audio it
-/// re-decodes the *unconfirmed tail* (all audio since the last confirmation,
-/// plus a little confirmed left-context for acoustic continuity) and publishes
-/// the result as a `.draft`. One second is the refresh cadence; the decode
-/// context is the whole tail, so accuracy grows as the tail does.
+/// pinned revision. The draft track fills that gap: it re-decodes the
+/// *unconfirmed tail* (all audio since the last confirmation, plus a little
+/// confirmed left-context for acoustic continuity) and publishes the result as
+/// a `.draft`. The cadence is adaptive: the caller asks for a request as soon
+/// as its previous decode has finished, and a request is granted once at least
+/// `cadenceFloorSamples` of new audio has arrived, so the effective refresh
+/// interval is max(floor, decode time). The decode context is the whole tail,
+/// so accuracy grows as the tail does.
 ///
 /// This type owns the decisions (what samples to decode, when, what to drop);
 /// the actor around it owns the buffers and the model call — keeping the
 /// boundary math unit-testable without any inference.
 struct DraftTailTracker {
-    /// New-audio accumulation that triggers a draft decode (~1 s at 16 kHz).
-    let cadenceSamples: Int
+    /// Minimum new audio between two draft decodes (500 ms at 16 kHz). Decodes
+    /// are not otherwise paced here: the caller requests the next one when the
+    /// previous has finished, so a slow decoder lowers the refresh rate on its
+    /// own and a fast one is held to this floor.
+    let cadenceFloorSamples: Int
     /// Confirmed audio carried before the tail as acoustic left context (~2 s).
     let leftContextSamples: Int
     /// Decode-cost ceiling: the tail passed to the model is capped at this many
@@ -33,12 +39,12 @@ struct DraftTailTracker {
     private var lastDecodeTotal = 0
 
     init(
-        cadenceSamples: Int = 16_000,
+        cadenceFloorSamples: Int = 8_000,
         leftContextSamples: Int = 32_000,
         maxDecodeSamples: Int = 192_000,
         minTailSamples: Int = 24_000
     ) {
-        self.cadenceSamples = cadenceSamples
+        self.cadenceFloorSamples = cadenceFloorSamples
         self.leftContextSamples = leftContextSamples
         self.maxDecodeSamples = maxDecodeSamples
         self.minTailSamples = minTailSamples
@@ -64,9 +70,9 @@ struct DraftTailTracker {
     }
 
     /// Ask whether a draft decode is due; consuming the request resets the
-    /// cadence clock.
+    /// floor clock.
     mutating func takeDecodeRequest() -> DecodeRequest? {
-        guard totalSamples - lastDecodeTotal >= cadenceSamples else { return nil }
+        guard totalSamples - lastDecodeTotal >= cadenceFloorSamples else { return nil }
         guard totalSamples - confirmedBoundary >= minTailSamples else {
             // Too little unconfirmed audio to decode usefully (nothing new, or
             // just a sub-threshold fragment of a fresh window). Skip, but reset
