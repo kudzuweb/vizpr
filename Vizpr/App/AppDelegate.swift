@@ -83,6 +83,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setUpStatusItem()
         modelsModel.startWatching()
         setUpAudioPipeline()
+        overlay.onAnchorChange = { [weak self] displayID, anchor in
+            self?.settingsStore.update { $0.overlayAnchors[displayID] = anchor }
+        }
         applySettings(settingsStore.settings)
         settingsStore.onChange { [weak self] settings in
             self?.applySettings(settings)
@@ -275,6 +278,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         audioPipeline?.setAutoStopTimeout(.seconds(settings.autoStopSeconds))
         audioPipeline?.silentInputFallback = settings.silentInputFallback
         textInjector.setRestoreEnabled(settings.restoreClipboard)
+        overlay.setAnchors(settings.overlayAnchors)
         overlay.setLook(settings.activeLook)
         overlay.setInviz(settings.invizMode)
         Task { [tokenStream, smartCleanup, asrEngine] in
@@ -603,6 +607,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshMenu()
     }
 
+    @objc private func resetOverlayPosition() {
+        settingsStore.resetOverlayPositions()
+    }
+
     @objc private func cycleVocabulary() {
         let name = vocabularyModel.cycle()
         #if DICT_DEV_LOG
@@ -686,6 +694,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(cycleItem(
             "Look: \(settingsStore.settings.activeLook.name)", #selector(cycleLook)
         ))
+        menu.addItem(cycleItem("Reset Overlay Position", #selector(resetOverlayPosition)))
 
         let settings = NSMenuItem(
             title: "Settings…", action: #selector(openSettings), keyEquivalent: ","

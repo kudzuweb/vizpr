@@ -190,7 +190,8 @@ struct PreviewPanelTests {
         #expect(panel.canBecomeKey == false)
         #expect(panel.canBecomeMain == false)
         #expect(panel.styleMask.contains(.nonactivatingPanel))
-        #expect(panel.ignoresMouseEvents)
+        // Click-through was dropped on purpose (2026-10-21) so the pane can be dragged.
+        #expect(panel.ignoresMouseEvents == false)
         #expect(panel.collectionBehavior.contains(.canJoinAllSpaces))
         #expect(panel.collectionBehavior.contains(.fullScreenAuxiliary))
         #expect(panel.level == .floating)
