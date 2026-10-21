@@ -31,7 +31,25 @@ final class OverlayController {
         look = newLook
         // Font size and design change the measured height.
         hitCap = false
-        if panel.isVisible { render(lastSnapshot) }
+        if panel.isVisible {
+            // Glow, shadow and width change how much room the panel needs.
+            positionPanel()
+            render(lastSnapshot)
+        }
+    }
+
+    /// The panel spans the pane's fixed bottom edge to the cap, plus the look's
+    /// effect margin on every side; only the SwiftUI capsule inside animates.
+    private func positionPanel() {
+        guard let layout else { return }
+        panel.setFrame(
+            layout.frame(
+                contentHeight: layout.maxHeight,
+                paneWidth: look.style.pane.width,
+                margin: PaneEffects.margin(for: look.style)
+            ),
+            display: true
+        )
     }
 
     private var reduceMotion: Bool {
@@ -60,7 +78,7 @@ final class OverlayController {
         // The panel is a FIXED transparent stage spanning bottom edge to cap;
         // only the SwiftUI capsule inside animates (field catch: animating
         // the window frame lagged the text and clipped it mid-growth).
-        panel.setFrame(layout.frame(contentHeight: layout.maxHeight), display: true)
+        positionPanel()
         render(.empty)
         panel.orderFrontRegardless()
     }

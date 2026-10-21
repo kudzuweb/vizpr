@@ -13,6 +13,7 @@ struct PaneSurface: View {
             surface
             LightLayer(light: look.style.light, cornerRadius: look.cornerRadius, animated: animated)
         }
+        .paneEffects(look.style, cornerRadius: look.cornerRadius)
     }
 
     @ViewBuilder private var surface: some View {

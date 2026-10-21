@@ -65,7 +65,11 @@ struct OverlayView: View {
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity)
+        .padding(effectsMargin)
     }
+
+    /// Room the panel leaves around the pane for glow and shadow.
+    private var effectsMargin: CGFloat { PaneEffects.margin(for: look.style) }
 
     @ViewBuilder private var transcript: some View {
         let resting = snapshot == .empty
@@ -115,5 +119,6 @@ struct OverlayView: View {
             .animation(animated ? .easeOut(duration: 0.15) : nil, value: resting)
         }
         .frame(maxWidth: .infinity)
+        .padding(effectsMargin)
     }
 }
