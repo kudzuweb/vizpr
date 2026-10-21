@@ -9,7 +9,7 @@ import SwiftUI
 /// contract (VizprSettings.mutableOpacityRatio): a look recolors it, never
 /// collapses it.
 struct OverlayLook: Codable, Equatable, Sendable, Identifiable {
-    enum Surface: String, Codable, Sendable, CaseIterable { case glass, slab }
+    enum Surface: String, Codable, Sendable, CaseIterable { case glass, slab, solid }
     enum FontDesign: String, Codable, Sendable, CaseIterable { case rounded, standard, serif, monospaced }
     /// Reserved: rendered by a later PR.
     enum WordAppearance: String, Codable, Sendable, CaseIterable { case instant, fade, blurIn }
@@ -35,6 +35,7 @@ struct OverlayLook: Codable, Equatable, Sendable, Identifiable {
     var fontDesign: FontDesign = .rounded
     var fontSize: Double = 16
     var wordAppearance: WordAppearance = .instant
+    var style: LookStyle = .neutral
 
     static let glass = OverlayLook(
         id: UUID(uuidString: "6B1E5A4C-0D2F-4C8E-9A57-3F1B7D20A001")!,
@@ -47,8 +48,18 @@ struct OverlayLook: Codable, Equatable, Sendable, Identifiable {
         id: UUID(uuidString: "6B1E5A4C-0D2F-4C8E-9A57-3F1B7D20A002")!,
         name: "Slab",
         surface: .slab,
-        textBaseHex: "F2EEF8"
+        textBaseHex: "F2EEF8",
+        style: slabLightAndShadow
     )
+
+    /// The Slab look's light and shadow: the values tuned in PR 14, now
+    /// expressed as the generic light layer and drop shadow.
+    private static var slabLightAndShadow: LookStyle {
+        var style = LookStyle.neutral
+        style.light = LightStyle(edgeLight: 0.25, bevel: 0.3, grain: 0.02)
+        style.dropShadow = ShadowStyle(enabled: true, colorHex: "000000", radius: 8, x: 0, y: 3, opacity: 0.25)
+        return style
+    }
 
     static let builtIns = [glass, slab]
 
@@ -73,6 +84,7 @@ struct OverlayLook: Codable, Equatable, Sendable, Identifiable {
                                 Self.tintStrengthRange.upperBound)
         look.textBaseHex = look.textBaseHex.flatMap(VizprSettings.sanitizeHex)
         look.slab = look.slab.clamped()
+        look.style = look.style.clamped()
         look.fontSize = min(max(look.fontSize, Self.fontSizeRange.lowerBound),
                             Self.fontSizeRange.upperBound)
         return look

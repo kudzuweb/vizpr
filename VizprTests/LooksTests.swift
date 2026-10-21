@@ -111,7 +111,7 @@ struct LooksTests {
         look.tintStrength = 0.4
         look.textBaseHex = "ABCDEF"
         look.colorsLinked = true
-        look.slab.grain = 0.1
+        look.slab.meshLoopSeconds = 12
         look.fontDesign = .serif
         look.fontSize = 20
         look.wordAppearance = .fade
@@ -139,10 +139,10 @@ struct LooksTests {
     func partialSlab() throws {
         let settings = try decode("""
         {"looks": [{"id": "5A1B6A52-6F42-4B7E-8D5C-2C0B5C1D9E01", "name": "Mine",
-                    "surface": "slab", "slab": {"grain": 0.1}}]}
+                    "surface": "slab", "slab": {"meshLoopSeconds": 12}}]}
         """)
         let slab = try #require(settings.looks.first).slab
-        #expect(slab.grain == 0.1)
+        #expect(slab.meshLoopSeconds == 12)
         #expect(slab.meshDrift == SlabStyle.default.meshDrift)
         #expect(slab.meshColorsHex == SlabStyle.defaultMeshColors)
     }
@@ -155,7 +155,7 @@ struct LooksTests {
         custom.name = "Mine"
         custom.fontDesign = .serif
         custom.cornerRadius = 12
-        custom.slab.grain = 0.1
+        custom.slab.meshLoopSeconds = 12
         settings.looks = [custom]
         settings.activeLookID = custom.id
         settings.autoStopSeconds = 9

@@ -14,7 +14,21 @@ struct PaneSurface: View {
             GlassSurface(look: look)
         case .slab:
             SlabSurface(style: look.slab, cornerRadius: look.cornerRadius, animated: animated)
+        case .solid:
+            SolidSurface(style: look.style.fill, cornerRadius: look.cornerRadius)
         }
+    }
+}
+
+/// A flat rounded-rectangle fill. The 0.05 floor keeps the pane visible (and
+/// its text legible against the desktop) when frost is dragged to 0.
+private struct SolidSurface: View {
+    let style: FillStyle
+    let cornerRadius: CGFloat
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .fill((Color(hex: style.colorHex) ?? .black).opacity(max(style.frost, 0.05)))
     }
 }
 
@@ -28,6 +42,7 @@ private struct GlassSurface: View {
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: look.cornerRadius, style: .continuous)
         let tint = look.tintColor.opacity(look.tintStrength)
+        let frost = look.style.fill
         Group {
             if #available(macOS 26, *) {
                 shape.fill(.clear)
@@ -38,6 +53,8 @@ private struct GlassSurface: View {
                     .clipShape(shape)
             }
         }
+        // Frost covers the material: 0 leaves it as-is, 1 hides what is behind.
+        .overlay(shape.fill(Color(hex: frost.colorHex)?.opacity(frost.frost) ?? .clear))
     }
 }
 
