@@ -70,7 +70,7 @@ struct SlabLayer: View {
                 .float(Float(cornerRadius))
             ))
             .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            .shadow(color: .black.opacity(style.shadow), radius: 18, y: 8)
+            .shadow(color: .black.opacity(style.shadow), radius: 8, y: 3)
         }
     }
 }
