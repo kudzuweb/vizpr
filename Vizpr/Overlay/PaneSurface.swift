@@ -13,9 +13,7 @@ struct PaneSurface: View {
         case .glass:
             GlassSurface(look: look)
         case .slab:
-            // TEMPORARY stand-in: replaced by SlabSurface(style:cornerRadius:animated:) at integration.
-            RoundedRectangle(cornerRadius: look.cornerRadius, style: .continuous)
-                .fill(Color(hex: look.slab.meshColorsHex[4]) ?? .black)
+            SlabSurface(style: look.slab, cornerRadius: look.cornerRadius, animated: animated)
         }
     }
 }

@@ -27,7 +27,7 @@ struct SlabStyle: Codable, Equatable, Sendable {
     static let defaultMeshColors = [
         "1B1726", "231C35", "1A1624",
         "251E3A", "30264A", "221B31",
-        "18141F", "201A2C", "16121C",
+        "18141F", "201A2C", "16121C"
     ]
     static let `default` = SlabStyle()
 
