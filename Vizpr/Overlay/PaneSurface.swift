@@ -9,6 +9,13 @@ struct PaneSurface: View {
     let animated: Bool
 
     var body: some View {
+        ZStack {
+            surface
+            LightLayer(light: look.style.light, cornerRadius: look.cornerRadius, animated: animated)
+        }
+    }
+
+    @ViewBuilder private var surface: some View {
         switch look.surface {
         case .glass:
             GlassSurface(look: look)
