@@ -396,6 +396,36 @@ CoreText family list does, at once), so `FontLibrary.families` adds the
 families it registered itself. A look stores a family name in
 `style.text.fontFamily`; nil is the system font in the look's `fontDesign`.
 
+## Draggable overlay (Mauria, 2026-10-21)
+
+**Focus invariant.** The overlay panel never takes keyboard focus and never
+activates Vizpr: `PreviewPanel` is `.nonactivatingPanel` and `canBecomeKey` and
+`canBecomeMain` return false. Click-through was dropped on purpose so the pane
+can be dragged, so a click on the pane now lands on the pane and not on the app
+behind it. The transparent stage around the pane takes clicks too.
+
+**Dragging.** `DragHostingView` (`Vizpr/Overlay/DragHostingView.swift`) answers
+every hit inside the panel and calls `PreviewPanel.drag(with:)`, which runs
+`performDrag(with:)` and reports the new frame through `onDragEnd`.
+
+**Placement (§13).** The pane is anchored by its bottom-center, stored as
+fractions (`OverlayAnchor`, 0...1) of the display's visible frame, so a position
+survives a resolution change. A nil anchor is the old lower-center
+(0.5, 0.25). The pane grows upward from the anchor; its maximum height is the
+smaller of half the screen and the distance from the anchor to the top of the
+screen minus `OverlayLayout.topInset`, and its horizontal position is held
+inside the screen. The effects margin wraps the pane and does not move it.
+`OverlayLayout.anchor(forPaneFrame:)` is the inverse and pulls a frame dragged
+partly off-screen back on.
+
+**Persistence.** `VizprSettings.overlayAnchors` maps a display's UUID
+(`NSScreen.displayUUID`, from `CGDisplayCreateUUIDFromDisplayID`) to its anchor.
+The target screen is still chosen as before (the display holding the focused
+window); that display's anchor positions the pane. Dropping the pane on another
+display saves the anchor for that display. The inviz pill sits in the same
+stage, so it follows the same anchor. The menu item "Reset Overlay Position"
+clears every anchor.
+
 ## Future directions (Mauria, 2026-07-05 — recorded, not scheduled)
 
 1. **Verbatim mode:** "I should be able to talk casually and have it show up
