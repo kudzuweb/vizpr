@@ -73,6 +73,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // app can only load models that shipped in its bundle (invariant 1).
         DownloadUtils.enforceOffline = true
 
+        // Before the overlay can render: a look may name a font from the Fonts folder.
+        FontLibrary.registerAll()
+
         // LSUIElement already implies accessory; set it explicitly so the policy
         // is unambiguous regardless of how the process was launched.
         NSApp.setActivationPolicy(.accessory)

@@ -35,6 +35,7 @@ struct OverlayLook: Codable, Equatable, Sendable, Identifiable {
     var fontDesign: FontDesign = .rounded
     var fontSize: Double = 16
     var wordAppearance: WordAppearance = .instant
+    var style: LookStyle = .neutral
 
     static let glass = OverlayLook(
         id: UUID(uuidString: "6B1E5A4C-0D2F-4C8E-9A57-3F1B7D20A001")!,
