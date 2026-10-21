@@ -368,6 +368,15 @@ tint its interior. The overlay panel grows on every side by the largest enabled
 effect extent (`PaneEffects.margin(for:)`), and the pane's frame inside it does
 not move.
 
+**Backdrop.** `style.backdrop` (`BackdropLayer`) is a neutral dimming layer drawn
+below the surface, light and border. The fill is both the glass's color and its
+blocker, so raising its opacity to quiet busy content behind the pane turns the
+glass into tinted plastic. The backdrop blocks without touching the glass: it
+is a uniform `colorHex` at `strength` inside the pane, fading to nothing over
+`feather` points outside it (a blurred, slightly grown copy of the pane shape,
+masked to the outside like glow and shadow). It is off by default, and
+`PaneEffects.margin(for:)` includes its reach when enabled.
+
 **Measurement.** `OverlayLook.paneHeight(fitting:)` is the one place that
 measures: width, padding, font, and line spacing (through `NSParagraphStyle`)
 all come from the look, matching how `OverlayView` lays the text out.

@@ -10,6 +10,7 @@ struct PaneSurface: View {
 
     var body: some View {
         ZStack {
+            BackdropLayer(style: look.style.backdrop, cornerRadius: look.cornerRadius)
             surface
             LightLayer(light: look.style.light, cornerRadius: look.cornerRadius, animated: animated)
         }

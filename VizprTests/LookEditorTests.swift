@@ -7,6 +7,8 @@ import Testing
 struct LookEditorTests {
     private let styleRanges: [(WritableKeyPath<LookStyle, Double>, ClosedRange<Double>)] = [
         (\.fill.frost, LookRanges.unit),
+        (\.backdrop.strength, LookRanges.backdropStrength),
+        (\.backdrop.feather, LookRanges.backdropFeather),
         (\.light.edgeLight, LookRanges.unit),
         (\.light.bevel, LookRanges.unit),
         (\.light.gloss, LookRanges.unit),

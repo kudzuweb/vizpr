@@ -11,6 +11,7 @@ import Foundation
 /// explicitly.
 struct LookStyle: Codable, Equatable, Sendable {
     var fill = FillStyle()
+    var backdrop = BackdropStyle()
     var light = LightStyle()
     var border = BorderStyle()
     var outerGlow = GlowStyle()
@@ -24,6 +25,7 @@ struct LookStyle: Codable, Equatable, Sendable {
     func clamped() -> LookStyle {
         LookStyle(
             fill: fill.clamped(),
+            backdrop: backdrop.clamped(),
             light: light.clamped(),
             border: border.clamped(),
             outerGlow: outerGlow.clamped(),
@@ -45,6 +47,24 @@ struct FillStyle: Codable, Equatable, Sendable {
     func clamped() -> FillStyle {
         FillStyle(frost: frost.clamped(to: 0...1),
                   colorHex: VizprSettings.sanitizeHex(colorHex) ?? FillStyle().colorHex)
+    }
+}
+
+/// A neutral dimming layer BEHIND the surface: it quiets busy content so text
+/// reads, without coloring the glass above it. Disabled is no layer at all.
+struct BackdropStyle: Codable, Equatable, Sendable {
+    var enabled = false
+    var colorHex = "000000"
+    /// Opacity inside the pane, 0...0.9.
+    var strength = 0.45
+    /// How far past the pane edge the backdrop fades to nothing, points, 0...60.
+    var feather = 16.0
+
+    func clamped() -> BackdropStyle {
+        BackdropStyle(enabled: enabled,
+                      colorHex: VizprSettings.sanitizeHex(colorHex) ?? BackdropStyle().colorHex,
+                      strength: strength.clamped(to: 0...0.9),
+                      feather: feather.clamped(to: 0...60))
     }
 }
 

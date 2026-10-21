@@ -17,6 +17,7 @@ struct AppearancePane: View {
             Form {
                 lookSection
                 SurfaceSection(store: store)
+                BackdropSection(store: store)
                 FinishSection(store: store)
                 BorderSection(store: store)
                 GlowSection(store: store)

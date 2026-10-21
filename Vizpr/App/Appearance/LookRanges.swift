@@ -7,6 +7,9 @@ import Foundation
 enum LookRanges {
     static let unit = 0.0...1.0
 
+    static let backdropStrength = 0.0...0.9
+    static let backdropFeather = 0.0...60.0
+
     static let grain = 0.0...0.2
     static let sheenSweepSeconds = 1.0...30.0
 

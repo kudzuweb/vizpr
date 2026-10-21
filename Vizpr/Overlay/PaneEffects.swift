@@ -11,13 +11,14 @@ struct PaneEffects: ViewModifier {
     private static let blurReach = 2.0
 
     /// Room the panel must leave around the pane so the enabled effects are
-    /// not clipped: the largest extent of the glow and the shadow.
+    /// not clipped: the largest extent of the glow, the shadow and the backdrop.
     static func margin(for style: LookStyle) -> CGFloat {
         let glow = style.outerGlow.enabled ? style.outerGlow.radius * blurReach : 0
         let shadow = style.dropShadow.enabled
             ? style.dropShadow.radius * blurReach + max(abs(style.dropShadow.x), abs(style.dropShadow.y))
             : 0
-        return ceil(max(glow, shadow))
+        let backdrop = style.backdrop.enabled ? BackdropLayer.reach(feather: style.backdrop.feather) : 0
+        return ceil(max(glow, shadow, backdrop))
     }
 
     func body(content: Content) -> some View {
@@ -53,16 +54,22 @@ struct PaneEffects: ViewModifier {
                     .blur(radius: glow.radius)
             }
         }
-        .mask {
-            Rectangle()
-                .padding(-Self.margin(for: style) - 1)
-                .overlay { shape.fill(.black).blendMode(.destinationOut) }
-                .compositingGroup()
-        }
+        .maskedToOutside(of: shape, margin: Self.margin(for: style))
     }
 }
 
 extension View {
+    /// Keeps only the part of the view outside `shape`, within `margin` points
+    /// of it.
+    func maskedToOutside(of shape: RoundedRectangle, margin: CGFloat) -> some View {
+        mask {
+            Rectangle()
+                .padding(-margin - 1)
+                .overlay { shape.fill(.black).blendMode(.destinationOut) }
+                .compositingGroup()
+        }
+    }
+
     func paneEffects(_ style: LookStyle, cornerRadius: CGFloat) -> some View {
         modifier(PaneEffects(style: style, cornerRadius: cornerRadius))
     }

@@ -32,6 +32,19 @@ struct LookStyleTests {
         #expect(style.fill.frost == 0)
     }
 
+    @Test("A saved look without a backdrop key renders no backdrop")
+    func missingBackdropKeyDrawsNothing() throws {
+        let json = """
+        {"looks": [{"id": "5A1B6A52-6F42-4B7E-8D5C-2C0B5C1D9E01", "name": "Old", "surface": "solid",
+                    "style": {"fill": {"frost": 0.16, "colorHex": "2A1F3D"}}}]}
+        """
+        let style = try #require(try VizprSettings.load(from: Data(json.utf8)).looks.first).style
+        #expect(style.fill.frost == 0.16, "the saved style loaded")
+        #expect(style.backdrop == BackdropStyle())
+        #expect(!style.backdrop.enabled)
+        #expect(PaneEffects.margin(for: style) == 0)
+    }
+
     // MARK: Panel margin
 
     private let layout = OverlayLayout(screen: CGRect(x: 0, y: 0, width: 1600, height: 1000))
@@ -50,6 +63,11 @@ struct LookStyleTests {
         style.dropShadow.enabled = false
         style.outerGlow.enabled = false
         #expect(PaneEffects.margin(for: style) == 0, "disabled effects take no room")
+
+        style.backdrop = BackdropStyle(enabled: true, colorHex: "000000", strength: 0.5, feather: 60)
+        #expect(PaneEffects.margin(for: style) == 66, "the backdrop's fade reaches a little past its feather")
+        style.backdrop.enabled = false
+        #expect(PaneEffects.margin(for: style) == 0)
     }
 
     @Test("A margin grows the panel around the pane without moving the pane")
