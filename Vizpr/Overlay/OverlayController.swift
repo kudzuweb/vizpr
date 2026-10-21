@@ -14,7 +14,7 @@ final class OverlayController {
     /// Once the capsule caps, stop measuring: the O(session-length)
     /// boundingRect result is clamped anyway (review finding).
     private var hitCap = false
-    private var theme = OverlayTheme.standard
+    private var look = OverlayLook.glass
     private var lastSnapshot = DisplaySnapshot.empty
 
     private var inviz = false
@@ -27,8 +27,10 @@ final class OverlayController {
     }
 
     /// Live setting (PR 11): re-renders immediately so the picker previews.
-    func setTheme(_ newTheme: OverlayTheme) {
-        theme = newTheme
+    func setLook(_ newLook: OverlayLook) {
+        look = newLook
+        // Font size and design change the measured height.
+        hitCap = false
         if panel.isVisible { render(lastSnapshot) }
     }
 
@@ -100,7 +102,7 @@ final class OverlayController {
             recording: recording,
             capsuleHeight: capsuleHeight(for: snapshot),
             animated: !reduceMotion,
-            theme: theme,
+            look: look,
             inviz: inviz
         )
         if let hosting {
@@ -113,18 +115,16 @@ final class OverlayController {
     }
 
     /// Measured text height at the reading width, clamped to layout bounds.
-    /// Measures with the ROUNDED design the view renders in — measuring with
-    /// the plain system font undersized the capsule and clipped text (field
-    /// catch).
+    /// Measures with the look's own font (`measuringFont`, the twin of the
+    /// view's): measuring with any other font undersizes the capsule and
+    /// clips text (field catch).
     private func capsuleHeight(for snapshot: DisplaySnapshot) -> CGFloat {
         guard let layout else { return OverlayLayout.restingSize.height }
         if hitCap { return layout.maxHeight }
         let text = snapshot.displayed
         guard !text.isEmpty else { return OverlayLayout.restingSize.height }
         let width = OverlayLayout.readingWidth - 36
-        let base = NSFont.systemFont(ofSize: 16, weight: .regular)
-        let font = base.fontDescriptor.withDesign(.rounded)
-            .flatMap { NSFont(descriptor: $0, size: 16) } ?? base
+        let font = look.measuringFont
         let bounds = (text as NSString).boundingRect(
             with: NSSize(width: width, height: .greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin, .usesFontLeading],

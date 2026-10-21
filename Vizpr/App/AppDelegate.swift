@@ -272,7 +272,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         audioPipeline?.setAutoStopTimeout(.seconds(settings.autoStopSeconds))
         audioPipeline?.silentInputFallback = settings.silentInputFallback
         textInjector.setRestoreEnabled(settings.restoreClipboard)
-        overlay.setTheme(OverlayTheme.from(settings))
+        overlay.setLook(settings.activeLook)
         overlay.setInviz(settings.invizMode)
         Task { [tokenStream, smartCleanup, asrEngine] in
             await tokenStream.setSettleSentences(settings.settleSentences)
@@ -410,7 +410,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// `xcodebuild test` sets this (to an empty string) in the app that hosts the tests.
-    static let isHostedByTests = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+    nonisolated static let isHostedByTests = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
 
     /// Modal alert, except under a test host, where a dialog would block the run: log instead.
     private func presentAlert(_ message: String, detail: String) {
@@ -595,6 +595,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
     }
 
+    @objc private func cycleLook() {
+        settingsStore.cycleLook()
+        refreshMenu()
+    }
+
     @objc private func cycleVocabulary() {
         let name = vocabularyModel.cycle()
         #if DICT_DEV_LOG
@@ -635,6 +640,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshMenu()
     }
 
+    private func cycleItem(_ title: String, _ action: Selector) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        return item
+    }
+
     private func refreshMenu() {
         let menu = NSMenu()
         let header = NSMenuItem(title: "Vizpr", action: nil, keyEquivalent: "")
@@ -666,12 +677,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             menu.addItem(.separator())
         }
 
-        let dictionary = NSMenuItem(
-            title: "Dictionary: \(vocabularyModel.library.activeDisplayName)",
-            action: #selector(cycleVocabulary), keyEquivalent: ""
-        )
-        dictionary.target = self
-        menu.addItem(dictionary)
+        menu.addItem(cycleItem(
+            "Dictionary: \(vocabularyModel.library.activeDisplayName)", #selector(cycleVocabulary)
+        ))
+        menu.addItem(cycleItem(
+            "Look: \(settingsStore.settings.activeLook.name)", #selector(cycleLook)
+        ))
 
         let settings = NSMenuItem(
             title: "Settings…", action: #selector(openSettings), keyEquivalent: ","
