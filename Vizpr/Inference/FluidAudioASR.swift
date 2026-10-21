@@ -47,7 +47,9 @@ actor FluidAudioASR: TranscriptionEngine {
     // config in the pinned revision — nothing consumes hypothesisChunkSeconds,
     // so its first output arrives only after chunk+rightContext (~12s of audio;
     // field-measured). The draft track fills the gap: a second, stateless batch
-    // decode over the unconfirmed tail every ~1s, published as .draft events.
+    // decode over the unconfirmed tail, published as .draft events. Decoding runs
+    // in its own task, decoupled from audio ingestion, and refreshes as fast as
+    // the decoder sustains (floor: DraftTailTracker.cadenceFloorSamples).
     // One session at a time (enforced by AudioPipeline); this state is reset in
     // beginSession().
     private var batchManager: AsrManager?
@@ -56,6 +58,10 @@ actor FluidAudioASR: TranscriptionEngine {
     private var bufferStartSample = 0
     private var confirmedWindows = 0
     private var lastDraftText = ""
+    /// True while tail drafts may be published. Closed (under actor
+    /// serialization) before the end-of-session flush, so no tail draft can be
+    /// yielded after the flush's finals.
+    private var draftsOpen = false
 
     /// Audio covered by one confirmed window (locked config: 10 s @ 16 kHz).
     /// Confirmations don't carry reliable session-absolute sample positions, so
@@ -78,23 +84,30 @@ actor FluidAudioASR: TranscriptionEngine {
         bufferStartSample = 0
         confirmedWindows = 0
         lastDraftText = ""
+        draftsOpen = true
     }
 
-    /// A draft decode the pump loop should run now.
+    private func closeDrafts() {
+        draftsOpen = false
+    }
+
+    /// A draft decode the draft task should run now.
     private struct DraftPlan {
         let samples: [Float]
         let windowID: Int
     }
 
-    /// Ingest session audio; returns a decode plan when a draft pass is due.
-    private func ingest(_ samples: [Float]) -> DraftPlan? {
+    /// Ingest session audio. Buffer bookkeeping only; never decodes.
+    private func ingest(_ samples: [Float]) {
         sessionBuffer.append(contentsOf: samples)
         tailTracker.append(sampleCount: samples.count)
+        trimBuffer()
+    }
 
-        guard let request = tailTracker.takeDecodeRequest() else {
-            trimBuffer()
-            return nil
-        }
+    /// A decode plan if a draft pass is due, or nil. The slice is copied here,
+    /// inside the actor call, so later trims cannot invalidate it.
+    private func takeDraftPlan() -> DraftPlan? {
+        guard let request = tailTracker.takeDecodeRequest() else { return nil }
         // Decode from the unconfirmed boundary (not the left-context start):
         // including confirmed audio would re-transcribe already-final text into
         // the draft. The cost is slightly weaker acoustics on the first word
@@ -105,6 +118,16 @@ actor FluidAudioASR: TranscriptionEngine {
         let slice = Array(sessionBuffer[start ..< end])
         trimBuffer()
         return DraftPlan(samples: slice, windowID: confirmedWindows)
+    }
+
+    /// Publish a tail draft unless drafts are closed or the text repeats the
+    /// last one. Yields inside the actor so that `closeDrafts()` strictly
+    /// orders against it.
+    private func emitTailDraft(
+        _ text: String, windowID: Int, to continuation: AsyncStream<TokenEvent>.Continuation
+    ) {
+        guard draftsOpen, shouldEmitDraft(text) else { return }
+        continuation.yield(.draft(windowID: windowID, text: text))
     }
 
     private func trimBuffer() {
@@ -216,42 +239,41 @@ actor FluidAudioASR: TranscriptionEngine {
                     await self.beginSession()
                     try await manager.startStreaming(source: .microphone)
 
-                    // Forward confirmed-track updates as TokenEvents. windowID
-                    // counts confirmations: once text confirms, the window has
-                    // advanced, so later drafts belong to a new window and must
-                    // not replace the old one's finalized text. (The manager
-                    // can also emit its own sub-threshold updates as drafts.)
-                    let updatesTask = Task {
-                        for await update in await manager.transcriptionUpdates {
-                            if update.isConfirmed {
-                                let tokenConfidences = update.tokenTimings.map(\.confidence)
-                                continuation.yield(.finalized(
-                                    text: update.text,
-                                    confidence: update.confidence,
-                                    tokenConfidences: tokenConfidences
-                                ))
-                                await self.noteConfirmation()
-                            } else if await self.shouldEmitDraft(update.text) {
-                                continuation.yield(.draft(
-                                    windowID: await self.confirmedWindows, text: update.text
-                                ))
-                            }
-                        }
+                    let updatesTask = self.startUpdatesTask(
+                        manager: manager, continuation: continuation
+                    )
+
+                    // Draft task: decodes the unconfirmed tail whenever woken,
+                    // independent of audio ingestion. Wakes that arrive during
+                    // a decode coalesce into one, so a decode starts as soon as
+                    // the previous finishes and the floor of new audio has
+                    // arrived (takeDraftPlan returns nil until then).
+                    let (wakeups, wake) = AsyncStream.makeStream(
+                        of: Void.self, bufferingPolicy: .bufferingNewest(1)
+                    )
+                    let draftTask = self.startDraftTask(wakeups: wakeups, continuation: continuation)
+                    defer {
+                        wake.finish()
+                        draftTask.cancel()
                     }
 
-                    // Pump session audio into the confirmed track, and run the
-                    // ~1s draft decode over the unconfirmed tail when due.
+                    // Pump session audio into the confirmed track and the
+                    // draft buffer, then wake the draft task.
                     for await samples in audio {
                         try Task.checkCancellation()
                         if let buffer = Self.pcmBuffer(from: samples) {
                             await manager.streamAudio(buffer)
                         }
-                        if let plan = await self.ingest(samples),
-                           let draftText = await self.decodeDraft(plan.samples),
-                           await self.shouldEmitDraft(draftText) {
-                            continuation.yield(.draft(windowID: plan.windowID, text: draftText))
-                        }
+                        await self.ingest(samples)
+                        wake.yield()
                     }
+
+                    // Stop tail drafts before the flush so none can land after
+                    // the flush's finals. The draft task is not awaited: that
+                    // would delay the flush by up to one decode.
+                    wake.finish()
+                    await self.closeDrafts()
+                    draftTask.cancel()
 
                     // Input ended (commit/cancel upstream): finish() flushes the
                     // remaining assembled audio, and that flush publishes the
@@ -271,6 +293,47 @@ actor FluidAudioASR: TranscriptionEngine {
                 continuation.finish()
             }
             continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    /// Forwards confirmed-track updates as TokenEvents.
+    private nonisolated func startUpdatesTask(
+        manager: SlidingWindowAsrManager, continuation: AsyncStream<TokenEvent>.Continuation
+    ) -> Task<Void, Never> {
+        // Forward confirmed-track updates as TokenEvents. windowID
+        // counts confirmations: once text confirms, the window has
+        // advanced, so later drafts belong to a new window and must
+        // not replace the old one's finalized text. (The manager
+        // can also emit its own sub-threshold updates as drafts.)
+        Task {
+            for await update in await manager.transcriptionUpdates {
+                if update.isConfirmed {
+                    let tokenConfidences = update.tokenTimings.map(\.confidence)
+                    continuation.yield(.finalized(
+                        text: update.text,
+                        confidence: update.confidence,
+                        tokenConfidences: tokenConfidences
+                    ))
+                    await self.noteConfirmation()
+                } else if await self.shouldEmitDraft(update.text) {
+                    continuation.yield(.draft(
+                        windowID: await self.confirmedWindows, text: update.text
+                    ))
+                }
+            }
+        }
+    }
+
+    /// Runs one draft decode per wake: plan, decode, publish.
+    private nonisolated func startDraftTask(
+        wakeups: AsyncStream<Void>, continuation: AsyncStream<TokenEvent>.Continuation
+    ) -> Task<Void, Never> {
+        Task {
+            for await _ in wakeups {
+                guard let plan = await self.takeDraftPlan(),
+                      let text = await self.decodeDraft(plan.samples) else { continue }
+                await self.emitTailDraft(text, windowID: plan.windowID, to: continuation)
+            }
         }
     }
 

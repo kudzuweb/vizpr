@@ -174,6 +174,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onSessionDrained: onSessionDrained,
             onAutoStop: { [hotkeyMonitor] in hotkeyMonitor.injectAutoStop() }
         )
+        #if DICT_DEV_LOG
+        audioPipeline?.onDevTimingMark = { [tracker] mark, instant in
+            Task { await tracker.mark(mark, at: instant) }
+        }
+        #endif
         guard audioPipeline != nil else {
             failLoudly(
                 "Vizpr's bundled voice-detection model failed to load.",
@@ -200,27 +205,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if cleanupDirectory != nil {
             revertCleanup = { [weak self] in self?.settingsStore.update { $0.cleanupModelID = nil } }
         }
-        warmEngine(devLogLabel: "asr engine prepared", revertOnFailure: revertASR) {
+        warmEngine(
+            devLogLabel: "asr engine prepared",
+            failureMessage: "Vizpr's speech recognition model failed to load.",
+            revertOnFailure: revertASR
+        ) {
             try await engine.prepare()
         }
-        warmEngine(devLogLabel: "cleanup engine prepared", revertOnFailure: revertCleanup) {
+        warmEngine(
+            devLogLabel: "cleanup engine prepared",
+            failureMessage: "Vizpr's cleanup model failed to load.",
+            revertOnFailure: revertCleanup
+        ) {
             try await cleanup.prepareEngine()
         }
 
-        // The display path: every snapshot renders on the overlay (§13); the
-        // dev logger observes the same stream. On a rebuild the previous
-        // loop is cancelled first — exactly one renderer at a time.
+        startSnapshotRenderer()
+    }
+
+    /// The display path: every snapshot renders on the overlay (§13); the
+    /// dev logger observes the same stream. On a rebuild the previous
+    /// loop is cancelled first — exactly one renderer at a time.
+    private func startSnapshotRenderer() {
         snapshotTask?.cancel()
-        snapshotTask = Task { @MainActor [tokenStream, overlay] in
+        #if DICT_DEV_LOG
+        let tracker = dictationTracker
+        snapshotTask = Task { @MainActor [tokenStream, overlay, tracker] in
             for await snapshot in await tokenStream.makeSnapshotStream() {
                 overlay.apply(snapshot)
-                #if DICT_DEV_LOG
+                if !snapshot.displayed.isEmpty {
+                    let renderedAt = ContinuousClock.now
+                    Task { await tracker.mark(.firstPreview, at: renderedAt) }
+                }
                 if snapshot != .empty {
                     VizprTranscriptLogger.note("display: \(snapshot.displayed)")
                 }
-                #endif
             }
         }
+        #else
+        snapshotTask = Task { @MainActor [tokenStream, overlay] in
+            for await snapshot in await tokenStream.makeSnapshotStream() {
+                overlay.apply(snapshot)
+            }
+        }
+        #endif
     }
 
     /// Push settings into every live consumer (PR 11: everything applies
@@ -298,10 +326,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     #if DICT_DEV_LOG
     // MARK: Dictation-record handshake (§14)
 
-    private func beginDictationRecord() async {
+    private func beginDictationRecord(startedAt: ContinuousClock.Instant) async {
         pendingInjection = nil
         sessionDrained = false
-        await dictationTracker.reset()
+        await dictationTracker.begin(at: startedAt)
     }
 
     /// Commit half: stash the injected text; write now if the drain already
@@ -346,6 +374,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// bundled instead of terminating — a bad drop-in must never brick the app.
     private func warmEngine(
         devLogLabel: String,
+        failureMessage: String,
         revertOnFailure: (@MainActor @Sendable () -> Void)? = nil,
         _ prepare: @escaping @Sendable () async throws -> Void
     ) {
@@ -357,14 +386,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 #endif
             } catch {
                 if let revertOnFailure {
-                    let alert = NSAlert()
-                    alert.messageText = "The selected model failed to load."
-                    alert.informativeText = "Reverting to the bundled model. (\(error))"
-                    alert.runModal()
+                    self.presentAlert(
+                        "The selected model failed to load.",
+                        detail: "Reverting to the bundled model. (\(error))"
+                    )
                     revertOnFailure()
                 } else {
                     self.failLoudly(
-                        "Vizpr's speech models failed to load.",
+                        failureMessage,
                         detail: "Run scripts/fetch-models.sh and rebuild, or reinstall. (\(error))"
                     )
                 }
@@ -373,11 +402,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func failLoudly(_ message: String, detail: String) {
+        presentAlert(message, detail: detail)
+        // A test host that quit mid-run would fail the whole test run.
+        guard !Self.isHostedByTests else { return }
+        NSApp.terminate(nil)
+    }
+
+    /// `xcodebuild test` sets this (to an empty string) in the app that hosts the tests.
+    static let isHostedByTests = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+
+    /// Modal alert, except under a test host, where a dialog would block the run: log instead.
+    private func presentAlert(_ message: String, detail: String) {
+        if Self.isHostedByTests {
+            NSLog("Vizpr alert suppressed under test: %@ %@", message, detail)
+            return
+        }
         let alert = NSAlert()
         alert.messageText = message
         alert.informativeText = detail
         alert.runModal()
-        NSApp.terminate(nil)
     }
 
     // MARK: Hotkey wiring
@@ -447,12 +490,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 #endif
                 switch action {
                 case .startDictation:
+                    #if DICT_DEV_LOG
+                    let startedAt = ContinuousClock.now
+                    #endif
                     self?.lastSessionWasSilent = false
                     await self?.tokenStream.beginSession()
                     let sessionEpoch = self?.settleGate.beginSession() ?? 0
+                    #if DICT_DEV_LOG
+                    await self?.beginDictationRecord(startedAt: startedAt)
+                    #endif
+                    // Capture starts FIRST (PR 13): the AX field read is
+                    // blocking IPC into the target app, and serializing the
+                    // mic behind it cost ~250 ms of lost speech onset. The
+                    // pipeline needs nothing from the field context.
+                    self?.audioPipeline?.start(sessionEpoch: sessionEpoch)
                     // Read the focused field BEFORE the overlay appears —
-                    // read-only AX, one shot per session (PR 10).
-                    let field = self?.fieldReader.read() ?? .empty
+                    // read-only AX, one shot per session (PR 10), off-main so
+                    // the capture spin-up isn't queued behind the IPC. The
+                    // session's first token event is bounded below by the
+                    // draft floor (~1.5 s), so cleanup's session begin (which
+                    // needs the field) always wins this race by an order of
+                    // magnitude.
+                    let field = await self?.fieldReader.readOffMain() ?? .empty
                     self?.currentField = field
                     let vocab = self?.vocabularyModel.library.resolved(bundleID: field.bundleID)
                     let style = self?.vocabularyModel.library.resolvedStyleRules(bundleID: field.bundleID)
@@ -460,11 +519,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         field: field, vocabulary: vocab, styleRules: style
                     )
                     self?.overlay.show(targetWindowFrame: field.focusedWindowFrame)
-                    #if DICT_DEV_LOG
-                    await self?.beginDictationRecord()
-                    #endif
-                    self?.audioPipeline?.start(sessionEpoch: sessionEpoch)
                 case .commit:
+                    #if DICT_DEV_LOG
+                    let commitAt = ContinuousClock.now
+                    #endif
                     self?.audioPipeline?.stop()
                     // Flush-settle window (§15 amendment): let the ASR flush
                     // land on the display — in the mutable color — before
@@ -479,6 +537,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     let committed = await self?.tokenStream.commit() ?? ""
                     self?.overlay.dismiss()
                     let outcome = await self?.textInjector.inject(committed)
+                    #if DICT_DEV_LOG
+                    let injectedAt = ContinuousClock.now
+                    #endif
                     switch outcome {
                     case .skippedSecureInput:
                         // §12.1's quiet notice, headless edition — the
@@ -505,6 +566,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         VizprTranscriptLogger.note(
                             "COMMIT \(String(describing: outcome)): \(committed)"
                         )
+                        await self?.dictationTracker.mark(.commit, at: commitAt)
+                        await self?.dictationTracker.mark(.injected, at: injectedAt)
                         await self?.noteCommitted(committed)
                     }
                     #endif

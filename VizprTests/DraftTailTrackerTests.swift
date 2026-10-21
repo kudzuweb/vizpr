@@ -8,12 +8,12 @@ struct DraftTailTrackerTests {
         cadence: Int = 1000, leftContext: Int = 2000, cap: Int = 10_000, minTail: Int = 1
     ) -> DraftTailTracker {
         DraftTailTracker(
-            cadenceSamples: cadence, leftContextSamples: leftContext,
+            cadenceFloorSamples: cadence, leftContextSamples: leftContext,
             maxDecodeSamples: cap, minTailSamples: minTail
         )
     }
 
-    @Test("No decode until a full cadence of new audio accumulates")
+    @Test("No decode until the floor of new audio accumulates")
     func cadenceGates() {
         var t = tracker()
         t.append(sampleCount: 999)
@@ -24,6 +24,15 @@ struct DraftTailTrackerTests {
         #expect(req?.draftStart == 0)
         // Clock resets: immediately asking again yields nothing.
         #expect(t.takeDecodeRequest() == nil)
+    }
+
+    @Test("The default floor is 500 ms: no request before it, one at it")
+    func defaultFloorIsHalfSecond() {
+        var t = DraftTailTracker(minTailSamples: 1)
+        t.append(sampleCount: 7_999)
+        #expect(t.takeDecodeRequest() == nil)
+        t.append(sampleCount: 1)
+        #expect(t.takeDecodeRequest()?.range == 0 ..< 8_000)
     }
 
     @Test("Confirmation advances the draft start")

@@ -43,6 +43,12 @@ final class AudioPipeline {
     /// selected route delivers silence (default on).
     var silentInputFallback = true
 
+    #if DICT_DEV_LOG
+    /// Reports session timing marks (PR 13 latency audit) with the instant
+    /// they happened, so a hop to the receiver cannot skew them.
+    var onDevTimingMark: (@Sendable (DevTimingMark, ContinuousClock.Instant) -> Void)?
+    #endif
+
     private var sessionTask: Task<Void, Never>?
 
     init(
@@ -88,6 +94,10 @@ final class AudioPipeline {
     func start(sessionEpoch: Int = 0) {
         guard sessionTask == nil else { return }   // one session at a time
 
+        #if DICT_DEV_LOG
+        // Captured by value here (a capture list cannot sit inside #if).
+        let onDevTimingMark = self.onDevTimingMark
+        #endif
         sessionTask = Task { @MainActor [source, detector, engine, autoStopTimeout, onAutoStop, onTokenEvent, onSessionDrained] in
             let epoch = sessionEpoch
             var watchdog = SilenceWatchdog(
@@ -112,6 +122,9 @@ final class AudioPipeline {
                 for await samples in stream {
                     guard !Task.isCancelled else { break }
                     sessionChunks += 1
+                    #if DICT_DEV_LOG
+                    if sessionChunks == 1 { onDevTimingMark?(.captureStarted, .now) }
+                    #endif
                     // Dead-air failover (field case: a phone call owned the
                     // AirPods; the route delivered zeros). ~1.3 s of exactly
                     // zero raw peak on a non-built-in engine -> swap to the
@@ -127,6 +140,9 @@ final class AudioPipeline {
                         #if DICT_DEV_LOG
                         chunkCount += 1
                         Self.logUpdate(update, chunkCount: chunkCount)
+                        if update.event?.kind == .speechStart {
+                            onDevTimingMark?(.speechOnset, .now)
+                        }
                         #endif
                         if watchdog.observe(
                             chunkSampleCount: update.chunk.count,

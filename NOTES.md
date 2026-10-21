@@ -324,6 +324,38 @@ rendering differs. Shares the overlay color theme.
    focus — likely a separate activating edit window summoned on demand).
    Adjacent to the plan's parked "post-injection edit capture" idea.
 
+## PR 13 — latency audit (2026-07-09, from the PR 12 dogfood log + code read)
+
+Constraints (Mauria): MODEL-AGNOSTIC, ACCURACY-PRESERVING. Harness speed
+only; anything trading transcription quality is rejected.
+
+Measured budget, Fn-down → first preview (~2.1 s observed against a user
+who starts speaking immediately; she waited ~0.4 s):
+
+| Segment | Cost | Verdict |
+|---|---|---|
+| Fn-down → startDictation action | ~0 (fires at keyDown) | already optimal |
+| action → capture start begins | ~245 ms | FIX: synchronous AX field read + session begins run BEFORE the pipeline starts; reorder so capture starts first, AX/overlay follow concurrently |
+| capture setup (engine build, route query) | ~218 ms | PARTIAL: AVCaptureDevice.default device-name lookup is dev-log-only decoration on the hot path — move off. Engine build cost is real |
+| engine.start() (HAL spin-up) | ~74 ms | leave (keeping the mic hot is a privacy non-starter) |
+| speech → first draft | draftMinTailMs floor (1.5 s default) | leave — user lever, quality-bound (sub-1.5 s tails decode junk, field-observed) |
+| draft refresh cadence | fixed 1 s + decode inline in the audio pump | DONE in PR 13: the cadence is adaptive with a 500 ms floor (a decode starts when the previous finishes and 500 ms of new audio has arrived), and decoding is decoupled from ingestion. Same decoder, same tail = accuracy unchanged |
+| commit → inject | ~170 ms observed (settle window worked) | already good |
+| engine swap (Models pane) | pipeline rebuild + warm | rare; acceptable |
+
+Also: before PR 13 the dev JSONL carried no timings (the "feedstock" claim
+in Future Directions was wrong). PR 13 adds session timing marks to the
+dictation record (DICT_DEV_LOG builds only), so every dogfood measures
+itself. Each `t_*` field is integer milliseconds since the startDictation
+action, or `null` when the mark never happened: `t_capture_ms` (first audio
+chunk), `t_speech_onset_ms` (first VAD speech start), `t_first_draft_ms`
+(first draft reaches the tracker), `t_first_preview_ms` (first non-empty
+display snapshot rendered), `t_commit_ms` (commit action received) and
+`t_injected_ms` (inject returned). `draft_count` counts drafts;
+`draft_interval_mean_ms` and `draft_interval_max_ms` give the gaps between
+consecutive drafts, `null` below two drafts. Baseline to beat: first preview
+~1.6 s after speech onset, cadence ~1 s, commit→inject ~170 ms.
+
 ## PR 12 — entitlement cross-check (recorded per acceptance)
 
 Every entitlement traced to the API that requires it; every capability the
