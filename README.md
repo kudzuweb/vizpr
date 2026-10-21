@@ -1,7 +1,8 @@
 # vizpr
 
 A local, on-device, streaming dictation app for macOS. Hold or tap the Fn key,
-speak, watch a live transcript in a floating glass HUD, and on release the text
+speak, watch a live transcript in a floating HUD (glass, an opaque animated slab,
+or a look of your own), and on release the text
 is injected into the focused app. You proofread as you speak — what the overlay
 shows at the moment you stop is exactly what gets injected.
 
@@ -28,6 +29,12 @@ gitignored — `project.yml` plus the Swift sources are the source of truth. Run
 
 Debug builds include a compile-gated dev transcript logger (`DICT_DEV_LOG`);
 Release builds exclude it entirely.
+
+## Design
+
+`design/renders/` holds rendered stills of the overlay's looks, committed so the
+look's evolution is visible in history. `design/references/` holds inspiration
+images; they are third-party work, so the folder is gitignored and stays local.
 
 ## Installing (for others)
 

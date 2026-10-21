@@ -11,8 +11,7 @@ struct VocabularyStore {
 
     /// Default location: ~/Library/Application Support/Vizpr/vocabulary.json.
     static var defaultURL: URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Vizpr/vocabulary.json")
+        StorageRoot.url.appendingPathComponent("vocabulary.json")
     }
 
     init(url: URL = VocabularyStore.defaultURL) {

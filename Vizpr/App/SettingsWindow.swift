@@ -174,103 +174,127 @@ struct BehaviorPane: View {
 
 struct AppearancePane: View {
     @ObservedObject var store: SettingsStore
-    @State private var presetName = ""
+
+    private var activeLook: OverlayLook { store.settings.activeLook }
+    private var editable: Bool { !activeLook.isBuiltIn }
 
     var body: some View {
         Form {
-            Section("Overlay tint") {
-                ColorPicker("Background tint", selection: hexBinding(\.tintHex, fallback: "A16FDF"))
-                HStack {
-                    Text("Tint strength")
-                    Slider(value: bind(store, \.tintStrength), in: 0...0.5)
-                    Text(String(format: "%.0f%%", store.settings.tintStrength * 100))
-                        .monospacedDigit().frame(width: 48, alignment: .trailing)
+            lookSection
+            Section("Edit \(activeLook.name)") {
+                if !editable {
+                    Text("Duplicate a built-in look to edit it.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
-            }
-            Section("Text") {
-                Toggle("Link text color to tint", isOn: bind(store, \.colorsLinked))
-                if !store.settings.colorsLinked {
-                    Toggle("Use system text colors", isOn: Binding(
-                        get: { store.settings.textBaseHex == nil },
-                        set: { on in store.update { $0.textBaseHex = on ? nil : "FFFFFF" } }
-                    ))
-                    if store.settings.textBaseHex != nil {
-                        ColorPicker("Text color", selection: optionalHexBinding(\.textBaseHex))
+                Group {
+                    Picker("Surface", selection: lookBinding(\.surface)) {
+                        ForEach(OverlayLook.Surface.allCases, id: \.self) { surface in
+                            Text(surface.rawValue.capitalized).tag(surface)
+                        }
                     }
-                }
-                Text("Final and provisional text always keep a fixed contrast ratio.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            Section("Presets (\(store.settings.colorPresets.count)/\(VizprSettings.maxColorPresets))") {
-                ForEach(store.settings.colorPresets) { preset in
-                    HStack {
-                        Circle().fill(Color(hex: preset.tintHex) ?? .gray)
-                            .frame(width: 14, height: 14)
-                        Text(preset.name.isEmpty ? preset.tintHex : preset.name)
-                        Spacer()
-                        Button("Apply") { apply(preset) }
-                        Button(role: .destructive) { remove(preset) } label: { Text("Delete") }
+                    sliderRow("Corner radius", lookBinding(\.cornerRadius),
+                              range: OverlayLook.cornerRadiusRange) { String(format: "%.0f pt", $0) }
+                    ColorPicker("Tint", selection: hexBinding(\.tintHex))
+                    sliderRow("Tint strength", lookBinding(\.tintStrength),
+                              range: OverlayLook.tintStrengthRange) { String(format: "%.0f%%", $0 * 100) }
+                    Toggle("Link text color to tint", isOn: lookBinding(\.colorsLinked))
+                    if !activeLook.colorsLinked {
+                        Toggle("Use system text colors", isOn: Binding(
+                            get: { activeLook.textBaseHex == nil },
+                            set: { on in store.updateActiveLook { $0.textBaseHex = on ? nil : "FFFFFF" } }
+                        ))
+                        if activeLook.textBaseHex != nil {
+                            ColorPicker("Text color", selection: textHexBinding)
+                        }
                     }
+                    Picker("Font", selection: lookBinding(\.fontDesign)) {
+                        ForEach(OverlayLook.FontDesign.allCases, id: \.self) { design in
+                            Text(design.rawValue.capitalized).tag(design)
+                        }
+                    }
+                    sliderRow("Font size", lookBinding(\.fontSize),
+                              range: OverlayLook.fontSizeRange) { String(format: "%.0f pt", $0) }
+                    Text("Final and provisional text always keep a fixed contrast ratio.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
-                HStack {
-                    TextField("Preset name", text: $presetName)
-                    Button("Save current") { saveCurrent() }
-                        .disabled(store.settings.colorPresets.count >= VizprSettings.maxColorPresets)
-                }
-                Button("Delete All Presets", role: .destructive) {
-                    store.deleteAllPresets()
-                }
-                .disabled(store.settings.colorPresets.isEmpty)
+                .disabled(!editable)
             }
         }
         .formStyle(.grouped)
     }
 
-    private func apply(_ preset: ColorPreset) {
-        store.update {
-            $0.tintHex = preset.tintHex
-            $0.tintStrength = preset.tintStrength
-            $0.textBaseHex = preset.textBaseHex
-            $0.colorsLinked = preset.colorsLinked
+    private var lookSection: some View {
+        Section("Looks (\(store.settings.looks.count)/\(VizprSettings.maxLooks))") {
+            ForEach(OverlayLook.builtIns + store.settings.looks) { look in
+                Button { store.selectLook(look.id) } label: {
+                    HStack {
+                        Circle().fill(look.tintColor).frame(width: 14, height: 14)
+                        Text(look.name)
+                        Spacer()
+                        if look.id == activeLook.id {
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+            if editable {
+                TextField("Name", text: Binding(
+                    get: { activeLook.name },
+                    set: { name in store.updateActiveLook { $0.name = name } }
+                ))
+            }
+            HStack {
+                Button("Duplicate") { store.duplicateLook(activeLook) }
+                    .disabled(store.settings.looks.count >= VizprSettings.maxLooks)
+                Button("Delete", role: .destructive) { store.deleteLook(activeLook.id) }
+                    .disabled(!editable)
+            }
+            Button("Delete All Looks", role: .destructive) {
+                store.deleteAllLooks()
+            }
+            .disabled(store.settings.looks.isEmpty)
         }
     }
 
-    private func remove(_ preset: ColorPreset) {
-        store.update { $0.colorPresets.removeAll { $0.id == preset.id } }
-    }
-
-    private func saveCurrent() {
-        let snapshot = store.settings
-        store.update {
-            $0.colorPresets.append(ColorPreset(
-                name: presetName,
-                tintHex: snapshot.tintHex,
-                tintStrength: snapshot.tintStrength,
-                textBaseHex: snapshot.textBaseHex,
-                colorsLinked: snapshot.colorsLinked
-            ))
+    private func sliderRow(_ title: String, _ value: Binding<Double>,
+                           range: ClosedRange<Double>,
+                           format: @escaping (Double) -> String) -> some View {
+        HStack {
+            Text(title)
+            Slider(value: value, in: range)
+            Text(format(value.wrappedValue))
+                .monospacedDigit().frame(width: 56, alignment: .trailing)
         }
-        presetName = ""
     }
 
-    private func hexBinding(_ keyPath: WritableKeyPath<VizprSettings, String>,
-                            fallback: String) -> Binding<Color> {
+    /// Reads the active look and writes through `updateActiveLook`, which
+    /// ignores built-ins.
+    private func lookBinding<T>(_ keyPath: WritableKeyPath<OverlayLook, T>) -> Binding<T> {
         Binding(
-            get: { Color(hex: store.settings[keyPath: keyPath]) ?? Color(hex: fallback)! },
+            get: { activeLook[keyPath: keyPath] },
+            set: { value in store.updateActiveLook { $0[keyPath: keyPath] = value } }
+        )
+    }
+
+    private func hexBinding(_ keyPath: WritableKeyPath<OverlayLook, String>) -> Binding<Color> {
+        Binding(
+            get: { Color(hex: activeLook[keyPath: keyPath]) ?? .white },
             set: { color in
                 if let hex = color.hexString {
-                    store.update { $0[keyPath: keyPath] = hex }
+                    store.updateActiveLook { $0[keyPath: keyPath] = hex }
                 }
             }
         )
     }
 
-    private func optionalHexBinding(_ keyPath: WritableKeyPath<VizprSettings, String?>) -> Binding<Color> {
+    private var textHexBinding: Binding<Color> {
         Binding(
-            get: { store.settings[keyPath: keyPath].flatMap { Color(hex: $0) } ?? .white },
+            get: { activeLook.textBaseHex.flatMap { Color(hex: $0) } ?? .white },
             set: { color in
                 if let hex = color.hexString {
-                    store.update { $0[keyPath: keyPath] = hex }
+                    store.updateActiveLook { $0.textBaseHex = hex }
                 }
             }
         )
