@@ -19,22 +19,13 @@ struct OverlayView: View {
     let capsuleHeight: CGFloat
     /// False under Reduce Motion — the capsule snaps instead of animating.
     let animated: Bool
-    var theme: OverlayTheme = .standard
+    var look: OverlayLook = .glass
     /// Inviz mode: render the minimal indicator instead of the transcript.
     var inviz: Bool = false
 
-    /// Trust-contract styles: system labels by default; a custom base keeps
-    /// the LOCKED settled:mutable opacity ratio (only the hue is the user's).
-    private var settledStyle: AnyShapeStyle {
-        theme.textBase.map { AnyShapeStyle($0) } ?? AnyShapeStyle(.primary)
+    private var capsuleShape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: look.cornerRadius, style: .continuous)
     }
-    private var mutableStyle: AnyShapeStyle {
-        theme.textBase.map {
-            AnyShapeStyle($0.opacity(VizprSettings.mutableOpacityRatio))
-        } ?? AnyShapeStyle(.secondary)
-    }
-
-    private static let capsuleShape = RoundedRectangle(cornerRadius: 22, style: .continuous)
 
     var body: some View {
         if inviz {
@@ -44,17 +35,17 @@ struct OverlayView: View {
         }
     }
 
-    /// The inviz-mode "talking is happening" pill: mid-stage, theme-tinted,
+    /// The inviz-mode "talking is happening" pill: mid-stage, look-tinted,
     /// pulsing while recording. No text — that's the point.
     private var indicator: some View {
         VStack {
             Spacer(minLength: 0)
             ZStack {
-                GlassBackground(theme: theme)
+                PaneSurface(look: look, animated: animated)
                 HStack(spacing: 6) {
                     ForEach(0..<3, id: \.self) { index in
                         Circle()
-                            .fill(theme.tint)
+                            .fill(look.tintColor)
                             .frame(width: 8, height: 8)
                             .opacity(recording ? 1 : 0.3)
                             .scaleEffect(recording ? 1 : 0.7)
@@ -82,7 +73,7 @@ struct OverlayView: View {
         VStack {
             Spacer(minLength: 0)
             ZStack(alignment: .bottomLeading) {
-                GlassBackground(theme: theme)
+                PaneSurface(look: look, animated: animated)
                 ScrollView(.vertical) {
                     // WYSIWYG: render EXACTLY the decomposition of
                     // snapshot.displayed — the bytes commit injects. Never a
@@ -90,10 +81,10 @@ struct OverlayView: View {
                     // the user proofread a string with one more space than
                     // the injection).
                     (
-                        Text(snapshot.settled).foregroundStyle(settledStyle)
-                        + Text(snapshot.mutableSuffix).foregroundStyle(mutableStyle)
+                        Text(snapshot.settled).foregroundStyle(look.settledStyle)
+                        + Text(snapshot.mutableSuffix).foregroundStyle(look.mutableStyle)
                     )
-                    .font(.system(size: 16, weight: .regular, design: .rounded))
+                    .font(look.font)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 18)
                     .padding(.vertical, 12)
@@ -106,11 +97,11 @@ struct OverlayView: View {
                 .defaultScrollAnchor(.bottom, for: .sizeChanges)
                 // Clip scrolled text to the capsule, not the rect — square
                 // glyph fragments rendered over the corner curves otherwise.
-                .clipShape(Self.capsuleShape)
+                .clipShape(capsuleShape)
 
                 if recording {
                     Circle()
-                        .fill(theme.tint)
+                        .fill(look.tintColor)
                         .frame(width: 7, height: 7)
                         .padding(10)
                         .accessibilityLabel("Recording")

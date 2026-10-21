@@ -266,7 +266,41 @@ No live transcript preview: a small theme-tinted "talking is happening"
 pill mid-screen; text appears finalized in place at commit. An EXPLICIT
 opt-out of proofread-as-you-speak (§ WYSIWYG's premise) — the pipeline
 (settle window, commit snapshot, seams, cleanup) is unchanged; only the
-rendering differs. Shares the overlay color theme.
+rendering differs. Shares the active look's tint (PR 14).
+
+## PR 14 — Looks replace color settings (2026-10-21)
+
+The overlay's appearance is a **look**: a named bundle of surface (`glass` or
+`slab`), corner radius, tint, tint strength, text base color, link-to-tint flag,
+slab parameters, font design and size, and a word-appearance field reserved for
+a later PR. This supersedes the PR 11 tint and text-theme settings and the
+six color presets (the PR 11 decisions above still hold for what a look may
+change: the settled:mutable ratio stays locked in
+`VizprSettings.mutableOpacityRatio` and no look can alter it).
+
+- Two built-ins, Glass (exactly the old defaults) and Slab (dark, with its own
+  text color because system label colors turn black in light mode), are
+  constants with fixed ids. They are never persisted and are read-only; a user
+  duplicates one to edit it.
+- `VizprSettings.looks` holds the user's looks (max 12). `activeLookID` picks
+  the one rendered; an id that matches nothing resolves to Glass. Reset keeps
+  the user's looks and returns the active look to Glass. The menu bar item
+  "Look: <name>" cycles built-ins then user looks.
+- Tint also colors the recording dot and the inviz pill on every surface.
+
+**Tolerant settings decoding (bug fix).** `VizprSettings` used synthesized
+`Decodable`, which throws `keyNotFound` for any key missing from
+`settings.json`; `SettingsStore.init` answered by falling back to `.default`.
+Adding any field therefore silently reset every setting for an existing user.
+Every key now decodes with a fallback to its default, and a malformed value
+costs only its own key.
+
+**Migration.** A file with no `looks` key is read as legacy. Each legacy
+`colorPresets` entry becomes a glass look (named by its tint hex when it had no
+name). If the legacy top-level colors differ from the old defaults (`A16FDF`,
+0.13, no text base, unlinked), they become a glass look "My colors", which
+becomes active. Legacy keys are read, never written back, so the next save
+leaves only the new format.
 
 ## Future directions (Mauria, 2026-07-05 — recorded, not scheduled)
 
