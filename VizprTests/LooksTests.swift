@@ -170,4 +170,98 @@ struct LooksTests {
         #expect(glass.fontSize == 16)
         #expect(glass.fontDesign == .rounded)
     }
+
+    @Test("A round trip preserves every field, none of them left at its default")
+    func everyFieldRoundTrips() throws {
+        var settings = VizprSettings()
+        settings.hotkeyEnabled = false
+        settings.holdThresholdMs = 410
+        settings.secondaryModifiers = ["command", "shift", "option"]
+        settings.settleSentences = 4
+        settings.autoStopSeconds = 17
+        settings.settleCapMs = 120
+        settings.draftMinTailMs = 2500
+        settings.cleanupEnabled = false
+        settings.codeModeOverride = true
+        settings.asrModelID = "asr-x"
+        settings.cleanupModelID = "cleanup-x"
+        settings.restoreClipboard = false
+        settings.invizMode = true
+        settings.silentInputFallback = false
+        var look = OverlayLook.slab
+        look.id = UUID()
+        look.name = "Everything"
+        look.cornerRadius = 31
+        look.tintHex = "123456"
+        look.tintStrength = 0.4
+        look.colorsLinked = true
+        look.fontDesign = .monospaced
+        look.fontSize = 21
+        look.wordAppearance = .blurIn
+        settings.looks = [look]
+        settings.activeLookID = look.id
+
+        // Fails when a new field is added to VizprSettings but not set above.
+        let defaults = Mirror(reflecting: VizprSettings.default).children
+        // primaryTrigger only accepts "fn" today, so it cannot leave its default.
+        for (field, base) in zip(Mirror(reflecting: settings).children, defaults)
+        where field.label != "primaryTrigger" {
+            #expect(String(describing: field.value) != String(describing: base.value),
+                    "\(field.label ?? "?") is still at its default")
+        }
+
+        let data = try JSONEncoder().encode(settings)
+        #expect(try JSONDecoder().decode(VizprSettings.self, from: data) == settings.clamped())
+        #expect(settings.clamped() == settings)
+    }
+}
+
+@MainActor
+@Suite("SettingsStore loading")
+struct SettingsStoreLoadingTests {
+    private func tempFile(_ contents: String) throws -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vizpr-settings-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("settings.json")
+        try Data(contents.utf8).write(to: url)
+        return url
+    }
+
+    @Test("A file that fails to decode is kept as settings.json.bad, replacing an older copy")
+    func unreadableFileIsBackedUp() throws {
+        let url = try tempFile("{ not json")
+        let backup = url.appendingPathExtension("bad")
+        try Data("older".utf8).write(to: backup)
+
+        let store = SettingsStore(fileURL: url)
+        #expect(store.settings == .default)
+        #expect(try String(contentsOf: backup, encoding: .utf8) == "{ not json")
+
+        store.update { $0.autoStopSeconds = 9 }
+        #expect(try String(contentsOf: backup, encoding: .utf8) == "{ not json")
+    }
+
+    @Test("Loading a legacy file saves the migrated looks once, with stable ids and no legacy keys")
+    func migrationIsPersisted() throws {
+        let url = try tempFile(
+            #"{"tintHex": "112233", "colorPresets": [{"name": "Sunset", "tintHex": "FF8800"}]}"#
+        )
+        let first = SettingsStore(fileURL: url).settings
+        #expect(first.looks.map(\.name) == ["My colors", "Sunset"])
+
+        let object = try #require(
+            JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any]
+        )
+        #expect(object["tintHex"] == nil && object["colorPresets"] == nil)
+        #expect(SettingsStore(fileURL: url).settings == first)
+    }
+
+    @Test("A readable file is not rewritten or backed up on load")
+    func readableFileUntouched() throws {
+        let url = try tempFile(#"{"autoStopSeconds": 30}"#)
+        _ = SettingsStore(fileURL: url)
+        #expect(try String(contentsOf: url, encoding: .utf8) == #"{"autoStopSeconds": 30}"#)
+        #expect(!FileManager.default.fileExists(atPath: url.appendingPathExtension("bad").path))
+    }
 }

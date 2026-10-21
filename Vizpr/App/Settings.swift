@@ -130,12 +130,25 @@ final class SettingsStore: ObservableObject {
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Vizpr/settings.json")
         self.fileURL = url
-        if let data = try? Data(contentsOf: url),
-           let decoded = try? JSONDecoder().decode(VizprSettings.self, from: data) {
-            settings = decoded.clamped()
-        } else {
-            settings = .default
+        settings = .default
+        guard let data = try? Data(contentsOf: url) else { return }
+        do {
+            settings = try JSONDecoder().decode(VizprSettings.self, from: data).clamped()
+            // Rewrite once so migrated looks keep their ids and the legacy
+            // keys leave the file.
+            if VizprSettings.hasLegacyKeys(data) { persist() }
+        } catch {
+            keepUnreadableFile(at: url)
         }
+    }
+
+    /// A settings file that fails to decode is copied to `settings.json.bad`
+    /// (replacing an earlier copy) before defaults take over, so the next save
+    /// cannot destroy it.
+    private func keepUnreadableFile(at url: URL) {
+        let backup = url.appendingPathExtension("bad")
+        try? FileManager.default.removeItem(at: backup)
+        try? FileManager.default.copyItem(at: url, to: backup)
     }
 
     func onChange(_ observer: @escaping (VizprSettings) -> Void) {
@@ -265,8 +278,14 @@ extension VizprSettings {
         }
     }
 
-    private enum LegacyKeys: String, CodingKey {
+    private enum LegacyKeys: String, CodingKey, CaseIterable {
         case tintHex, tintStrength, textBaseHex, colorsLinked, colorPresets
+    }
+
+    /// True when `data` is a settings object still carrying pre-looks color keys.
+    static func hasLegacyKeys(_ data: Data) -> Bool {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
+        return LegacyKeys.allCases.contains { object[$0.rawValue] != nil }
     }
 
     /// The pre-looks color preset, as it was saved.
