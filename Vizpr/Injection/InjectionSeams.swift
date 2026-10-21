@@ -60,6 +60,17 @@ protocol EventPosting {
 }
 
 @MainActor
+protocol FocusedFieldProbing {
+    /// Starts a one-shot, read-only check of whether the focused element of
+    /// the frontmost app accepts text, and returns at once; the read itself
+    /// runs off the main thread. The injector starts it BEFORE posting the
+    /// paste so the read never adds to the commit-to-inject path. The task
+    /// yields false whenever the answer is unknown (AX error, no focused
+    /// element, timeout): the caller treats unknown as "not accepting".
+    func beginAcceptsTextCheck() -> Task<Bool, Never>
+}
+
+@MainActor
 protocol SecureInputProbing {
     /// `IsSecureEventInputEnabled()`: true while a secure field (password
     /// input) holds the keyboard. Injection must skip and notify (§12.1).

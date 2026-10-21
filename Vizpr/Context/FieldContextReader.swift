@@ -108,7 +108,7 @@ struct FieldContextReader {
 
     /// CF downcasts: type-checked before the cast (CF types have no
     /// conditional-cast support, so the force cast is gated on CFGetTypeID).
-    private nonisolated static func axElement(_ ref: CFTypeRef) -> AXUIElement? {
+    nonisolated static func axElement(_ ref: CFTypeRef) -> AXUIElement? {
         guard CFGetTypeID(ref) == AXUIElementGetTypeID() else { return nil }
         // swiftlint:disable:next force_cast
         return (ref as! AXUIElement)

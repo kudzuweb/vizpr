@@ -11,9 +11,23 @@ import Foundation
 @MainActor
 final class TextInjector {
 
+    /// What happens to the user's previous clipboard after a paste.
+    enum ClipboardOutcome: Equatable {
+        /// The previous clipboard was captured and its ownership-guarded
+        /// restore is scheduled.
+        case restoreScheduled
+        /// Nothing was captured (restore setting off, or concealed content),
+        /// so the transcript stays on the clipboard by design.
+        case notCaptured
+        /// The focused element did not plausibly accept the paste, so the
+        /// transcript stays on the clipboard as the user's only other copy.
+        /// The caller MUST tell the user (beep).
+        case keptNoTextField
+    }
+
     enum Outcome: Equatable {
         /// Pasted via the CGEvent chord or the AppleScript fallback.
-        case injected(usedFallback: Bool)
+        case injected(usedFallback: Bool, clipboard: ClipboardOutcome)
         /// Secure field focused — skipped; the caller MUST surface a quiet
         /// notice (§12.1: never fail silently).
         case skippedSecureInput
@@ -29,6 +43,7 @@ final class TextInjector {
     private let pasteboard: any PasteboardWriting
     private let poster: any EventPosting
     private let secureInput: any SecureInputProbing
+    private let focusProbe: any FocusedFieldProbing
     private let spacer: InterSegmentSpacer
     /// Time to let the target app service the paste before the ownership-
     /// guarded restore (§12.5). Zero in tests.
@@ -56,6 +71,7 @@ final class TextInjector {
         pasteboard: any PasteboardWriting,
         poster: any EventPosting,
         secureInput: any SecureInputProbing,
+        focusProbe: any FocusedFieldProbing,
         spacer: InterSegmentSpacer = InterSegmentSpacer(),
         restoreDelay: Duration = .milliseconds(300),
         restoreEnabled: Bool = true,
@@ -64,6 +80,7 @@ final class TextInjector {
         self.pasteboard = pasteboard
         self.poster = poster
         self.secureInput = secureInput
+        self.focusProbe = focusProbe
         self.spacer = spacer
         self.restoreDelay = restoreDelay
         self.restoreEnabled = restoreEnabled
@@ -72,7 +89,8 @@ final class TextInjector {
 
     /// The locked §12 sequence: secure-input guard → clipboard snapshot →
     /// tagged write → layout-aware Cmd+V (AppleScript fallback) → ownership-
-    /// guarded restore (deferred; see `pendingRestore`).
+    /// guarded restore (deferred; see `pendingRestore`), skipped when the
+    /// focused element does not accept text.
     func inject(_ snapshot: String) async -> Outcome {
         // §12.1 comes FIRST — even an empty commit in a secure field is a
         // secure-input skip, not a silent no-op.
@@ -105,6 +123,9 @@ final class TextInjector {
         let saved: PasteboardContents? =
             (restoreEnabled && !pasteboard.containsConcealedContent)
                 ? pasteboard.snapshot() : nil
+        // Started before the paste so the AX read overlaps it instead of
+        // extending the commit-to-inject path.
+        let focusCheck = saved == nil ? nil : focusProbe.beginAcceptsTextCheck()
         let tag = UUID().uuidString
         let countAfterWrite = pasteboard.write(pasted, tag: tag)
 
@@ -125,10 +146,18 @@ final class TextInjector {
         previousTail = pasted.last
         previousInjectionAt = injectionTime
 
-        if let saved {
-            scheduleRestore(saved, expectedChangeCount: countAfterWrite, tag: tag)
+        // The paste is attempted either way (terminals and Electron apps
+        // accept pastes while exposing poor AX trees); only the restore
+        // depends on the probe. If the paste landed nowhere, the restore
+        // would delete the only other copy of the text.
+        guard let saved, let focusCheck else {
+            return .injected(usedFallback: usedFallback, clipboard: .notCaptured)
         }
-        return .injected(usedFallback: usedFallback)
+        guard await focusCheck.value else {
+            return .injected(usedFallback: usedFallback, clipboard: .keptNoTextField)
+        }
+        scheduleRestore(saved, expectedChangeCount: countAfterWrite, tag: tag)
+        return .injected(usedFallback: usedFallback, clipboard: .restoreScheduled)
     }
 
     private func scheduleRestore(
