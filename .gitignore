@@ -34,3 +34,6 @@ spikes/FluidAudio/
 spikes/**/.venv/
 spikes/**/results-*.json
 spikes/fixtures/
+
+# Design inspiration: third-party images, kept local and never republished
+design/references/
