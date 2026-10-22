@@ -22,6 +22,11 @@ struct OverlayView: View {
     var look: OverlayLook = .glass
     /// Inviz mode: render the minimal indicator instead of the transcript.
     var inviz: Bool = false
+    /// The app the text will land in, and how much of it to show.
+    var targetApp: TargetApp?
+    var targetAppDisplay: TargetAppDisplay = .off
+
+    private var app: TargetApp.Info? { targetApp?.current }
 
     private var capsuleShape: RoundedRectangle {
         RoundedRectangle(cornerRadius: look.cornerRadius, style: .continuous)
@@ -62,14 +67,19 @@ struct OverlayView: View {
                 .accessibilityLabel(recording ? "Dictating" : "Idle")
             }
             .frame(width: 84, height: 36)
+            .targetAppBeside(app, display: targetAppDisplay, look: look)
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity)
+        .padding(.horizontal, stageInset)
         .padding(effectsMargin)
     }
 
     /// Room the panel leaves around the pane for glow and shadow.
     private var effectsMargin: CGFloat { PaneEffects.margin(for: look.style) }
+
+    /// Room each side of the pane for the indicator beside the pills.
+    private var stageInset: CGFloat { TargetAppMetrics.sideInset(for: targetAppDisplay) }
 
     @ViewBuilder private var transcript: some View {
         let resting = snapshot == .empty
@@ -78,32 +88,37 @@ struct OverlayView: View {
             Spacer(minLength: 0)
             ZStack(alignment: .bottomLeading) {
                 PaneSurface(look: look, animated: animated)
-                ScrollView(.vertical) {
-                    // WYSIWYG: render EXACTLY the decomposition of
-                    // snapshot.displayed — the bytes commit injects. Never a
-                    // reconstruction with synthetic joiners (review finding:
-                    // the user proofread a string with one more space than
-                    // the injection).
-                    (
-                        Text(snapshot.settled).foregroundStyle(look.settledStyle)
-                        + Text(snapshot.mutableSuffix).foregroundStyle(look.mutableStyle)
-                    )
-                    .font(look.font)
-                    .lineSpacing(look.style.text.lineSpacing)
-                    .textGlow(look.style.text)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, look.style.pane.paddingHorizontal)
-                    .padding(.vertical, look.style.pane.paddingVertical)
+                VStack(spacing: 0) {
+                    if !resting, let app, targetAppDisplay != .off {
+                        header(app)
+                    }
+                    ScrollView(.vertical) {
+                        // WYSIWYG: render EXACTLY the decomposition of
+                        // snapshot.displayed — the bytes commit injects. Never a
+                        // reconstruction with synthetic joiners (review finding:
+                        // the user proofread a string with one more space than
+                        // the injection).
+                        (
+                            Text(snapshot.settled).foregroundStyle(look.settledStyle)
+                            + Text(snapshot.mutableSuffix).foregroundStyle(look.mutableStyle)
+                        )
+                        .font(look.font)
+                        .lineSpacing(look.style.text.lineSpacing)
+                        .textGlow(look.style.text)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, look.style.pane.paddingHorizontal)
+                        .padding(.vertical, look.style.pane.paddingVertical)
+                    }
+                    .scrollIndicators(.hidden)
+                    // Tail-follow must re-pin on BOTH initial layout and every
+                    // size change, or one settled-off-anchor frame sticks forever
+                    // (the panel ignores the mouse, so nothing could recover).
+                    .defaultScrollAnchor(.bottom, for: .initialOffset)
+                    .defaultScrollAnchor(.bottom, for: .sizeChanges)
+                    // Clip scrolled text to the capsule, not the rect — square
+                    // glyph fragments rendered over the corner curves otherwise.
+                    .clipShape(capsuleShape)
                 }
-                .scrollIndicators(.hidden)
-                // Tail-follow must re-pin on BOTH initial layout and every
-                // size change, or one settled-off-anchor frame sticks forever
-                // (the panel ignores the mouse, so nothing could recover).
-                .defaultScrollAnchor(.bottom, for: .initialOffset)
-                .defaultScrollAnchor(.bottom, for: .sizeChanges)
-                // Clip scrolled text to the capsule, not the rect — square
-                // glyph fragments rendered over the corner curves otherwise.
-                .clipShape(capsuleShape)
 
                 if recording {
                     RecordingDot(style: look.style.dot, tint: look.tintColor, animated: animated)
@@ -117,9 +132,22 @@ struct OverlayView: View {
             )
             .animation(animated ? .easeOut(duration: 0.15) : nil, value: capsuleHeight)
             .animation(animated ? .easeOut(duration: 0.15) : nil, value: resting)
+            .targetAppBeside(resting ? app : nil, display: targetAppDisplay, look: look)
         }
         .frame(maxWidth: .infinity)
+        .padding(.horizontal, stageInset)
         .padding(effectsMargin)
+    }
+
+    /// Top-left row inside the expanded pane; the transcript flows below it.
+    /// Its height is `TargetAppMetrics.headerHeight`, which the controller adds
+    /// to the measured pane height.
+    private func header(_ app: TargetApp.Info) -> some View {
+        TargetAppBadge(app: app, display: targetAppDisplay, iconSize: TargetAppMetrics.headerIconSize, look: look)
+            .padding(.leading, look.style.pane.paddingHorizontal)
+            .padding(.top, TargetAppMetrics.headerTopInset)
+            .frame(maxWidth: .infinity, minHeight: TargetAppMetrics.headerHeight,
+                   maxHeight: TargetAppMetrics.headerHeight, alignment: .topLeading)
     }
 }
 

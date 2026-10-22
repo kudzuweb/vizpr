@@ -141,8 +141,9 @@ struct OverlayLook: Codable, Equatable, Sendable, Identifiable {
     /// and padding, plus one extra line of headroom: growth leads the text
     /// instead of trailing it, so a wrapping word never renders against the
     /// clipped edge. OverlayView lays the text out with the same width,
-    /// padding, font and line spacing.
-    func paneHeight(fitting text: String) -> CGFloat {
+    /// padding, font and line spacing. `headerHeight` is the target-app row
+    /// above the text (0 when it is not shown).
+    func paneHeight(fitting text: String, headerHeight: CGFloat = 0) -> CGFloat {
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineSpacing = style.text.lineSpacing
         let font = measuringFont
@@ -153,6 +154,7 @@ struct OverlayLook: Codable, Equatable, Sendable, Identifiable {
             attributes: [.font: font, .paragraphStyle: paragraph]
         )
         return ceil(bounds.height) + 2 * style.pane.paddingVertical + ceil(font.ascender - font.descender)
+            + headerHeight
     }
 }
 

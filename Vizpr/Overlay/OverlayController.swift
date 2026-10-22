@@ -25,6 +25,8 @@ final class OverlayController {
     private var lastSnapshot = DisplaySnapshot.empty
 
     private var inviz = false
+    private var targetAppDisplay = TargetAppDisplay.off
+    private let targetApp = TargetApp()
 
     init() {
         panel.onDragEnd = { [weak self] frame in self?.dragEnded(panelFrame: frame) }
@@ -42,6 +44,17 @@ final class OverlayController {
     func setInviz(_ enabled: Bool) {
         inviz = enabled
         if panel.isVisible { render(lastSnapshot) }
+    }
+
+    /// Live setting: how much of the frontmost app the overlay shows. The
+    /// panel's side room and the pane's header height both depend on it.
+    func setTargetAppDisplay(_ display: TargetAppDisplay) {
+        targetAppDisplay = display
+        hitCap = false
+        if panel.isVisible {
+            positionPanel()
+            render(lastSnapshot)
+        }
     }
 
     /// Live setting (PR 11): re-renders immediately so the picker previews.
@@ -64,7 +77,8 @@ final class OverlayController {
             layout.frame(
                 contentHeight: layout.maxHeight,
                 paneWidth: look.style.pane.width,
-                margin: PaneEffects.margin(for: look.style)
+                margin: PaneEffects.margin(for: look.style),
+                sideInset: TargetAppMetrics.sideInset(for: targetAppDisplay)
             ),
             display: true
         )
@@ -75,10 +89,11 @@ final class OverlayController {
     /// that point.
     private func dragEnded(panelFrame: CGRect) {
         let margin = PaneEffects.margin(for: look.style)
+        let sideInset = TargetAppMetrics.sideInset(for: targetAppDisplay)
         let paneFrame = CGRect(
-            x: panelFrame.minX + margin,
+            x: panelFrame.minX + margin + sideInset,
             y: panelFrame.minY + margin,
-            width: panelFrame.width - 2 * margin,
+            width: panelFrame.width - 2 * (margin + sideInset),
             height: OverlayLayout.restingSize.height
         )
         let screens = NSScreen.screens
@@ -119,6 +134,7 @@ final class OverlayController {
         placement = (screen.visibleFrame, screen.displayUUID)
         recording = true
         hitCap = false
+        targetApp.start()
         panel.alphaValue = 1
         // The panel is a FIXED transparent stage spanning bottom edge to cap;
         // only the SwiftUI capsule inside animates (field catch: animating
@@ -139,6 +155,7 @@ final class OverlayController {
     /// instant.
     func dismiss() {
         recording = false
+        targetApp.stop()
         guard panel.isVisible else { return }
         if reduceMotion {
             panel.orderOut(nil)
@@ -166,7 +183,9 @@ final class OverlayController {
             capsuleHeight: capsuleHeight(for: snapshot),
             animated: !reduceMotion,
             look: look,
-            inviz: inviz
+            inviz: inviz,
+            targetApp: targetApp,
+            targetAppDisplay: targetAppDisplay
         )
         if let hosting {
             hosting.rootView = view
@@ -186,7 +205,10 @@ final class OverlayController {
         if hitCap { return layout.maxHeight }
         let text = snapshot.displayed
         guard !text.isEmpty else { return OverlayLayout.restingSize.height }
-        let measured = look.paneHeight(fitting: text)
+        let header = TargetAppMetrics.paneHeaderHeight(
+            for: targetAppDisplay, hasApp: targetApp.current != nil
+        )
+        let measured = look.paneHeight(fitting: text, headerHeight: header)
         let clamped = min(max(measured, OverlayLayout.restingSize.height), layout.maxHeight)
         if clamped >= layout.maxHeight { hitCap = true }
         return clamped

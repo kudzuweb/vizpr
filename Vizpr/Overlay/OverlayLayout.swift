@@ -50,19 +50,22 @@ struct OverlayLayout: Sendable, Equatable {
     /// never moves; only the top edge rises (newest words stay at the bottom).
     /// `margin` is extra room on every side for effects that draw beyond the
     /// pane (glow, shadow): the panel grows around the pane, so the pane's
-    /// frame inside it is the same with or without a margin.
+    /// frame inside it is the same with or without a margin. `sideInset` is
+    /// extra room left and right of the pane for the target-app indicator
+    /// beside the pills; like the margin, it never moves the pane.
     func frame(
         contentHeight: CGFloat,
         paneWidth: CGFloat = Self.readingWidth,
-        margin: CGFloat = 0
+        margin: CGFloat = 0,
+        sideInset: CGFloat = 0
     ) -> CGRect {
         let height = min(max(contentHeight, Self.restingSize.height), maxHeight)
         let width = contentHeight <= Self.restingSize.height ? Self.restingSize.width : paneWidth
         let paneX = min(max(centerX - width / 2, screen.minX), max(screen.maxX - width, screen.minX))
         return CGRect(
-            x: paneX - margin,
+            x: paneX - margin - sideInset,
             y: bottomEdgeY - margin,
-            width: width + 2 * margin,
+            width: width + 2 * (margin + sideInset),
             height: height + 2 * margin
         )
     }
