@@ -63,6 +63,9 @@ struct VizprSettings: Codable, Equatable, Sendable {
     /// in place at commit. An explicit opt-out of proofread-as-you-speak;
     /// the pipeline underneath is unchanged.
     var invizMode: Bool = false
+    /// Whether the overlay shows the frontmost app, so you can see where the
+    /// text will land. A global behavior, not part of a look.
+    var targetAppDisplay: TargetAppDisplay = .icon
     /// Fall back to the built-in mic when the selected input delivers pure
     /// silence (the AirPods-on-a-phone-call trap; default on).
     var silentInputFallback: Bool = true
