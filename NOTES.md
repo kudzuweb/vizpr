@@ -435,6 +435,31 @@ display saves the anchor for that display. The inviz pill sits in the same
 stage, so it follows the same anchor. The menu item "Reset Overlay Position"
 clears every anchor.
 
+## Target app indicator (Mauria, 2026-10-22)
+
+The overlay shows the frontmost app's icon, and its name when asked, so it is
+clear where the text will land (twice, dictation went to a window with no text
+field). `VizprSettings.targetAppDisplay` is `off`, `icon` (the default) or
+`iconAndName`, a global behavior outside the looks.
+
+**Tracking.** `TargetApp` (`Vizpr/Overlay/TargetApp.swift`) observes
+`NSWorkspace.didActivateApplicationNotification` from `OverlayController.show`
+until `dismiss`, so focus moving mid-dictation moves the icon, because that is
+where the commit now injects. Vizpr itself never replaces the target: its
+Settings window in front keeps the last other app.
+
+**Placement.** On the resting and inviz pills the badge sits just outside the
+pill's left edge (16 pt icon, 6 pt gap, 11 pt name). In the expanded pane it is a
+header row at the top left (14 pt icon). Opacity is 0.85 and the name uses the
+look's mutable style. Sizes live in `TargetAppMetrics`.
+
+**Measurement and margin.** The header's height (`TargetAppMetrics.headerHeight`)
+goes into `OverlayLook.paneHeight(fitting:headerHeight:)` whenever it is shown.
+The panel gets `sideInset` on both sides for the badge beside the pills, so the
+badge is not clipped and the pane stays centered where it was; `dragEnded`
+subtracts the same inset when it reads the pane's frame, so the pane, not the
+badge, is what the anchor positions.
+
 ## Future directions (Mauria, 2026-07-05 — recorded, not scheduled)
 
 1. **Verbatim mode:** "I should be able to talk casually and have it show up

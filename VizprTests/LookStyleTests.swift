@@ -152,6 +152,32 @@ struct PaneMeasurementTests {
         }
     }
 
+    @Test("The target-app header adds exactly its height to the pane, and nothing when it is off")
+    func headerHeightEntersMeasurement() {
+        let look = look { _ in }
+        let bare = look.paneHeight(fitting: text)
+        for display in [TargetAppDisplay.icon, .iconAndName] {
+            let header = TargetAppMetrics.paneHeaderHeight(for: display, hasApp: true)
+            #expect(header == TargetAppMetrics.headerHeight)
+            #expect(look.paneHeight(fitting: text, headerHeight: header) == bare + TargetAppMetrics.headerHeight)
+        }
+        #expect(TargetAppMetrics.paneHeaderHeight(for: .off, hasApp: true) == 0)
+        #expect(TargetAppMetrics.paneHeaderHeight(for: .icon, hasApp: false) == 0)
+        #expect(look.paneHeight(fitting: text, headerHeight: 0) == bare)
+    }
+
+    @Test("The panel grows on both sides for the indicator and the pane stays put")
+    func sideInsetKeepsPane() {
+        let layout = OverlayLayout(screen: CGRect(x: 0, y: 0, width: 1600, height: 1000))
+        let bare = layout.frame(contentHeight: 100, paneWidth: 560, margin: 10)
+        let inset = TargetAppMetrics.sideInset(for: .iconAndName)
+        let wide = layout.frame(contentHeight: 100, paneWidth: 560, margin: 10, sideInset: inset)
+        #expect(wide.minX == bare.minX - inset)
+        #expect(wide.width == bare.width + 2 * inset)
+        #expect(wide.midX == bare.midX)
+        #expect(wide.minY == bare.minY && wide.height == bare.height)
+    }
+
     @Test("A named family that is installed is used; a missing one falls back to the system font")
     func familyFallback() {
         let georgia = look { $0.style.text.fontFamily = "Georgia" }
