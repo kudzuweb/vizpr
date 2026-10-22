@@ -87,6 +87,13 @@ struct LooksTests {
         #expect(settings.secondaryModifiers == VizprSettings.default.secondaryModifiers)
     }
 
+    @Test("A file without targetAppDisplay loads with the icon shown; a saved choice survives")
+    func missingTargetAppDisplay() throws {
+        #expect(try decode(#"{"invizMode": true}"#).targetAppDisplay == .icon)
+        #expect(try decode(#"{"targetAppDisplay": "iconAndName"}"#).targetAppDisplay == .iconAndName)
+        #expect(try decode(#"{"targetAppDisplay": "off"}"#).targetAppDisplay == .off)
+    }
+
     @Test("A file without overlayAnchors loads with an empty map")
     func missingAnchors() throws {
         #expect(try decode(#"{"invizMode": true}"#).overlayAnchors.isEmpty)
@@ -254,6 +261,7 @@ struct LooksTests {
         settings.cleanupModelID = "cleanup-x"
         settings.restoreClipboard = false
         settings.invizMode = true
+        settings.targetAppDisplay = .iconAndName
         settings.silentInputFallback = false
         settings.overlayAnchors = ["display-a": OverlayAnchor(x: 0.3, y: 0.6)]
         var look = OverlayLook.slab

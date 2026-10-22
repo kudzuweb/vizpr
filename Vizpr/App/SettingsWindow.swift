@@ -144,6 +144,11 @@ struct BehaviorPane: View {
                 Toggle("Restore clipboard after paste", isOn: bind(store, \.restoreClipboard))
                 Toggle("Inviz mode (indicator only, no live preview)",
                        isOn: bind(store, \.invizMode))
+                Picker("Show target app", selection: bind(store, \.targetAppDisplay)) {
+                    Text("Off").tag(TargetAppDisplay.off)
+                    Text("Icon").tag(TargetAppDisplay.icon)
+                    Text("Icon and name").tag(TargetAppDisplay.iconAndName)
+                }
                 Toggle("Fall back to built-in mic if input is silent",
                        isOn: bind(store, \.silentInputFallback))
             }
