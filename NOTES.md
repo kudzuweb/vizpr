@@ -418,7 +418,8 @@ so its ordering is unit-tested with fake engines.
 - The failover builds and prepares the replacement engine before touching the
   running one, and returns `FailoverResult` (`switched`, `unchanged`, `lost`).
   `AudioPipeline.onCaptureFailure` fires when `source.start()` throws or a
-  failover is `lost`; it is not yet connected to the app.
+  failover is `lost`. `AppDelegate` connects it to the hotkey: it beeps and
+  calls `HotkeyMonitor.injectCaptureFailure()`, which cancels the session.
 - Debug builds log `main stall Nms` when the main run loop is blocked over
   100 ms (`MainStallProbe`).
 
