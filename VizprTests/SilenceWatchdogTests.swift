@@ -104,8 +104,8 @@ struct SilenceWatchdogTests {
         #expect(committed)
         #expect(machine.state == .idle)
 
-        var holdingMachine = HotkeyStateMachine(holdThreshold: .milliseconds(200), state: .holding(source: .fn))
+        var holdingMachine = HotkeyStateMachine(holdThreshold: .milliseconds(200), state: .holding(since: MonotonicTime(nanoseconds: 0), source: .fn))
         #expect(holdingMachine.handle(.autoStop).action == nil)
-        #expect(holdingMachine.state == .holding(source: .fn))
+        #expect(holdingMachine.state == .holding(since: MonotonicTime(nanoseconds: 0), source: .fn))
     }
 }

@@ -190,7 +190,9 @@ final class HotkeyMonitor: @unchecked Sendable {
     }
 
     private func handleFlagsChanged(_ event: CGEvent) -> Unmanaged<CGEvent>? {
-        let now = nowMonotonic()
+        // Edges carry the event's own time: a callback serviced late (main thread
+        // blocked) must still see a quick tap as a quick tap.
+        let now = EventTimestamp.monotonic(eventTicks: event.timestamp, handledAt: nowMonotonic())
 
         // One packet can toggle both Fn and the secondary combo, so process every
         // edge it produces — never early-return after Fn. Only an Fn edge can ever
