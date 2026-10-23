@@ -113,25 +113,29 @@ final class AudioPipeline {
 
             #if DICT_DEV_LOG
             var chunkCount = 0
+            var sessionChunks = 0
             #endif
             var fallbackAttempted = false
-            var sessionChunks = 0
 
             do {
                 let stream = try await source.start()
                 for await samples in stream {
                     guard !Task.isCancelled else { break }
-                    sessionChunks += 1
                     #if DICT_DEV_LOG
+                    sessionChunks += 1
                     if sessionChunks == 1 { onDevTimingMark?(.captureStarted, .now) }
                     #endif
                     // Dead-air failover (field case: a phone call owned the
-                    // AirPods; the route delivered zeros). ~1.3 s of exactly
-                    // zero raw peak on a non-built-in engine -> swap to the
+                    // AirPods; the route delivered zeros) -> swap to the
                     // built-in mic once, same stream, session continues.
-                    if self.silentInputFallback, !fallbackAttempted, sessionChunks == 5,
+                    if self.silentInputFallback,
                        let capture = source as? MicrophoneCapture,
-                       capture.rawPeakLevel.value == 0 {
+                       SilentRouteDecision.shouldFallBack(
+                           measuredTaps: capture.measuredTaps.value,
+                           rawPeak: capture.rawPeakLevel.value,
+                           routeIsBuiltIn: capture.routeIsBuiltIn,
+                           alreadyAttempted: fallbackAttempted
+                       ) {
                         fallbackAttempted = true
                         _ = await capture.fallBackToBuiltInMic()
                     }

@@ -52,6 +52,8 @@ enum AudioCaptureError: Error {
 /// the Sendable continuation and the atomic counters.
 final class MicrophoneCapture: CaptureSource, @unchecked Sendable {
     static let sampleRate = 16_000.0
+    /// Frames per tap callback, at the hardware sample rate.
+    static let tapBufferFrames: AVAudioFrameCount = 4096
 
     /// Serializes every engine mutation. `stop()` enqueues here too, so a stop
     /// always lands before any later start, and a stop requested while a start
@@ -77,6 +79,18 @@ final class MicrophoneCapture: CaptureSource, @unchecked Sendable {
     /// from "the converter is zeroing good audio" (raw peak healthy, converted
     /// rms 0) — the discriminator for silent-capture bugs.
     let rawPeakLevel = AtomicCounter()
+
+    /// Taps whose raw level was measured. `rawPeakLevel == 0` means "silent"
+    /// only once this is large enough: before the first measurement the peak
+    /// reads 0 on every route.
+    let measuredTaps = AtomicCounter()
+
+    private let builtInRoute = Mutex(false)
+
+    /// Whether the input device in use is the built-in microphone. Set when
+    /// the engine starts and again after a failover; false when the device
+    /// could not be identified.
+    var routeIsBuiltIn: Bool { builtInRoute.withLock { $0 } }
 
     func start() async throws -> AsyncStream<[Float]> {
         #if DICT_DEV_LOG
@@ -107,6 +121,7 @@ final class MicrophoneCapture: CaptureSource, @unchecked Sendable {
         convertedBatches.reset()
         droppedBatches.reset()
         rawPeakLevel.reset()
+        measuredTaps.reset()
 
         let engine = AVAudioEngine()
         let input = engine.inputNode
@@ -154,13 +169,15 @@ final class MicrophoneCapture: CaptureSource, @unchecked Sendable {
             taps: tapInvocations,
             converts: convertedBatches,
             dropped: droppedBatches,
-            rawPeak: rawPeakLevel
+            rawPeak: rawPeakLevel,
+            measured: measuredTaps
         ))
-        input.installTap(onBus: 0, bufferSize: 4096, format: hardwareFormat, block: tapBlock)
+        input.installTap(onBus: 0, bufferSize: Self.tapBufferFrames, format: hardwareFormat, block: tapBlock)
 
         engine.prepare()
         try engine.start()
         self.engine = engine
+        builtInRoute.withLock { $0 = Self.isBuiltIn(Self.currentInputDeviceID(of: input)) }
         #if DICT_DEV_LOG
         VizprTranscriptLogger.note("capture: engine started, isRunning=\(engine.isRunning)")
         #endif
@@ -213,17 +230,44 @@ final class MicrophoneCapture: CaptureSource, @unchecked Sendable {
             taps: tapInvocations,
             converts: convertedBatches,
             dropped: droppedBatches,
-            rawPeak: rawPeakLevel
+            rawPeak: rawPeakLevel,
+            measured: measuredTaps
         ))
-        input.installTap(onBus: 0, bufferSize: 4096, format: hardwareFormat, block: tapBlock)
+        input.installTap(onBus: 0, bufferSize: Self.tapBufferFrames, format: hardwareFormat, block: tapBlock)
         newEngine.prepare()
         guard (try? newEngine.start()) != nil else { return false }
         engine = newEngine
+        builtInRoute.withLock { $0 = true }
         #if DICT_DEV_LOG
         VizprTranscriptLogger.note(
             "capture: FELL BACK to built-in mic (previous route was silent)")
         #endif
         return true
+    }
+
+    /// The device the engine's input node is currently bound to.
+    private static func currentInputDeviceID(of input: AVAudioInputNode) -> AudioDeviceID? {
+        guard let unit = input.audioUnit else { return nil }
+        var deviceID = AudioDeviceID(0)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        guard AudioUnitGetProperty(
+            unit, kAudioOutputUnitProperty_CurrentDevice,
+            kAudioUnitScope_Global, 0, &deviceID, &size
+        ) == noErr else { return nil }
+        return deviceID
+    }
+
+    private static func isBuiltIn(_ device: AudioDeviceID?) -> Bool {
+        guard let device else { return false }
+        var transport: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyTransportType,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        return AudioObjectGetPropertyData(device, &address, 0, nil, &size, &transport) == noErr
+            && transport == kAudioDeviceTransportTypeBuiltIn
     }
 
     /// CoreAudio lookup: the first input-capable device with built-in
@@ -246,16 +290,7 @@ final class MicrophoneCapture: CaptureSource, @unchecked Sendable {
         ) == noErr else { return nil }
 
         for device in devices {
-            var transport: UInt32 = 0
-            var transportSize = UInt32(MemoryLayout<UInt32>.size)
-            var transportAddress = AudioObjectPropertyAddress(
-                mSelector: kAudioDevicePropertyTransportType,
-                mScope: kAudioObjectPropertyScopeGlobal,
-                mElement: kAudioObjectPropertyElementMain
-            )
-            guard AudioObjectGetPropertyData(
-                device, &transportAddress, 0, nil, &transportSize, &transport
-            ) == noErr, transport == kAudioDeviceTransportTypeBuiltIn else { continue }
+            guard isBuiltIn(device) else { continue }
 
             var streamsAddress = AudioObjectPropertyAddress(
                 mSelector: kAudioDevicePropertyStreams,
@@ -305,6 +340,7 @@ final class MicrophoneCapture: CaptureSource, @unchecked Sendable {
         let converts: AtomicCounter
         let dropped: AtomicCounter
         let rawPeak: AtomicCounter
+        let measured: AtomicCounter
     }
 
     /// Build the tap callback in a nonisolated context so it carries no actor
@@ -315,14 +351,16 @@ final class MicrophoneCapture: CaptureSource, @unchecked Sendable {
         { buffer, _ in
             context.taps.increment()
 
-            // Raw-level probe (every 8th buffer): peak RMS of what the hardware
-            // actually delivered, before conversion touches it.
-            if context.taps.value % 8 == 0, let raw = buffer.floatChannelData {
+            // Raw-level probe: peak RMS of what the hardware actually delivered,
+            // before conversion touches it. Measured on every tap (a sum over
+            // one buffer) so a zero peak is evidence, not an unmeasured default.
+            if let raw = buffer.floatChannelData {
                 let count = Int(buffer.frameLength)
                 var sum: Float = 0
                 for idx in 0..<count { sum += raw[0][idx] * raw[0][idx] }
                 let rms = count > 0 ? (sum / Float(count)).squareRoot() : 0
                 context.rawPeak.storeMax(Int(rms * 1_000_000))
+                context.measured.increment()
             }
 
             let ratio = sampleRate / context.hardwareSampleRate
