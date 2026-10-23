@@ -18,11 +18,21 @@ enum EventTimestamp {
         handledAt now: MonotonicTime,
         timebase: (numer: UInt32, denom: UInt32) = Self.systemTimebase
     ) -> MonotonicTime {
-        guard eventTicks != 0, timebase.denom != 0 else { return now }
+        converted(eventTicks: eventTicks, handledAt: now, timebase: timebase) ?? now
+    }
+
+    /// The converted stamp, or nil when the guards reject it (the caller then
+    /// uses handling time). Exposed so the dev log can say which path ran.
+    static func converted(
+        eventTicks: UInt64,
+        handledAt now: MonotonicTime,
+        timebase: (numer: UInt32, denom: UInt32) = Self.systemTimebase
+    ) -> MonotonicTime? {
+        guard eventTicks != 0, timebase.denom != 0 else { return nil }
         let (scaled, overflow) = eventTicks.multipliedReportingOverflow(by: UInt64(timebase.numer))
-        guard !overflow else { return now }
+        guard !overflow else { return nil }
         let stamp = scaled / UInt64(timebase.denom)
-        guard stamp <= now.nanoseconds, now.nanoseconds - stamp <= maxAge else { return now }
+        guard stamp <= now.nanoseconds, now.nanoseconds - stamp <= maxAge else { return nil }
         return MonotonicTime(nanoseconds: stamp)
     }
 

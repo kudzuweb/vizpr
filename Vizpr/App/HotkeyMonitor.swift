@@ -221,19 +221,44 @@ final class HotkeyMonitor: @unchecked Sendable {
     private func handleFlagsChanged(_ event: CGEvent) -> Unmanaged<CGEvent>? {
         // Edges carry the event's own time: a callback serviced late (main thread
         // blocked) must still see a quick tap as a quick tap.
-        let now = EventTimestamp.monotonic(eventTicks: event.timestamp, handledAt: nowMonotonic())
+        let handledAt = nowMonotonic()
+        let converted = EventTimestamp.converted(eventTicks: event.timestamp, handledAt: handledAt)
+        let now = converted ?? handledAt
 
         // One packet can toggle both Fn and the secondary combo, so process every
         // edge it produces — never early-return after Fn. Only an Fn edge can ever
         // set `suppress`, so a non-Fn modifier change is never deleted.
         var suppress = false
-        for edge in edges.edges(for: event.flags) {
+        let found = edges.edges(for: event.flags)
+        #if DICT_DEV_LOG
+        logTimestampPathOnce(edges: found, rawTicks: event.timestamp, converted: converted, handledAt: handledAt)
+        #endif
+        for edge in found {
             let decision = machine.handle(input(for: edge, at: now))
             apply(decision)
             if decision.disposition == .consume { suppress = true }
         }
         return suppress ? nil : Unmanaged.passUnretained(event)
     }
+
+    #if DICT_DEV_LOG
+    private var loggedTimestampPath = false
+
+    /// Once per launch, on the first Fn edge: records whether the event stamp was
+    /// converted or fell back to handling time, with the raw numbers, so a wrong
+    /// unit assumption is visible. Numbers only, no typed text.
+    private func logTimestampPathOnce(
+        edges: [FlagEdgeTracker.Edge], rawTicks: UInt64, converted: MonotonicTime?, handledAt: MonotonicTime
+    ) {
+        guard !loggedTimestampPath, edges.contains(where: { $0 == .fnDown || $0 == .fnUp }) else { return }
+        loggedTimestampPath = true
+        VizprTranscriptLogger.note(
+            "hotkey event stamp: \(converted == nil ? "fell back to handling time" : "converted") "
+            + "rawTicks=\(rawTicks) convertedNs=\(converted?.nanoseconds.description ?? "-") "
+            + "uptimeNs=\(handledAt.nanoseconds)"
+        )
+    }
+    #endif
 
     private func input(for edge: FlagEdgeTracker.Edge, at now: MonotonicTime) -> HotkeyInput {
         switch edge {
