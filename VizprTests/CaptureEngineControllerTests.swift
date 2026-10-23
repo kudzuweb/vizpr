@@ -15,6 +15,7 @@ private final class FakeEngine: CaptureEngine, Sendable {
     }
 
     let route: InputRoute
+    let hardwareSampleRate = 48_000.0
     private let behavior: StartBehavior
     private let entered = Mutex(false)
     private let release = DispatchSemaphore(value: 0)

@@ -21,10 +21,12 @@ final class CaptureCounters: Sendable {
     /// rms 0) — the discriminator for silent-capture bugs.
     let rawPeak = AtomicCounter()
 
-    /// Taps whose raw level was measured. `rawPeak == 0` means "silent" only
-    /// once this is large enough: before the first measurement the peak reads 0
-    /// on every route.
-    let measuredTaps = AtomicCounter()
+    /// Hardware frames whose raw level was measured. `rawPeak == 0` means
+    /// "silent" only once this covers enough time: before the first measurement
+    /// the peak reads 0 on every route. The tap stores the peak first and
+    /// publishes this count with release ordering; readers use
+    /// `valueAcquiring`.
+    let measuredFrames = AtomicCounter()
 
     /// Per-session diagnostics (field bug: cumulative counters carried
     /// session 1's real audio peak into session 2, masking its silence — the
@@ -34,7 +36,7 @@ final class CaptureCounters: Sendable {
         converted.reset()
         dropped.reset()
         rawPeak.reset()
-        measuredTaps.reset()
+        measuredFrames.reset()
     }
 }
 
@@ -111,7 +113,10 @@ struct MicrophoneEngineFactory: CaptureEngineFactory {
             format: hardwareFormat, block: tapBlock
         )
         engine.prepare()
-        return MicrophoneEngine(engine: engine, pinnedToBuiltIn: device != nil, counters: counters)
+        return MicrophoneEngine(
+            engine: engine, hardwareSampleRate: hardwareFormat.sampleRate,
+            pinnedToBuiltIn: device != nil, counters: counters
+        )
     }
 
     /// The first input-capable device with built-in transport.
@@ -179,7 +184,7 @@ struct MicrophoneEngineFactory: CaptureEngineFactory {
                 for idx in 0..<count { sum += raw[0][idx] * raw[0][idx] }
                 let rms = count > 0 ? (sum / Float(count)).squareRoot() : 0
                 counters.rawPeak.storeMax(Int(rms * 1_000_000))
-                counters.measuredTaps.increment()
+                counters.measuredFrames.addReleasing(count)
             }
 
             let ratio = MicrophoneCapture.sampleRate / context.hardwareSampleRate
@@ -217,11 +222,13 @@ struct MicrophoneEngineFactory: CaptureEngineFactory {
 /// A prepared AVAudioEngine with its tap installed.
 private final class MicrophoneEngine: CaptureEngine {
     private let engine: AVAudioEngine
+    let hardwareSampleRate: Double
     private let pinnedToBuiltIn: Bool
     private let counters: CaptureCounters
 
-    init(engine: AVAudioEngine, pinnedToBuiltIn: Bool, counters: CaptureCounters) {
+    init(engine: AVAudioEngine, hardwareSampleRate: Double, pinnedToBuiltIn: Bool, counters: CaptureCounters) {
         self.engine = engine
+        self.hardwareSampleRate = hardwareSampleRate
         self.pinnedToBuiltIn = pinnedToBuiltIn
         self.counters = counters
     }

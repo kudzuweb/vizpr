@@ -7,37 +7,35 @@ enum SilentRouteDecision {
     /// they connect).
     static let evidenceSeconds = 1.3
 
-    /// The evidence window expressed in taps. Taps carry a fixed number of
-    /// frames at the hardware sample rate, so a tap's duration depends on the
-    /// route; 48 kHz is the fastest common rate and gives the shortest taps,
-    /// so every route waits at least `evidenceSeconds`.
-    static let minimumMeasuredTaps = Int(
-        (evidenceSeconds * 48_000 / Double(MicrophoneCapture.tapBufferFrames)).rounded(.up)
-    )
-
-    /// - Parameters:
-    ///   - measuredTaps: taps whose raw level has actually been measured.
-    ///   - rawPeak: peak raw level over those taps (0 means exactly silent).
-    ///   - routeIsBuiltIn: the built-in mic has nothing to fall back to.
-    ///   - alreadyAttempted: a failover is tried at most once per session.
     static func shouldFallBack(evidence: RouteEvidence, alreadyAttempted: Bool) -> Bool {
         shouldFallBack(
-            measuredTaps: evidence.measuredTaps,
+            measuredFrames: evidence.measuredFrames,
+            hardwareSampleRate: evidence.hardwareSampleRate,
             rawPeak: evidence.rawPeak,
-            routeIsBuiltIn: evidence.routeIsBuiltIn,
+            route: evidence.route,
             alreadyAttempted: alreadyAttempted
         )
     }
 
+    /// - Parameters:
+    ///   - measuredFrames: hardware frames whose raw level has been measured.
+    ///   - hardwareSampleRate: the rate those frames are at, so the evidence is
+    ///     judged in seconds whatever the route's tap size.
+    ///   - rawPeak: peak raw level over those frames (0 means exactly silent).
+    ///   - route: only a route positively identified as non-built-in qualifies:
+    ///     the built-in mic has nothing to fall back to, and an unidentified
+    ///     route gives no reason to believe a swap would help.
+    ///   - alreadyAttempted: a failover is tried at most once per session.
     static func shouldFallBack(
-        measuredTaps: Int,
+        measuredFrames: Int,
+        hardwareSampleRate: Double,
         rawPeak: Int,
-        routeIsBuiltIn: Bool,
+        route: InputRoute,
         alreadyAttempted: Bool
     ) -> Bool {
-        measuredTaps >= minimumMeasuredTaps
+        guard route == .external, hardwareSampleRate > 0 else { return false }
+        return Double(measuredFrames) / hardwareSampleRate >= evidenceSeconds
             && rawPeak == 0
-            && !routeIsBuiltIn
             && !alreadyAttempted
     }
 }

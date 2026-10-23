@@ -8,6 +8,9 @@ import Synchronization
 final class AtomicCounter: Sendable {
     private let storage = Atomic<Int>(0)
     func increment() { storage.add(1, ordering: .relaxed) }
+    /// Publishes `amount` with release ordering: a reader that sees the new
+    /// total through `valueAcquiring` also sees every write made before this call.
+    func addReleasing(_ amount: Int) { storage.add(amount, ordering: .releasing) }
     func reset() { storage.store(0, ordering: .relaxed) }
     func storeMax(_ candidate: Int) {
         var current = storage.load(ordering: .relaxed)
@@ -21,6 +24,7 @@ final class AtomicCounter: Sendable {
         }
     }
     var value: Int { storage.load(ordering: .relaxed) }
+    var valueAcquiring: Int { storage.load(ordering: .acquiring) }
 }
 
 /// Abstraction over the microphone so the pipeline can be tested with synthetic
@@ -37,9 +41,11 @@ protocol CaptureSource: Sendable {
 
 /// What the pipeline needs to judge whether a route is dead and to swap it.
 struct RouteEvidence: Sendable {
-    let measuredTaps: Int
+    /// Hardware frames whose raw level has been measured.
+    let measuredFrames: Int
+    let hardwareSampleRate: Double
     let rawPeak: Int
-    let routeIsBuiltIn: Bool
+    let route: InputRoute
 }
 
 /// A source that can move to the built-in microphone mid-session.
@@ -79,10 +85,15 @@ final class MicrophoneCapture: FailoverCapableSource {
     var rawPeakLevel: AtomicCounter { counters.rawPeak }
 
     var routeEvidence: RouteEvidence {
-        RouteEvidence(
-            measuredTaps: counters.measuredTaps.value,
+        // Frames first, with acquire ordering: the tap stores the peak before it
+        // publishes the frames, so the peak read below is at least as new.
+        let measuredFrames = counters.measuredFrames.valueAcquiring
+        let input = controller.input
+        return RouteEvidence(
+            measuredFrames: measuredFrames,
+            hardwareSampleRate: input.hardwareSampleRate,
             rawPeak: counters.rawPeak.value,
-            routeIsBuiltIn: controller.route == .builtIn
+            route: input.route
         )
     }
 

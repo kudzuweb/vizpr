@@ -20,10 +20,29 @@ enum FailoverResult: Sendable {
     case lost
 }
 
+/// The route and sample rate of the engine that is capturing.
+struct RunningInput: Sendable {
+    let route: InputRoute
+    let hardwareSampleRate: Double
+
+    static let none = RunningInput(route: .unidentified, hardwareSampleRate: 0)
+
+    fileprivate init(route: InputRoute, hardwareSampleRate: Double) {
+        self.route = route
+        self.hardwareSampleRate = hardwareSampleRate
+    }
+
+    fileprivate init(_ engine: CaptureEngine) {
+        self.init(route: engine.route, hardwareSampleRate: engine.hardwareSampleRate)
+    }
+}
+
 /// One capture engine as the controller sees it. Only ever touched on the
 /// controller's queue.
 protocol CaptureEngine: AnyObject {
     var route: InputRoute { get }
+    /// Sample rate of the frames the tap delivers.
+    var hardwareSampleRate: Double { get }
     func start() throws
     /// Removes the tap and stops. Safe on an engine that never started.
     func stop()
@@ -55,7 +74,7 @@ final class CaptureEngineController: @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.kudzuweb.vizpr.audio-capture", qos: .userInitiated)
     private let factory: any CaptureEngineFactory
     private let generation = Mutex(0)
-    private let runningRoute = Mutex(InputRoute.unidentified)
+    private let runningInput = Mutex(RunningInput.none)
 
     // Touched only on `queue`.
     private var engine: CaptureEngine?
@@ -65,8 +84,9 @@ final class CaptureEngineController: @unchecked Sendable {
         self.factory = factory
     }
 
-    /// The route of the running engine; `.unidentified` when none runs.
-    var route: InputRoute { runningRoute.withLock { $0 } }
+    /// What the running engine is bound to; `RunningInput.none` when none runs.
+    var input: RunningInput { runningInput.withLock { $0 } }
+    var route: InputRoute { input.route }
 
     func makeStartTicket() -> StartTicket {
         StartTicket(generation: generation.withLock { $0 })
@@ -134,7 +154,7 @@ final class CaptureEngineController: @unchecked Sendable {
         }
         self.engine = engine
         self.continuation = continuation
-        runningRoute.withLock { $0 = engine.route }
+        runningInput.withLock { $0 = RunningInput(engine) }
         return stream
     }
 
@@ -154,7 +174,7 @@ final class CaptureEngineController: @unchecked Sendable {
             return .lost
         }
         engine = replacement
-        runningRoute.withLock { $0 = replacement.route }
+        runningInput.withLock { $0 = RunningInput(replacement) }
         #if DICT_DEV_LOG
         VizprTranscriptLogger.note(
             "capture: FELL BACK to built-in mic (previous route was silent)")
@@ -167,6 +187,6 @@ final class CaptureEngineController: @unchecked Sendable {
         engine = nil
         continuation?.finish()
         continuation = nil
-        runningRoute.withLock { $0 = .unidentified }
+        runningInput.withLock { $0 = .none }
     }
 }

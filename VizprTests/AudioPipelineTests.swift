@@ -21,9 +21,7 @@ private struct SilentRouteSource: FailoverCapableSource {
     let result: FailoverResult
     var routeEvidence: RouteEvidence {
         RouteEvidence(
-            measuredTaps: SilentRouteDecision.minimumMeasuredTaps,
-            rawPeak: 0,
-            routeIsBuiltIn: false
+            measuredFrames: 96_000, hardwareSampleRate: 48_000, rawPeak: 0, route: .external
         )
     }
     func start() async throws -> AsyncStream<[Float]> { stream }
