@@ -33,7 +33,8 @@ final class HotkeyMonitor: @unchecked Sendable {
     /// flagsChanged reports the whole flag set, so down/up edges are derived by
     /// comparison, and that comparison has real failure modes worth testing.
     private var edges: FlagEdgeTracker
-    private var runLoopSource: CFRunLoopSource?
+    /// The tap currently attached to the run loop (port and source).
+    private var installed: InstalledTap?
     private var thresholdTimer: CFRunLoopTimer?
     private var watchdogTimer: CFRunLoopTimer?
 
@@ -84,10 +85,11 @@ final class HotkeyMonitor: @unchecked Sendable {
         // self, so it must never outlive the object. Waiting for the teardown also
         // waits out a callback still running on the hotkey thread. Idempotent
         // with stop().
-        let installed = InstalledTap(port: machPort, source: runLoopSource,
-                                     timers: [thresholdTimer, watchdogTimer].compactMap { $0 })
+        var leftover = installed ?? InstalledTap()
+        leftover.timers = [thresholdTimer, watchdogTimer].compactMap { $0 }
+        let snapshot = leftover
         let thread = runLoopThread
-        thread.performAndWait { installed.tearDown(on: thread) }
+        thread.performAndWait { snapshot.tearDown(on: thread) }
         actionsContinuation.finish()
     }
 
@@ -119,11 +121,11 @@ final class HotkeyMonitor: @unchecked Sendable {
         }
 
         shared.withLockUnchecked { $0.port = port }
-        let installed = InstalledTap(port: port, source: CFMachPortCreateRunLoopSource(kCFAllocatorDefault, port, 0))
+        let tap = InstalledTap(port: port, source: CFMachPortCreateRunLoopSource(kCFAllocatorDefault, port, 0))
         runLoopThread.performAndWait { [self] in
-            runLoopSource = installed.source
-            if let source = installed.source { runLoopThread.add(source: source) }
-            installed.port.map { CGEvent.tapEnable(tap: $0, enable: true) }
+            installed = tap
+            if let source = tap.source { runLoopThread.add(source: source) }
+            tap.port.map { CGEvent.tapEnable(tap: $0, enable: true) }
             startWatchdog()
         }
         return true
@@ -131,14 +133,26 @@ final class HotkeyMonitor: @unchecked Sendable {
 
     /// Remove the tap and reset all state before returning; the wait is bounded
     /// so a wedged hotkey thread cannot hang a permission flow or app quit.
+    ///
+    /// The port is cleared here, on the caller's thread, so a `start()` that
+    /// follows a timed-out stop creates a fresh tap instead of seeing the old
+    /// one. The queued teardown removes only the tap that this call stopped, so
+    /// it can never remove that newer tap.
     @MainActor
     func stop() {
+        let stoppedTap = shared.withLockUnchecked { state -> ObjectIdentifier? in
+            defer { state.port = nil }
+            return state.port.map(ObjectIdentifier.init)
+        }
         runLoopThread.performAndWait { [self] in
-            InstalledTap(port: machPort, source: runLoopSource,
-                         timers: [thresholdTimer, watchdogTimer].compactMap { $0 })
-                .tearDown(on: runLoopThread)
-            shared.withLockUnchecked { $0.port = nil }
-            runLoopSource = nil
+            var teardown = InstalledTap()
+            teardown.timers = [thresholdTimer, watchdogTimer].compactMap { $0 }
+            if let current = installed, current.port.map(ObjectIdentifier.init) == stoppedTap {
+                teardown.port = current.port
+                teardown.source = current.source
+                installed = nil
+            }
+            teardown.tearDown(on: runLoopThread)
             thresholdTimer = nil
             watchdogTimer = nil
             edges.reset()
@@ -343,6 +357,11 @@ private struct InstalledTap: @unchecked Sendable {
     var port: CFMachPort?
     var source: CFRunLoopSource?
     var timers: [CFRunLoopTimer] = []
+
+    init(port: CFMachPort? = nil, source: CFRunLoopSource? = nil) {
+        self.port = port
+        self.source = source
+    }
 
     /// Must run on the hotkey thread so it is ordered after any callback in flight.
     func tearDown(on thread: HotkeyRunLoopThread) {
