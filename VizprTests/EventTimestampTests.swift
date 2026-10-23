@@ -27,9 +27,11 @@ struct EventTimestampTests {
         #expect(stamp == now)
     }
 
-    @Test("A zero timestamp falls back to the handling time")
+    @Test("A zero timestamp falls back to the handling time, including soon after boot")
     func zeroFallsBack() {
-        let late = MonotonicTime(nanoseconds: 60_000_000_000)
-        #expect(EventTimestamp.monotonic(eventTicks: 0, handledAt: late, timebase: (1, 1)) == late)
+        for uptime in [UInt64(5_000_000_000), 60_000_000_000] {
+            let handled = MonotonicTime(nanoseconds: uptime)
+            #expect(EventTimestamp.monotonic(eventTicks: 0, handledAt: handled, timebase: (1, 1)) == handled)
+        }
     }
 }

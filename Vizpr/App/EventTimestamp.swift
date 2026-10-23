@@ -18,7 +18,7 @@ enum EventTimestamp {
         handledAt now: MonotonicTime,
         timebase: (numer: UInt32, denom: UInt32) = Self.systemTimebase
     ) -> MonotonicTime {
-        guard timebase.denom != 0 else { return now }
+        guard eventTicks != 0, timebase.denom != 0 else { return now }
         let (scaled, overflow) = eventTicks.multipliedReportingOverflow(by: UInt64(timebase.numer))
         guard !overflow else { return now }
         let stamp = scaled / UInt64(timebase.denom)
