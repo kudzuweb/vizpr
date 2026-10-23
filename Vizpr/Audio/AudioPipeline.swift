@@ -39,6 +39,10 @@ final class AudioPipeline {
     /// field occurrence 2026-07-06 burned a whole test session). The caller
     /// surfaces a notice; fail-silent here would look like broken dictation.
     var onSilentSession: (() -> Void)?
+    /// Fired when the session cannot capture audio: the source failed to start
+    /// (permission denied, engine would not run) or a failover left no engine.
+    /// The caller surfaces it; fail-silent would look like a hung hotkey.
+    var onCaptureFailure: (() -> Void)?
     /// Live setting (PR 11): attempt the built-in-mic failover when the
     /// selected route delivers silence (default on).
     var silentInputFallback = true
@@ -137,7 +141,9 @@ final class AudioPipeline {
                            alreadyAttempted: fallbackAttempted
                        ) {
                         fallbackAttempted = true
-                        _ = await capture.fallBackToBuiltInMic()
+                        if await capture.fallBackToBuiltInMic() == .lost {
+                            self.onCaptureFailure?()
+                        }
                     }
                     fanOut.audio?.yield(samples)
                     for update in try await detector.process(samples) {
@@ -168,6 +174,8 @@ final class AudioPipeline {
                 #if DICT_DEV_LOG
                 VizprTranscriptLogger.note("audio pipeline error: \(error)")
                 #endif
+                // A throw after the user already stopped is not a failure.
+                if !Task.isCancelled { self.onCaptureFailure?() }
             }
 
             // Session over: end the engine's input so it flushes its tail and

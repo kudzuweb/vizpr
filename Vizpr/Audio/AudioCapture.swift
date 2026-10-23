@@ -38,6 +38,18 @@ protocol CaptureSource: Sendable {
 
 enum AudioCaptureError: Error {
     case microphonePermissionDenied
+    case cannotConfigureInput
+}
+
+/// What a mid-session failover left behind.
+enum FailoverResult: Sendable {
+    /// Capture now runs on the replacement engine.
+    case switched
+    /// The replacement could not be built; the original engine still captures.
+    case unchanged
+    /// The original engine was stopped and the replacement would not start, so
+    /// the stream has ended.
+    case lost
 }
 
 /// AVFoundation capture shell (PLAN.md §7): input tap → continuation bridge →
@@ -123,8 +135,52 @@ final class MicrophoneCapture: CaptureSource, @unchecked Sendable {
         rawPeakLevel.reset()
         measuredTaps.reset()
 
+        // The continuation is stored only once the engine runs, so a failed
+        // start leaves no half-built state behind.
+        let (stream, continuation) = AsyncStream.makeStream(
+            of: [Float].self, bufferingPolicy: .bufferingNewest(64)
+        )
+        guard let engine = makeEngine(pinnedTo: nil, feeding: continuation) else {
+            continuation.finish()
+            throw AudioCaptureError.cannotConfigureInput
+        }
+        do {
+            try engine.start()
+        } catch {
+            engine.inputNode.removeTap(onBus: 0)
+            continuation.finish()
+            throw error
+        }
+        self.engine = engine
+        self.continuation = continuation
+        builtInRoute.withLock { $0 = Self.isBuiltIn(Self.currentInputDeviceID(of: engine.inputNode)) }
+        #if DICT_DEV_LOG
+        VizprTranscriptLogger.note("capture: engine started, isRunning=\(engine.isRunning)")
+        #endif
+        return stream
+    }
+
+    /// Builds an engine with its tap installed and prepared but not started, so
+    /// a caller can swap engines without touching the running one until the
+    /// replacement is known to be configurable. Nil when the input cannot be
+    /// pinned or converted to 16 kHz mono.
+    private func makeEngine(
+        pinnedTo device: AudioDeviceID?,
+        feeding continuation: AsyncStream<[Float]>.Continuation
+    ) -> AVAudioEngine? {
         let engine = AVAudioEngine()
         let input = engine.inputNode
+        if var deviceID = device {
+            // Pin the input node's underlying audio unit BEFORE reading
+            // formats or installing the tap.
+            guard let unit = input.audioUnit,
+                  AudioUnitSetProperty(
+                      unit, kAudioOutputUnitProperty_CurrentDevice,
+                      kAudioUnitScope_Global, 0,
+                      &deviceID, UInt32(MemoryLayout<AudioDeviceID>.size)
+                  ) == noErr else { return nil }
+        }
+
         let hardwareFormat = input.outputFormat(forBus: 0)
         #if DICT_DEV_LOG
         // Device name resolves OFF the hot path (PR 13): AVCaptureDevice
@@ -146,18 +202,11 @@ final class MicrophoneCapture: CaptureSource, @unchecked Sendable {
         ), let converter = AVAudioConverter(from: hardwareFormat, to: targetFormat) else {
             // Converter creation only fails for incompatible formats; any mic
             // route AVFoundation offers converts to 16k mono float.
-            throw AudioCaptureError.microphonePermissionDenied
+            return nil
         }
 
-        // ~64 batches ≈ 1.5–4 s of headroom depending on route buffer size:
-        // enough to absorb consumer hiccups, small enough to bound latency.
-        let (stream, continuation) = AsyncStream.makeStream(
-            of: [Float].self, bufferingPolicy: .bufferingNewest(64)
-        )
-        self.continuation = continuation
-
         // The tap block MUST be formed outside any actor context: a closure
-        // created inside this @MainActor method inherits MainActor isolation,
+        // created inside an actor-isolated method inherits that isolation,
         // and Swift 6 inserts a dynamic executor assertion that traps (SIGTRAP)
         // when AVFAudio invokes the tap on its realtime messenger queue. The
         // nonisolated factory produces an isolation-free closure.
@@ -173,76 +222,45 @@ final class MicrophoneCapture: CaptureSource, @unchecked Sendable {
             measured: measuredTaps
         ))
         input.installTap(onBus: 0, bufferSize: Self.tapBufferFrames, format: hardwareFormat, block: tapBlock)
-
         engine.prepare()
-        try engine.start()
-        self.engine = engine
-        builtInRoute.withLock { $0 = Self.isBuiltIn(Self.currentInputDeviceID(of: input)) }
-        #if DICT_DEV_LOG
-        VizprTranscriptLogger.note("capture: engine started, isRunning=\(engine.isRunning)")
-        #endif
-        return stream
+        return engine
     }
 
     /// Mid-session failover to the built-in microphone (field case,
     /// 2026-07-06: a phone call owned the AirPods; macOS kept handing us the
-    /// AirPods input route, which delivered pure zeros). Tears the engine
-    /// down and rebuilds it pinned to the built-in device, feeding the SAME
-    /// stream continuation — the consumer never notices. Only the dead air
-    /// is lost, and it was dead.
-    func fallBackToBuiltInMic() async -> Bool {
+    /// AirPods input route, which delivered pure zeros). Feeds the SAME stream
+    /// continuation, so the consumer never notices; only the dead air is lost.
+    /// The replacement is fully built before the running engine is touched, so
+    /// an unusable built-in device leaves capture exactly as it was.
+    func fallBackToBuiltInMic() async -> FailoverResult {
         await withCheckedContinuation { continuation in
             queue.async { continuation.resume(returning: self.swapToBuiltInEngine()) }
         }
     }
 
-    private func swapToBuiltInEngine() -> Bool {
-        guard let oldEngine = engine, let continuation else { return false }
-        guard let builtIn = Self.builtInInputDeviceID() else { return false }
+    private func swapToBuiltInEngine() -> FailoverResult {
+        guard let oldEngine = engine, let continuation,
+              let builtIn = Self.builtInInputDeviceID(),
+              let replacement = makeEngine(pinnedTo: builtIn, feeding: continuation)
+        else { return .unchanged }
 
         oldEngine.inputNode.removeTap(onBus: 0)
         oldEngine.stop()
-
-        let newEngine = AVAudioEngine()
-        let input = newEngine.inputNode
-        // Pin the input node's underlying audio unit to the built-in device
-        // BEFORE reading formats or installing the tap.
-        var deviceID = builtIn
-        guard let unit = input.audioUnit,
-              AudioUnitSetProperty(
-                  unit, kAudioOutputUnitProperty_CurrentDevice,
-                  kAudioUnitScope_Global, 0,
-                  &deviceID, UInt32(MemoryLayout<AudioDeviceID>.size)
-              ) == noErr else { return false }
-
-        let hardwareFormat = input.outputFormat(forBus: 0)
-        guard let targetFormat = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32, sampleRate: Self.sampleRate,
-            channels: 1, interleaved: false
-        ), let converter = AVAudioConverter(from: hardwareFormat, to: targetFormat)
-        else { return false }
-
-        let tapBlock = Self.makeTapBlock(context: TapContext(
-            converter: converter,
-            targetFormat: targetFormat,
-            hardwareSampleRate: hardwareFormat.sampleRate,
-            continuation: continuation,
-            taps: tapInvocations,
-            converts: convertedBatches,
-            dropped: droppedBatches,
-            rawPeak: rawPeakLevel,
-            measured: measuredTaps
-        ))
-        input.installTap(onBus: 0, bufferSize: Self.tapBufferFrames, format: hardwareFormat, block: tapBlock)
-        newEngine.prepare()
-        guard (try? newEngine.start()) != nil else { return false }
-        engine = newEngine
+        do {
+            try replacement.start()
+        } catch {
+            // The old engine is already down, so nothing is left to capture.
+            replacement.inputNode.removeTap(onBus: 0)
+            stopEngine()
+            return .lost
+        }
+        engine = replacement
         builtInRoute.withLock { $0 = true }
         #if DICT_DEV_LOG
         VizprTranscriptLogger.note(
             "capture: FELL BACK to built-in mic (previous route was silent)")
         #endif
-        return true
+        return .switched
     }
 
     /// The device the engine's input node is currently bound to.

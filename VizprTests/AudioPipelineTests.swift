@@ -8,6 +8,19 @@ private struct FakeCaptureSource: CaptureSource {
     func stop() {}
 }
 
+/// A capture source whose engine cannot start.
+private struct FailingCaptureSource: CaptureSource {
+    func start() async throws -> AsyncStream<[Float]> { throw AudioCaptureError.cannotConfigureInput }
+    func stop() {}
+}
+
+/// Records onCaptureFailure calls on the main actor.
+@MainActor
+private final class FailureLog {
+    private(set) var calls: [Void] = []
+    func record() { calls.append(()) }
+}
+
 /// An engine that mimics the real flush shape: a draft while audio flows,
 /// then — only after the input stream ends — a late finalized event.
 private struct FlushingEngine: TranscriptionEngine {
@@ -83,5 +96,52 @@ struct AudioPipelineTests {
         #expect(entries.last == "drained:7", "drained was not the final callback: \(entries)")
         #expect(entries.contains("final:flush final."),
                 "flush final missing before drain: \(entries)")
+    }
+
+    @MainActor
+    @Test("onCaptureFailure fires once when the source cannot start")
+    func captureFailureReported() async throws {
+        let failures = FailureLog()
+        let drained = CallbackLog()
+        let pipeline = AudioPipeline(
+            source: FailingCaptureSource(),
+            detector: SpeechDetector(model: try SpeechDetector.loadBundledModel()),
+            onSessionDrained: { epoch in await drained.add("drained:\(epoch)") },
+            onAutoStop: {}
+        )
+        pipeline.onCaptureFailure = { failures.record() }
+
+        pipeline.start(sessionEpoch: 1)
+        for _ in 0..<200 {
+            if await drained.entries.contains("drained:1") { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        #expect(failures.calls.count == 1)
+    }
+
+    @MainActor
+    @Test("onCaptureFailure stays quiet when the stream ends normally")
+    func noCaptureFailureOnNormalEnd() async throws {
+        let (samples, feeder) = AsyncStream.makeStream(of: [Float].self)
+        let failures = FailureLog()
+        let drained = CallbackLog()
+        let pipeline = AudioPipeline(
+            source: FakeCaptureSource(stream: samples),
+            detector: SpeechDetector(model: try SpeechDetector.loadBundledModel()),
+            onSessionDrained: { epoch in await drained.add("drained:\(epoch)") },
+            onAutoStop: {}
+        )
+        pipeline.onCaptureFailure = { failures.record() }
+
+        pipeline.start(sessionEpoch: 2)
+        feeder.finish()
+        for _ in 0..<200 {
+            if await drained.entries.contains("drained:2") { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        try #require(await drained.entries.contains("drained:2"))
+        #expect(failures.calls.isEmpty)
     }
 }
