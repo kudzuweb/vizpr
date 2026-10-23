@@ -243,7 +243,8 @@ final class HotkeyMonitor: @unchecked Sendable {
 
         // One packet can toggle both Fn and the secondary combo, so process every
         // edge it produces — never early-return after Fn. Only an Fn edge can ever
-        // set `suppress`, so a non-Fn modifier change is never deleted.
+        // set `suppress`, so a packet without an Fn edge is never deleted. A packet
+        // with an Fn edge is deleted whole, including any secondary edge in it.
         var suppress = false
         let found = edges.edges(for: event.flags)
         #if DICT_DEV_LOG
