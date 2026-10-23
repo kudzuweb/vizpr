@@ -20,6 +20,15 @@ enum SilentRouteDecision {
     ///   - rawPeak: peak raw level over those taps (0 means exactly silent).
     ///   - routeIsBuiltIn: the built-in mic has nothing to fall back to.
     ///   - alreadyAttempted: a failover is tried at most once per session.
+    static func shouldFallBack(evidence: RouteEvidence, alreadyAttempted: Bool) -> Bool {
+        shouldFallBack(
+            measuredTaps: evidence.measuredTaps,
+            rawPeak: evidence.rawPeak,
+            routeIsBuiltIn: evidence.routeIsBuiltIn,
+            alreadyAttempted: alreadyAttempted
+        )
+    }
+
     static func shouldFallBack(
         measuredTaps: Int,
         rawPeak: Int,

@@ -35,6 +35,19 @@ protocol CaptureSource: Sendable {
     func stop()
 }
 
+/// What the pipeline needs to judge whether a route is dead and to swap it.
+struct RouteEvidence: Sendable {
+    let measuredTaps: Int
+    let rawPeak: Int
+    let routeIsBuiltIn: Bool
+}
+
+/// A source that can move to the built-in microphone mid-session.
+protocol FailoverCapableSource: CaptureSource {
+    var routeEvidence: RouteEvidence { get }
+    func fallBackToBuiltInMic() async -> FailoverResult
+}
+
 enum AudioCaptureError: Error {
     case microphonePermissionDenied
     case cannotConfigureInput
@@ -47,7 +60,7 @@ enum AudioCaptureError: Error {
 ///
 /// Engine lifecycle lives in `CaptureEngineController` (off the main thread);
 /// this type adds the microphone permission and exposes the session counters.
-final class MicrophoneCapture: CaptureSource {
+final class MicrophoneCapture: FailoverCapableSource {
     static let sampleRate = 16_000.0
     /// Frames per tap callback, at the hardware sample rate.
     static let tapBufferFrames: AVAudioFrameCount = 4096
@@ -64,10 +77,14 @@ final class MicrophoneCapture: CaptureSource {
     var droppedBatches: AtomicCounter { counters.dropped }
     var tapInvocations: AtomicCounter { counters.tapInvocations }
     var rawPeakLevel: AtomicCounter { counters.rawPeak }
-    var measuredTaps: AtomicCounter { counters.measuredTaps }
 
-    /// Whether the input device in use is the built-in microphone.
-    var routeIsBuiltIn: Bool { controller.route == .builtIn }
+    var routeEvidence: RouteEvidence {
+        RouteEvidence(
+            measuredTaps: counters.measuredTaps.value,
+            rawPeak: counters.rawPeak.value,
+            routeIsBuiltIn: controller.route == .builtIn
+        )
+    }
 
     func start() async throws -> AsyncStream<[Float]> {
         // Taken before the permission prompt so a stop during it cancels this start.

@@ -121,8 +121,8 @@ final class AudioPipeline {
             #endif
             var fallbackAttempted = false
 
+            let stream = await openCapture()
             do {
-                let stream = try await source.start()
                 for await samples in stream {
                     guard !Task.isCancelled else { break }
                     #if DICT_DEV_LOG
@@ -133,17 +133,12 @@ final class AudioPipeline {
                     // AirPods; the route delivered zeros) -> swap to the
                     // built-in mic once, same stream, session continues.
                     if self.silentInputFallback,
-                       let capture = source as? MicrophoneCapture,
+                       let capture = source as? any FailoverCapableSource,
                        SilentRouteDecision.shouldFallBack(
-                           measuredTaps: capture.measuredTaps.value,
-                           rawPeak: capture.rawPeakLevel.value,
-                           routeIsBuiltIn: capture.routeIsBuiltIn,
-                           alreadyAttempted: fallbackAttempted
+                           evidence: capture.routeEvidence, alreadyAttempted: fallbackAttempted
                        ) {
                         fallbackAttempted = true
-                        if await capture.fallBackToBuiltInMic() == .lost {
-                            self.onCaptureFailure?()
-                        }
+                        await self.fallBack(capture)
                     }
                     fanOut.audio?.yield(samples)
                     for update in try await detector.process(samples) {
@@ -174,8 +169,6 @@ final class AudioPipeline {
                 #if DICT_DEV_LOG
                 VizprTranscriptLogger.note("audio pipeline error: \(error)")
                 #endif
-                // A throw after the user already stopped is not a failure.
-                if !Task.isCancelled { self.onCaptureFailure?() }
             }
 
             // Session over: end the engine's input so it flushes its tail and
@@ -186,6 +179,40 @@ final class AudioPipeline {
             await fanOut.events?.value
             await onSessionDrained?(epoch)
         }
+    }
+
+    /// Starts capture. A source that cannot start is reported through
+    /// `onCaptureFailure`, and the session continues with an already-ended
+    /// stream so the usual flush and drain still run.
+    private func openCapture() async -> AsyncStream<[Float]> {
+        do {
+            return try await source.start()
+        } catch {
+            #if DICT_DEV_LOG
+            VizprTranscriptLogger.note("audio capture failed to start: \(error)")
+            #endif
+            reportCaptureFailure()
+            return AsyncStream { $0.finish() }
+        }
+    }
+
+    private func fallBack(_ capture: any FailoverCapableSource) async {
+        switch await capture.fallBackToBuiltInMic() {
+        case .switched:
+            break
+        case .unchanged:
+            #if DICT_DEV_LOG
+            VizprTranscriptLogger.note("capture: failover to built-in mic not possible, keeping the current route")
+            #endif
+        case .lost:
+            reportCaptureFailure()
+        }
+    }
+
+    /// A failure after the user already stopped the session is not a failure.
+    private func reportCaptureFailure() {
+        guard !Task.isCancelled else { return }
+        onCaptureFailure?()
     }
 
     /// Start a transcription session on the engine (if any): returns the audio

@@ -14,6 +14,23 @@ private struct FailingCaptureSource: CaptureSource {
     func stop() {}
 }
 
+/// A source whose route has delivered only silence, so the pipeline attempts
+/// the built-in failover; the failover returns `result`.
+private struct SilentRouteSource: FailoverCapableSource {
+    let stream: AsyncStream<[Float]>
+    let result: FailoverResult
+    var routeEvidence: RouteEvidence {
+        RouteEvidence(
+            measuredTaps: SilentRouteDecision.minimumMeasuredTaps,
+            rawPeak: 0,
+            routeIsBuiltIn: false
+        )
+    }
+    func start() async throws -> AsyncStream<[Float]> { stream }
+    func stop() {}
+    func fallBackToBuiltInMic() async -> FailoverResult { result }
+}
+
 /// Records onCaptureFailure calls on the main actor.
 @MainActor
 private final class FailureLog {
@@ -143,5 +160,42 @@ struct AudioPipelineTests {
 
         try #require(await drained.entries.contains("drained:2"))
         #expect(failures.calls.isEmpty)
+    }
+
+    @MainActor
+    private func captureFailures(whenFailoverReturns result: FailoverResult) async throws -> Int {
+        let (samples, feeder) = AsyncStream.makeStream(of: [Float].self)
+        let failures = FailureLog()
+        let drained = CallbackLog()
+        let pipeline = AudioPipeline(
+            source: SilentRouteSource(stream: samples, result: result),
+            detector: SpeechDetector(model: try SpeechDetector.loadBundledModel()),
+            onSessionDrained: { epoch in await drained.add("drained:\(epoch)") },
+            onAutoStop: {}
+        )
+        pipeline.onCaptureFailure = { failures.record() }
+
+        pipeline.start(sessionEpoch: 3)
+        feeder.yield([Float](repeating: 0, count: 4096))
+        feeder.finish()
+        for _ in 0..<200 {
+            if await drained.entries.contains("drained:3") { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        try #require(await drained.entries.contains("drained:3"))
+        return failures.calls.count
+    }
+
+    @MainActor
+    @Test("a failover that loses capture fires onCaptureFailure")
+    func failoverLostReportsFailure() async throws {
+        #expect(try await captureFailures(whenFailoverReturns: .lost) == 1)
+    }
+
+    @MainActor
+    @Test("a failover that switches or changes nothing does not fire onCaptureFailure")
+    func failoverSurvivedIsNotAFailure() async throws {
+        #expect(try await captureFailures(whenFailoverReturns: .switched) == 0)
+        #expect(try await captureFailures(whenFailoverReturns: .unchanged) == 0)
     }
 }
