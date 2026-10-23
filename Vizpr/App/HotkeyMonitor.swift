@@ -60,12 +60,14 @@ final class HotkeyMonitor: @unchecked Sendable {
         }
     }
 
-    /// Live setting (PR 11): reassign the secondary chord. A fresh tracker
-    /// is unseeded, so it silently adopts the current flag state as its
-    /// baseline (no phantom edges).
+    /// Live setting (PR 11): reassign the secondary chord. Called on every
+    /// settings change, so an unchanged mask is a no-op, and a changed one keeps
+    /// the tracker's held-key state: a key held across the change must still
+    /// produce its up edge.
     func setSecondaryMask(_ mask: CGEventFlags) {
         runLoopThread.perform { [self] in
-            edges = FlagEdgeTracker(secondaryMask: mask)
+            guard mask != edges.secondaryMask else { return }
+            edges = edges.replacingSecondaryMask(mask)
         }
     }
 
