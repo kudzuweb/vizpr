@@ -396,6 +396,38 @@ becomes active. Migration runs after the merge, from a separate decode of the
 legacy keys, and the store saves once when the file carried any, so migrated
 look ids stay stable and the legacy keys leave the file.
 
+## Audio capture off the main thread, and the silent-mic check (2026-10-23)
+
+A cold `AVAudioEngine.start()` blocked the main thread for about 2 s, which also
+stalled the hotkey event tap. Capture start, stop and failover now run on one
+serial queue owned by `CaptureEngineController`, which takes an engine factory
+so its ordering is unit-tested with fake engines.
+
+- `CaptureSource.start()/stop()` are not `@MainActor`. `stop()` returns at once
+  and bumps a generation counter; a start or failover requested under an older
+  generation does nothing when it reaches the queue, and a stop queued behind a
+  start tears that start's engine down. No stop can leave a live engine for a
+  cancelled session.
+- The silent-microphone failover never fired as intended: it read the raw peak
+  at chunk 5, but the tap measured the peak only every 8th buffer, so the peak
+  read 0 on every route, including the built-in mic. The tap now measures every
+  buffer. `SilentRouteDecision` fails over only when at least 1.3 s of measured
+  audio (frames / hardware sample rate) is exactly zero, the route is positively
+  identified as non-built-in, and no attempt was made. An unidentifiable input
+  device does not trigger it.
+- The failover builds and prepares the replacement engine before touching the
+  running one, and returns `FailoverResult` (`switched`, `unchanged`, `lost`).
+  `AudioPipeline.onCaptureFailure` fires when `source.start()` throws or a
+  failover is `lost`; it is not yet connected to the app.
+- Debug builds log `main stall Nms` when the main run loop is blocked over
+  100 ms (`MainStallProbe`).
+
+Known gaps, left as they are: a tap buffer with no `floatChannelData` is not
+measured, so the stop-time silent-session notice would report silence while the
+failover never fires; and an input device that disappears mid-session ends capture without a failover.
+Not exercised on hardware: a real cold start, a second microphone, an AirPods
+route.
+
 ## Future directions (Mauria, 2026-07-05 — recorded, not scheduled)
 
 1. **Verbatim mode:** "I should be able to talk casually and have it show up
