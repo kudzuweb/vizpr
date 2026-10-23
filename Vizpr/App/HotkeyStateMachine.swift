@@ -50,6 +50,7 @@ enum HotkeyInput: Sendable {
     case secondaryUp(at: MonotonicTime)
     case escape
     case autoStop                          // VAD silence timeout in a latched session
+    case captureFailed                     // audio capture died: end the session, nothing to commit
     case thresholdElapsed(at: MonotonicTime)
     case tapDisabled(TapDisableReason)
 }
@@ -67,7 +68,7 @@ enum DictationAction: Sendable, Hashable {
 ///
 /// **Fail-open invariant:** `.consume` is emitted *only* for Fn events. Every
 /// other input — secondary modifiers, Escape, and the non-CGEvent signals
-/// (autoStop / thresholdElapsed / tapDisabled) — yields `.passThrough`. There is
+/// (autoStop / captureFailed / thresholdElapsed / tapDisabled) — yields `.passThrough`. There is
 /// no state in which a non-Fn key can be suppressed. This is the property the
 /// randomized test pins down; it is the point-for-point inversion of the Wispr
 /// stale-key bug that swallowed spacebars.
@@ -168,7 +169,7 @@ struct HotkeyStateMachine {
         case .escape:
             // Not dictating: Escape is a normal key — never touch it.
             return (.idle, .ignorePassThrough)
-        case .autoStop, .thresholdElapsed:
+        case .autoStop, .thresholdElapsed, .captureFailed:
             return (.idle, .ignorePassThrough)
         case .tapDisabled:
             // Already idle; the shell re-enables the tap. Nothing to discard.
@@ -201,7 +202,7 @@ struct HotkeyStateMachine {
 
         case .escape:
             return (.idle, HotkeyDecision(action: .cancel, disposition: .passThrough))
-        case .tapDisabled:
+        case .tapDisabled, .captureFailed:
             // Fail-open: discard the in-flight session and reset; shell re-enables.
             return (.idle, HotkeyDecision(action: .cancel, disposition: .passThrough))
 
@@ -252,7 +253,7 @@ struct HotkeyStateMachine {
 
         case .escape:
             return (.idle, HotkeyDecision(action: .cancel, disposition: .passThrough))
-        case .tapDisabled:
+        case .tapDisabled, .captureFailed:
             return (.idle, HotkeyDecision(action: .cancel, disposition: .passThrough))
 
         case .fnDown, .fnUp:
@@ -283,7 +284,7 @@ struct HotkeyStateMachine {
 
         case .escape:
             return (.idle, HotkeyDecision(action: .cancel, disposition: .passThrough))
-        case .tapDisabled:
+        case .tapDisabled, .captureFailed:
             return (.idle, HotkeyDecision(action: .cancel, disposition: .passThrough))
 
         // Strays (e.g. the up that paired the latching tap arrives late): consume

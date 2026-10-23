@@ -170,6 +170,14 @@ final class HotkeyMonitor: @unchecked Sendable {
         }
     }
 
+    /// End the session when audio capture dies: the machine cancels from any
+    /// active state, so a dead recording cannot leave the hotkey latched.
+    func injectCaptureFailure() {
+        runLoopThread.perform { [self] in
+            apply(machine.handle(.captureFailed))
+        }
+    }
+
     // MARK: Event handling (called from the tap callback, on the hotkey thread)
 
     /// Translate one CGEvent into machine input(s) and return its disposition.
