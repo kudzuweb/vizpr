@@ -91,6 +91,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Present only in Debug; proves the compile gate (verified absent from
         // Release by scripts/check-devlog-absent.sh).
         VizprTranscriptLogger.announce()
+        MainStallProbe.start()
         #endif
     }
 

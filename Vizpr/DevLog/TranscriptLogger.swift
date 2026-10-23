@@ -41,8 +41,8 @@ enum VizprTranscriptLogger {
 
     /// Emit a one-off developer breadcrumb — the human-readable running
     /// commentary next to the structured JSONL records; useful for eyeballing
-    /// the pipeline live. Called from the main thread only (pipeline +
-    /// monitor are main-isolated).
+    /// the pipeline live. Called from the main thread and the capture queue; concurrent
+    /// appends may interleave lines, which is acceptable for breadcrumbs.
     static func note(_ message: String) {
         log.debug("[\(buildMarker, privacy: .public)] \(message, privacy: .public)")
         let line = "\(Date().ISO8601Format()) \(message)\n"

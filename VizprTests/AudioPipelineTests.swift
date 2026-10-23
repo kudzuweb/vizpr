@@ -4,8 +4,8 @@ import Testing
 /// A capture source that hands the pipeline a pre-built stream.
 private struct FakeCaptureSource: CaptureSource {
     let stream: AsyncStream<[Float]>
-    @MainActor func start() async throws -> AsyncStream<[Float]> { stream }
-    @MainActor func stop() {}
+    func start() async throws -> AsyncStream<[Float]> { stream }
+    func stop() {}
 }
 
 /// An engine that mimics the real flush shape: a draft while audio flows,

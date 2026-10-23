@@ -30,8 +30,10 @@ protocol CaptureSource: Sendable {
     /// Begin capture and return the sample stream: 16 kHz mono Float32, batch
     /// sizes determined by the hardware route. Throws if the mic permission is
     /// missing or the audio engine cannot start.
-    @MainActor func start() async throws -> AsyncStream<[Float]>
-    @MainActor func stop()
+    func start() async throws -> AsyncStream<[Float]>
+    /// Returns immediately; teardown happens asynchronously but always ahead
+    /// of any later `start()`.
+    func stop()
 }
 
 enum AudioCaptureError: Error {
@@ -43,15 +45,21 @@ enum AudioCaptureError: Error {
 /// never block — the bridge uses drop-oldest backpressure (`bufferingNewest`)
 /// with a dropped-batch counter instead of ever waiting on the consumer.
 ///
-/// Engine/tap lifecycle is MainActor-only; the tap callback owns its converter
-/// exclusively (created per start, captured only by that closure), so the only
-/// cross-thread traffic is the Sendable continuation and an atomic counter.
+/// Engine/tap lifecycle runs on one private serial queue, never the main thread:
+/// a cold `engine.start()` blocks for ~2 s, which would stall the UI and the
+/// hotkey tap. The tap callback owns its converter exclusively (created per
+/// start, captured only by that closure), so the only cross-thread traffic is
+/// the Sendable continuation and the atomic counters.
 final class MicrophoneCapture: CaptureSource, @unchecked Sendable {
     static let sampleRate = 16_000.0
 
-    // Touched only from the @MainActor start()/stop() methods (the same
-    // main-thread discipline as HotkeyMonitor; @unchecked Sendable covers the
-    // Sendable continuation + atomic counter crossing into the tap callback).
+    /// Serializes every engine mutation. `stop()` enqueues here too, so a stop
+    /// always lands before any later start, and a stop requested while a start
+    /// is still queued tears down the engine that start created.
+    private let queue = DispatchQueue(label: "com.kudzuweb.vizpr.audio-capture", qos: .userInitiated)
+
+    // Touched only on `queue` (@unchecked Sendable covers the Sendable
+    // continuation + atomic counters crossing into the tap callback).
     private var engine: AVAudioEngine?
     private var continuation: AsyncStream<[Float]>.Continuation?
 
@@ -70,16 +78,26 @@ final class MicrophoneCapture: CaptureSource, @unchecked Sendable {
     /// rms 0) — the discriminator for silent-capture bugs.
     let rawPeakLevel = AtomicCounter()
 
-    @MainActor
     func start() async throws -> AsyncStream<[Float]> {
-        stop()   // tolerate re-start without leaking a tap
-
         #if DICT_DEV_LOG
         VizprTranscriptLogger.note("capture: permission=\(AVAudioApplication.shared.recordPermission.rawValue)")
         #endif
         guard await Self.ensureMicrophonePermission() else {
             throw AudioCaptureError.microphonePermissionDenied
         }
+        // A stop that arrived during the permission prompt found nothing to
+        // tear down; honor it here instead of starting an engine nobody owns.
+        try Task.checkCancellation()
+
+        return try await withCheckedThrowingContinuation { continuation in
+            queue.async {
+                continuation.resume(with: Result { try self.startEngine() })
+            }
+        }
+    }
+
+    private func startEngine() throws -> AsyncStream<[Float]> {
+        stopEngine()   // tolerate re-start without leaking a tap
 
         // Per-session diagnostics (field bug: cumulative counters carried
         // session 1's real audio peak into session 2, masking its silence —
@@ -155,8 +173,13 @@ final class MicrophoneCapture: CaptureSource, @unchecked Sendable {
     /// down and rebuilds it pinned to the built-in device, feeding the SAME
     /// stream continuation — the consumer never notices. Only the dead air
     /// is lost, and it was dead.
-    @MainActor
-    func fallBackToBuiltInMic() -> Bool {
+    func fallBackToBuiltInMic() async -> Bool {
+        await withCheckedContinuation { continuation in
+            queue.async { continuation.resume(returning: self.swapToBuiltInEngine()) }
+        }
+    }
+
+    private func swapToBuiltInEngine() -> Bool {
         guard let oldEngine = engine, let continuation else { return false }
         guard let builtIn = Self.builtInInputDeviceID() else { return false }
 
@@ -248,8 +271,11 @@ final class MicrophoneCapture: CaptureSource, @unchecked Sendable {
         return nil
     }
 
-    @MainActor
     func stop() {
+        queue.async { self.stopEngine() }
+    }
+
+    private func stopEngine() {
         #if DICT_DEV_LOG
         if engine != nil {
             let counters = "taps=\(tapInvocations.value) converted=\(convertedBatches.value)"

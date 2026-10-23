@@ -133,7 +133,7 @@ final class AudioPipeline {
                        let capture = source as? MicrophoneCapture,
                        capture.rawPeakLevel.value == 0 {
                         fallbackAttempted = true
-                        _ = capture.fallBackToBuiltInMic()
+                        _ = await capture.fallBackToBuiltInMic()
                     }
                     fanOut.audio?.yield(samples)
                     for update in try await detector.process(samples) {
