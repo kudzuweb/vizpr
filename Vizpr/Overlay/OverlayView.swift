@@ -11,12 +11,15 @@ import SwiftUI
 struct OverlayView: View {
     let snapshot: DisplaySnapshot
     let recording: Bool
-    /// Capsule height, measured by the controller. The PANEL never animates —
+    /// Capsule size, measured by the controller. The PANEL never animates —
     /// it is a fixed transparent stage; the capsule animates here in SwiftUI
     /// so glass, text, and size move as one (field catch: AppKit frame
     /// animation lagged the instantly-rendered text — jerky, and text clipped
     /// at the edge mid-growth).
     let capsuleHeight: CGFloat
+    /// Capsule width, measured by the controller so it grows with the text.
+    /// Nil keeps the fixed widths: resting size, then the look's pane width.
+    var capsuleWidth: CGFloat?
     /// False under Reduce Motion — the capsule snaps instead of animating.
     let animated: Bool
     var look: OverlayLook = .glass
@@ -72,20 +75,20 @@ struct OverlayView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal, stageInset)
-        .padding(effectsMargin)
+        .padding(look.panelMargin)
     }
-
-    /// Room the panel leaves around the pane for glow and shadow.
-    private var effectsMargin: CGFloat { PaneEffects.margin(for: look.style) }
 
     /// Room each side of the pane for the indicator beside the inviz pill.
     private var stageInset: CGFloat { TargetAppMetrics.sideInset(for: targetAppDisplay, inviz: inviz) }
 
-    /// Whether the icon is shown inside the resting or expanded pill.
+    /// Whether the icon is shown on the resting or expanded pill's corner.
     private var showingTarget: Bool { targetAppDisplay != .off && app != nil }
 
     @ViewBuilder private var transcript: some View {
         let resting = snapshot == .empty
+        let fixedWidth: CGFloat = resting ? OverlayLayout.restingSize.width : look.style.pane.width
+        let paneWidth = capsuleWidth ?? fixedWidth
+        let paneSize = CGSize(width: paneWidth, height: capsuleHeight)
         // Bottom-aligned within the fixed panel: the capsule's TOP edge rises.
         VStack {
             Spacer(minLength: 0)
@@ -105,9 +108,12 @@ struct OverlayView: View {
                         .font(look.font)
                         .lineSpacing(look.style.text.lineSpacing)
                         .textGlow(look.style.text)
+                        // The text lays out at the final width and the animated
+                        // capsule reveals it, so it never re-wraps mid-growth.
+                        .frame(width: look.textWidth(inPaneWidth: paneWidth), alignment: .leading)
+                        .transaction { $0.animation = nil }
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.leading, look.textLeadingInset(showingTarget: showingTarget))
-                        .padding(.trailing, look.style.pane.paddingHorizontal)
+                        .padding(.horizontal, look.style.pane.paddingHorizontal)
                         .padding(.vertical, look.style.pane.paddingVertical)
                     }
                     .scrollIndicators(.hidden)
@@ -121,44 +127,43 @@ struct OverlayView: View {
                     .clipShape(capsuleShape)
                 }
 
-                if let app, showingTarget {
-                    paneBadge(app, resting: resting)
+                if resting, targetAppDisplay == .iconAndName, let app {
+                    TargetAppName(name: app.name, look: look)
+                        .opacity(TargetAppMetrics.opacity)
+                        .accessibilityHidden(true)
+                        .padding(.leading, TargetAppMetrics.nameLeading(cornerRadius: look.cornerRadius))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
                 }
 
                 if recording {
                     RecordingDot(style: look.style.dot, tint: look.tintColor, animated: animated)
                         .padding(10)
-                        // The icon holds the leading corner.
-                        .frame(maxWidth: .infinity, maxHeight: .infinity,
-                               alignment: showingTarget ? .bottomTrailing : .bottomLeading)
                         .accessibilityLabel("Recording")
                 }
             }
-            .frame(
-                width: resting ? OverlayLayout.restingSize.width : look.style.pane.width,
-                height: capsuleHeight
-            )
-            .animation(animated ? .easeOut(duration: 0.15) : nil, value: capsuleHeight)
+            .frame(width: paneSize.width, height: paneSize.height)
+            // Hangs off the corner, outside the clip, so it does not change the pane's size.
+            .overlay(alignment: .topLeading) {
+                if let app, showingTarget {
+                    cornerBadge(app)
+                }
+            }
+            .animation(animated ? .easeOut(duration: 0.15) : nil, value: paneSize)
             .animation(animated ? .easeOut(duration: 0.15) : nil, value: resting)
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal, stageInset)
-        .padding(effectsMargin)
+        .padding(look.panelMargin)
     }
 
-    /// The app icon at the pane's leading edge: centered in the resting pill,
-    /// centered on the first line of text in the expanded pane, where it stays
-    /// put while the text scrolls. The expanded pane has no room for the name.
-    private func paneBadge(_ app: TargetApp.Info, resting: Bool) -> some View {
-        TargetAppBadge(
-            app: app,
-            display: resting ? targetAppDisplay : .icon,
-            iconSize: TargetAppMetrics.paneIconSize,
-            look: look
-        )
-        .padding(.leading, TargetAppMetrics.paneIconLeading)
-        .padding(.top, resting ? 0 : look.targetIconTopInset)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: resting ? .leading : .topLeading)
+    /// The app icon centered on the pane's top-left corner arc, so about half
+    /// of it hangs outside. The expanded pane shows the icon only.
+    private func cornerBadge(_ app: TargetApp.Info) -> some View {
+        let inset = TargetAppMetrics.iconCenterInset(cornerRadius: look.cornerRadius)
+        let offset = inset - TargetAppMetrics.paneIconSize / 2
+        return TargetAppBadge(app: app, display: .icon, iconSize: TargetAppMetrics.paneIconSize, look: look)
+            .fixedSize()
+            .offset(x: offset, y: offset)
     }
 }
 
