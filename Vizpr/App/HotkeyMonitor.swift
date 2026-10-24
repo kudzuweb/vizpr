@@ -238,7 +238,7 @@ final class HotkeyMonitor: @unchecked Sendable {
         // Edges carry the event's own time: a callback serviced late (main thread
         // blocked) must still see a quick tap as a quick tap.
         let handledAt = nowMonotonic()
-        let converted = EventTimestamp.converted(eventTicks: event.timestamp, handledAt: handledAt)
+        let converted = EventTimestamp.converted(eventNanoseconds: event.timestamp, handledAt: handledAt)
         let now = converted ?? handledAt
 
         // One packet can toggle both Fn and the secondary combo, so process every
@@ -248,7 +248,7 @@ final class HotkeyMonitor: @unchecked Sendable {
         var suppress = false
         let found = edges.edges(for: event.flags)
         #if DICT_DEV_LOG
-        logTimestampPathOnce(edges: found, rawTicks: event.timestamp, converted: converted, handledAt: handledAt)
+        logTimestampPathOnce(edges: found, rawStamp: event.timestamp, converted: converted, handledAt: handledAt)
         #endif
         for edge in found {
             let decision = machine.handle(input(for: edge, at: now))
@@ -265,13 +265,13 @@ final class HotkeyMonitor: @unchecked Sendable {
     /// converted or fell back to handling time, with the raw numbers, so a wrong
     /// unit assumption is visible. Numbers only, no typed text.
     private func logTimestampPathOnce(
-        edges: [FlagEdgeTracker.Edge], rawTicks: UInt64, converted: MonotonicTime?, handledAt: MonotonicTime
+        edges: [FlagEdgeTracker.Edge], rawStamp: UInt64, converted: MonotonicTime?, handledAt: MonotonicTime
     ) {
         guard !loggedTimestampPath, edges.contains(where: { $0 == .fnDown || $0 == .fnUp }) else { return }
         loggedTimestampPath = true
         VizprTranscriptLogger.note(
             "hotkey event stamp: \(converted == nil ? "fell back to handling time" : "converted") "
-            + "rawTicks=\(rawTicks) convertedNs=\(converted?.nanoseconds.description ?? "-") "
+            + "rawStamp=\(rawStamp) convertedNs=\(converted?.nanoseconds.description ?? "-") "
             + "uptimeNs=\(handledAt.nanoseconds)"
         )
     }
