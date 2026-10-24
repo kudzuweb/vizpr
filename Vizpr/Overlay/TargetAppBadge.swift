@@ -4,17 +4,12 @@ import SwiftUI
 /// Sizes for the target-app indicator, shared by the views, the panel margin
 /// and the pane measurement so they cannot drift apart.
 ///
-/// The resting and expanded pills hold the icon inside their leading edge. The
-/// inviz pill is too small for that, so its icon sits outside the left edge.
+/// The resting and expanded pills carry the icon on their top-left corner,
+/// half outside the pill. The inviz pill is too small for that, so its icon
+/// sits outside the left edge.
 enum TargetAppMetrics {
-    /// Icon inside the resting pill and the expanded pane.
+    /// Icon on the resting pill's and the expanded pane's corner.
     static let paneIconSize: CGFloat = 28
-    /// Space between the pill's left edge and the icon inside it.
-    static let paneIconLeading: CGFloat = 12
-    /// Space between the icon and the transcript column in the expanded pane.
-    static let paneIconTextGap: CGFloat = 8
-    /// The icon never sits closer than this to the expanded pane's top edge.
-    static let paneIconMinTop: CGFloat = 8
     /// Icon beside the inviz pill.
     static let invizIconSize: CGFloat = 20
     /// Space between the inviz pill's left edge and the indicator beside it.
@@ -24,10 +19,20 @@ enum TargetAppMetrics {
     static let nameFontSize: CGFloat = 11
     static let opacity = 0.85
 
-    /// Where the transcript column starts when the icon is shown: past the
-    /// icon, but never inside the look's own padding.
-    static func textLeading(paddingHorizontal: CGFloat) -> CGFloat {
-        max(paddingHorizontal, paneIconLeading + paneIconSize + paneIconTextGap)
+    /// Distance from the pill's left and top edges to the icon's center, which
+    /// sits on the corner arc at 45 degrees.
+    static func iconCenterInset(cornerRadius: CGFloat) -> CGFloat {
+        cornerRadius * (1 - 0.5.squareRoot())
+    }
+
+    /// How far the corner icon hangs outside the pill on the left and top.
+    static func cornerOverhang(cornerRadius: CGFloat) -> CGFloat {
+        max(0, paneIconSize / 2 - iconCenterInset(cornerRadius: cornerRadius))
+    }
+
+    /// Where the name starts inside the resting pill: just past the corner icon.
+    static func nameLeading(cornerRadius: CGFloat) -> CGFloat {
+        iconCenterInset(cornerRadius: cornerRadius) + paneIconSize / 2 + iconToNameGap
     }
 
     /// Room the panel needs on each side of the pane. Only the inviz pill puts
@@ -51,6 +56,21 @@ enum TargetAppMetrics {
     }
 }
 
+/// The app's name in the look's mutable style, sized to its text.
+struct TargetAppName: View {
+    let name: String
+    let look: OverlayLook
+
+    var body: some View {
+        Text(name)
+            .font(.system(size: TargetAppMetrics.nameFontSize))
+            .foregroundStyle(look.mutableStyle)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .frame(width: TargetAppMetrics.nameWidth(name), alignment: .leading)
+    }
+}
+
 /// The frontmost app's icon, and its name when asked for. Quiet by design:
 /// partly transparent, and the name in the look's mutable text style.
 struct TargetAppBadge: View {
@@ -67,12 +87,7 @@ struct TargetAppBadge: View {
                     .frame(width: iconSize, height: iconSize)
             }
             if display == .iconAndName {
-                Text(app.name)
-                    .font(.system(size: TargetAppMetrics.nameFontSize))
-                    .foregroundStyle(look.mutableStyle)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(width: TargetAppMetrics.nameWidth(app.name), alignment: .leading)
+                TargetAppName(name: app.name, look: look)
             }
         }
         .opacity(TargetAppMetrics.opacity)

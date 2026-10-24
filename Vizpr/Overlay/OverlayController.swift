@@ -51,10 +51,9 @@ final class OverlayController {
     }
 
     /// Live setting: how much of the frontmost app the overlay shows. The
-    /// panel's side room (inviz only) and the transcript's wrap width depend on it.
+    /// panel's side room (inviz only) depends on it.
     func setTargetAppDisplay(_ display: TargetAppDisplay) {
         targetAppDisplay = display
-        hitCap = false
         if panel.isVisible {
             positionPanel()
             render(lastSnapshot)
@@ -81,7 +80,7 @@ final class OverlayController {
             layout.frame(
                 contentHeight: layout.maxHeight,
                 paneWidth: look.style.pane.width,
-                margin: PaneEffects.margin(for: look.style),
+                margin: look.panelMargin,
                 sideInset: TargetAppMetrics.sideInset(for: targetAppDisplay, inviz: inviz)
             ),
             display: true
@@ -92,7 +91,7 @@ final class OverlayController {
     /// it now sits, becomes that display's anchor. The pane then grows from
     /// that point.
     private func dragEnded(panelFrame: CGRect) {
-        let margin = PaneEffects.margin(for: look.style)
+        let margin = look.panelMargin
         let sideInset = TargetAppMetrics.sideInset(for: targetAppDisplay, inviz: inviz)
         let paneFrame = CGRect(
             x: panelFrame.minX + margin + sideInset,
@@ -181,10 +180,12 @@ final class OverlayController {
 
     private func render(_ snapshot: DisplaySnapshot) {
         lastSnapshot = snapshot
+        let size = capsuleSize(for: snapshot)
         let view = OverlayView(
             snapshot: snapshot,
             recording: recording,
-            capsuleHeight: capsuleHeight(for: snapshot),
+            capsuleHeight: size.height,
+            capsuleWidth: size.width,
             animated: !reduceMotion,
             look: look,
             inviz: inviz,
@@ -200,19 +201,21 @@ final class OverlayController {
         }
     }
 
-    /// Measured text height at the reading width, clamped to layout bounds.
+    /// Measured pane size: the width grows with the text up to the look's pane
+    /// width, then the height grows by wrapping, clamped to layout bounds.
     /// Measures with the look's own font (`measuringFont`, the twin of the
     /// view's): measuring with any other font undersizes the capsule and
     /// clips text (field catch).
-    private func capsuleHeight(for snapshot: DisplaySnapshot) -> CGFloat {
-        guard let layout else { return OverlayLayout.restingSize.height }
-        if hitCap { return layout.maxHeight }
+    private func capsuleSize(for snapshot: DisplaySnapshot) -> CGSize {
+        let resting = OverlayLayout.restingSize
+        guard let layout else { return resting }
         let text = snapshot.displayed
-        guard !text.isEmpty else { return OverlayLayout.restingSize.height }
-        let showingTarget = targetAppDisplay != .off && targetApp.current != nil
-        let measured = look.paneHeight(fitting: text, showingTarget: showingTarget)
-        let clamped = min(max(measured, OverlayLayout.restingSize.height), layout.maxHeight)
+        guard !text.isEmpty else { return resting }
+        let width = look.paneWidth(fitting: text)
+        if hitCap { return CGSize(width: width, height: layout.maxHeight) }
+        let measured = look.paneHeight(fitting: text)
+        let clamped = min(max(measured, resting.height), layout.maxHeight)
         if clamped >= layout.maxHeight { hitCap = true }
-        return clamped
+        return CGSize(width: width, height: clamped)
     }
 }
