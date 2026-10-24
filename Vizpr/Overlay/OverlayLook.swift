@@ -141,20 +141,41 @@ struct OverlayLook: Codable, Equatable, Sendable, Identifiable {
     /// and padding, plus one extra line of headroom: growth leads the text
     /// instead of trailing it, so a wrapping word never renders against the
     /// clipped edge. OverlayView lays the text out with the same width,
-    /// padding, font and line spacing. `headerHeight` is the target-app row
-    /// above the text (0 when it is not shown).
-    func paneHeight(fitting text: String, headerHeight: CGFloat = 0) -> CGFloat {
+    /// padding, font and line spacing. `showingTarget` narrows the text column
+    /// for the target-app icon, exactly as `OverlayView` does.
+    func paneHeight(fitting text: String, showingTarget: Bool = false) -> CGFloat {
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineSpacing = style.text.lineSpacing
         let font = measuringFont
-        let width = style.pane.width - 2 * style.pane.paddingHorizontal
+        let width = textWidth(showingTarget: showingTarget)
         let bounds = (text as NSString).boundingRect(
             with: NSSize(width: width, height: .greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin, .usesFontLeading],
             attributes: [.font: font, .paragraphStyle: paragraph]
         )
         return ceil(bounds.height) + 2 * style.pane.paddingVertical + ceil(font.ascender - font.descender)
-            + headerHeight
+    }
+
+    /// Where the transcript column starts in the expanded pane.
+    func textLeadingInset(showingTarget: Bool) -> CGFloat {
+        showingTarget
+            ? TargetAppMetrics.textLeading(paddingHorizontal: style.pane.paddingHorizontal)
+            : style.pane.paddingHorizontal
+    }
+
+    /// Width the transcript wraps to in the expanded pane. The view and the
+    /// height measurement both use it.
+    func textWidth(showingTarget: Bool) -> CGFloat {
+        style.pane.width - textLeadingInset(showingTarget: showingTarget) - style.pane.paddingHorizontal
+    }
+
+    /// Distance from the expanded pane's top edge to the target icon's top,
+    /// which centers the icon on the first line of text.
+    var targetIconTopInset: CGFloat {
+        let font = measuringFont
+        let lineHeight = ceil(font.ascender - font.descender)
+        let centered = style.pane.paddingVertical + (lineHeight - TargetAppMetrics.paneIconSize) / 2
+        return max(centered, TargetAppMetrics.paneIconMinTop)
     }
 }
 

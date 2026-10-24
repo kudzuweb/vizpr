@@ -78,8 +78,11 @@ struct OverlayView: View {
     /// Room the panel leaves around the pane for glow and shadow.
     private var effectsMargin: CGFloat { PaneEffects.margin(for: look.style) }
 
-    /// Room each side of the pane for the indicator beside the pills.
-    private var stageInset: CGFloat { TargetAppMetrics.sideInset(for: targetAppDisplay) }
+    /// Room each side of the pane for the indicator beside the inviz pill.
+    private var stageInset: CGFloat { TargetAppMetrics.sideInset(for: targetAppDisplay, inviz: inviz) }
+
+    /// Whether the icon is shown inside the resting or expanded pill.
+    private var showingTarget: Bool { targetAppDisplay != .off && app != nil }
 
     @ViewBuilder private var transcript: some View {
         let resting = snapshot == .empty
@@ -89,9 +92,6 @@ struct OverlayView: View {
             ZStack(alignment: .bottomLeading) {
                 PaneSurface(look: look, animated: animated)
                 VStack(spacing: 0) {
-                    if !resting, let app, targetAppDisplay != .off {
-                        header(app)
-                    }
                     ScrollView(.vertical) {
                         // WYSIWYG: render EXACTLY the decomposition of
                         // snapshot.displayed — the bytes commit injects. Never a
@@ -106,7 +106,8 @@ struct OverlayView: View {
                         .lineSpacing(look.style.text.lineSpacing)
                         .textGlow(look.style.text)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, look.style.pane.paddingHorizontal)
+                        .padding(.leading, look.textLeadingInset(showingTarget: showingTarget))
+                        .padding(.trailing, look.style.pane.paddingHorizontal)
                         .padding(.vertical, look.style.pane.paddingVertical)
                     }
                     .scrollIndicators(.hidden)
@@ -120,9 +121,16 @@ struct OverlayView: View {
                     .clipShape(capsuleShape)
                 }
 
+                if let app, showingTarget {
+                    paneBadge(app, resting: resting)
+                }
+
                 if recording {
                     RecordingDot(style: look.style.dot, tint: look.tintColor, animated: animated)
                         .padding(10)
+                        // The icon holds the leading corner.
+                        .frame(maxWidth: .infinity, maxHeight: .infinity,
+                               alignment: showingTarget ? .bottomTrailing : .bottomLeading)
                         .accessibilityLabel("Recording")
                 }
             }
@@ -132,22 +140,25 @@ struct OverlayView: View {
             )
             .animation(animated ? .easeOut(duration: 0.15) : nil, value: capsuleHeight)
             .animation(animated ? .easeOut(duration: 0.15) : nil, value: resting)
-            .targetAppBeside(resting ? app : nil, display: targetAppDisplay, look: look)
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal, stageInset)
         .padding(effectsMargin)
     }
 
-    /// Top-left row inside the expanded pane; the transcript flows below it.
-    /// Its height is `TargetAppMetrics.headerHeight`, which the controller adds
-    /// to the measured pane height.
-    private func header(_ app: TargetApp.Info) -> some View {
-        TargetAppBadge(app: app, display: targetAppDisplay, iconSize: TargetAppMetrics.headerIconSize, look: look)
-            .padding(.leading, look.style.pane.paddingHorizontal)
-            .padding(.top, TargetAppMetrics.headerTopInset)
-            .frame(maxWidth: .infinity, minHeight: TargetAppMetrics.headerHeight,
-                   maxHeight: TargetAppMetrics.headerHeight, alignment: .topLeading)
+    /// The app icon at the pane's leading edge: centered in the resting pill,
+    /// centered on the first line of text in the expanded pane, where it stays
+    /// put while the text scrolls. The expanded pane has no room for the name.
+    private func paneBadge(_ app: TargetApp.Info, resting: Bool) -> some View {
+        TargetAppBadge(
+            app: app,
+            display: resting ? targetAppDisplay : .icon,
+            iconSize: TargetAppMetrics.paneIconSize,
+            look: look
+        )
+        .padding(.leading, TargetAppMetrics.paneIconLeading)
+        .padding(.top, resting ? 0 : look.targetIconTopInset)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: resting ? .leading : .topLeading)
     }
 }
 
