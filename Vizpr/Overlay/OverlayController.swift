@@ -43,11 +43,15 @@ final class OverlayController {
     /// indicator; applies to the next render.
     func setInviz(_ enabled: Bool) {
         inviz = enabled
-        if panel.isVisible { render(lastSnapshot) }
+        if panel.isVisible {
+            // Only the inviz pill needs side room for its indicator.
+            positionPanel()
+            render(lastSnapshot)
+        }
     }
 
     /// Live setting: how much of the frontmost app the overlay shows. The
-    /// panel's side room and the pane's header height both depend on it.
+    /// panel's side room (inviz only) and the transcript's wrap width depend on it.
     func setTargetAppDisplay(_ display: TargetAppDisplay) {
         targetAppDisplay = display
         hitCap = false
@@ -78,7 +82,7 @@ final class OverlayController {
                 contentHeight: layout.maxHeight,
                 paneWidth: look.style.pane.width,
                 margin: PaneEffects.margin(for: look.style),
-                sideInset: TargetAppMetrics.sideInset(for: targetAppDisplay)
+                sideInset: TargetAppMetrics.sideInset(for: targetAppDisplay, inviz: inviz)
             ),
             display: true
         )
@@ -89,7 +93,7 @@ final class OverlayController {
     /// that point.
     private func dragEnded(panelFrame: CGRect) {
         let margin = PaneEffects.margin(for: look.style)
-        let sideInset = TargetAppMetrics.sideInset(for: targetAppDisplay)
+        let sideInset = TargetAppMetrics.sideInset(for: targetAppDisplay, inviz: inviz)
         let paneFrame = CGRect(
             x: panelFrame.minX + margin + sideInset,
             y: panelFrame.minY + margin,
@@ -205,10 +209,8 @@ final class OverlayController {
         if hitCap { return layout.maxHeight }
         let text = snapshot.displayed
         guard !text.isEmpty else { return OverlayLayout.restingSize.height }
-        let header = TargetAppMetrics.paneHeaderHeight(
-            for: targetAppDisplay, hasApp: targetApp.current != nil
-        )
-        let measured = look.paneHeight(fitting: text, headerHeight: header)
+        let showingTarget = targetAppDisplay != .off && targetApp.current != nil
+        let measured = look.paneHeight(fitting: text, showingTarget: showingTarget)
         let clamped = min(max(measured, OverlayLayout.restingSize.height), layout.maxHeight)
         if clamped >= layout.maxHeight { hitCap = true }
         return clamped

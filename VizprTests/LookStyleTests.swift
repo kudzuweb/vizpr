@@ -109,9 +109,9 @@ struct PaneMeasurementTests {
         return look
     }
 
-    private func renderedTextHeight(_ look: OverlayLook) -> CGFloat {
+    private func renderedTextHeight(_ look: OverlayLook, showingTarget: Bool = false) -> CGFloat {
         let style = look.style
-        let width = style.pane.width - 2 * style.pane.paddingHorizontal
+        let width = look.textWidth(showingTarget: showingTarget)
         let view = Text(text)
             .font(look.font)
             .lineSpacing(style.text.lineSpacing)
@@ -152,25 +152,35 @@ struct PaneMeasurementTests {
         }
     }
 
-    @Test("The target-app header adds exactly its height to the pane, and nothing when it is off")
-    func headerHeightEntersMeasurement() {
-        let look = look { _ in }
-        let bare = look.paneHeight(fitting: text)
-        for display in [TargetAppDisplay.icon, .iconAndName] {
-            let header = TargetAppMetrics.paneHeaderHeight(for: display, hasApp: true)
-            #expect(header == TargetAppMetrics.headerHeight)
-            #expect(look.paneHeight(fitting: text, headerHeight: header) == bare + TargetAppMetrics.headerHeight)
+    @Test("With the target icon shown the text wraps narrower and the pane measures for that width")
+    func iconColumnEntersMeasurement() {
+        for (name, configure) in Self.options {
+            let look = look(configure)
+            let narrow = look.textWidth(showingTarget: true)
+            #expect(narrow < look.textWidth(showingTarget: false), "\(name): icon column takes no width")
+            let rendered = renderedTextHeight(look, showingTarget: true)
+            let measured = look.paneHeight(fitting: text, showingTarget: true)
+            #expect(measured >= rendered + 2 * look.style.pane.paddingVertical, "\(name): text would clip")
+            #expect(measured >= look.paneHeight(fitting: text), "\(name): narrower column cannot be shorter")
         }
-        #expect(TargetAppMetrics.paneHeaderHeight(for: .off, hasApp: true) == 0)
-        #expect(TargetAppMetrics.paneHeaderHeight(for: .icon, hasApp: false) == 0)
-        #expect(look.paneHeight(fitting: text, headerHeight: 0) == bare)
     }
 
-    @Test("The panel grows on both sides for the indicator and the pane stays put")
+    @Test("The icon never rides closer than the minimum to the pane's top edge")
+    func iconTopInsetClamped() {
+        let tight = look { $0.style.pane.paddingVertical = 4 }
+        #expect(tight.targetIconTopInset == TargetAppMetrics.paneIconMinTop)
+    }
+
+    @Test("Only the inviz pill reserves side room; the pane stays put when it does")
     func sideInsetKeepsPane() {
+        for display in [TargetAppDisplay.off, .icon, .iconAndName] {
+            #expect(TargetAppMetrics.sideInset(for: display, inviz: false) == 0)
+        }
+        #expect(TargetAppMetrics.sideInset(for: .off, inviz: true) == 0)
+        #expect(TargetAppMetrics.sideInset(for: .icon, inviz: true) > 0)
         let layout = OverlayLayout(screen: CGRect(x: 0, y: 0, width: 1600, height: 1000))
         let bare = layout.frame(contentHeight: 100, paneWidth: 560, margin: 10)
-        let inset = TargetAppMetrics.sideInset(for: .iconAndName)
+        let inset = TargetAppMetrics.sideInset(for: .iconAndName, inviz: true)
         let wide = layout.frame(contentHeight: 100, paneWidth: 560, margin: 10, sideInset: inset)
         #expect(wide.minX == bare.minX - inset)
         #expect(wide.width == bare.width + 2 * inset)

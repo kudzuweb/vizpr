@@ -3,26 +3,41 @@ import SwiftUI
 
 /// Sizes for the target-app indicator, shared by the views, the panel margin
 /// and the pane measurement so they cannot drift apart.
+///
+/// The resting and expanded pills hold the icon inside their leading edge. The
+/// inviz pill is too small for that, so its icon sits outside the left edge.
 enum TargetAppMetrics {
-    static let pillIconSize: CGFloat = 16
-    static let headerIconSize: CGFloat = 14
-    /// Space between the pill's left edge and the indicator beside it.
-    static let pillGap: CGFloat = 6
+    /// Icon inside the resting pill and the expanded pane.
+    static let paneIconSize: CGFloat = 28
+    /// Space between the pill's left edge and the icon inside it.
+    static let paneIconLeading: CGFloat = 12
+    /// Space between the icon and the transcript column in the expanded pane.
+    static let paneIconTextGap: CGFloat = 8
+    /// The icon never sits closer than this to the expanded pane's top edge.
+    static let paneIconMinTop: CGFloat = 8
+    /// Icon beside the inviz pill.
+    static let invizIconSize: CGFloat = 20
+    /// Space between the inviz pill's left edge and the indicator beside it.
+    static let invizGap: CGFloat = 6
     static let iconToNameGap: CGFloat = 4
     static let nameMaxWidth: CGFloat = 110
     static let nameFontSize: CGFloat = 11
     static let opacity = 0.85
-    /// Header row in the expanded pane: top inset plus the icon.
-    static let headerTopInset: CGFloat = 10
-    static let headerHeight = headerTopInset + headerIconSize
 
-    /// Room the panel needs on each side of the pane for the indicator that
-    /// sits outside the resting and inviz pills.
-    static func sideInset(for display: TargetAppDisplay) -> CGFloat {
+    /// Where the transcript column starts when the icon is shown: past the
+    /// icon, but never inside the look's own padding.
+    static func textLeading(paddingHorizontal: CGFloat) -> CGFloat {
+        max(paddingHorizontal, paneIconLeading + paneIconSize + paneIconTextGap)
+    }
+
+    /// Room the panel needs on each side of the pane. Only the inviz pill puts
+    /// its indicator outside the pane.
+    static func sideInset(for display: TargetAppDisplay, inviz: Bool) -> CGFloat {
+        guard inviz else { return 0 }
         switch display {
-        case .off: 0
-        case .icon: pillIconSize + pillGap
-        case .iconAndName: pillIconSize + iconToNameGap + nameMaxWidth + pillGap
+        case .off: return 0
+        case .icon: return invizIconSize + invizGap
+        case .iconAndName: return invizIconSize + iconToNameGap + nameMaxWidth + invizGap
         }
     }
 
@@ -34,15 +49,10 @@ enum TargetAppMetrics {
         let measured = ceil((name as NSString).size(withAttributes: [.font: font]).width) + 1
         return min(measured, nameMaxWidth)
     }
-
-    /// Height the expanded pane adds for its header row.
-    static func paneHeaderHeight(for display: TargetAppDisplay, hasApp: Bool) -> CGFloat {
-        display == .off || !hasApp ? 0 : headerHeight
-    }
 }
 
 /// The frontmost app's icon, and its name when asked for. Quiet by design:
-/// small, partly transparent, and the name in the look's mutable text style.
+/// partly transparent, and the name in the look's mutable text style.
 struct TargetAppBadge: View {
     let app: TargetApp.Info
     let display: TargetAppDisplay
@@ -72,16 +82,16 @@ struct TargetAppBadge: View {
 }
 
 extension View {
-    /// Places the target-app badge just outside this pill's left edge,
+    /// Places the target-app badge just outside the inviz pill's left edge,
     /// vertically centered. It overlays, so the pill's own size is unchanged.
     @ViewBuilder func targetAppBeside(
         _ app: TargetApp.Info?, display: TargetAppDisplay, look: OverlayLook
     ) -> some View {
         if display != .off, let app {
             overlay(alignment: .leading) {
-                TargetAppBadge(app: app, display: display, iconSize: TargetAppMetrics.pillIconSize, look: look)
+                TargetAppBadge(app: app, display: display, iconSize: TargetAppMetrics.invizIconSize, look: look)
                     .fixedSize()
-                    .alignmentGuide(.leading) { $0[.trailing] + TargetAppMetrics.pillGap }
+                    .alignmentGuide(.leading) { $0[.trailing] + TargetAppMetrics.invizGap }
             }
         } else {
             self

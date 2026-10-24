@@ -448,17 +448,27 @@ until `dismiss`, so focus moving mid-dictation moves the icon, because that is
 where the commit now injects. Vizpr itself never replaces the target: its
 Settings window in front keeps the last other app.
 
-**Placement.** On the resting and inviz pills the badge sits just outside the
-pill's left edge (16 pt icon, 6 pt gap, 11 pt name). In the expanded pane it is a
-header row at the top left (14 pt icon). Opacity is 0.85 and the name uses the
-look's mutable style. Sizes live in `TargetAppMetrics`.
+**Placement.** The resting pill and the expanded pane hold the icon inside
+their leading edge: 28 pt, 12 pt from the left edge. In the resting pill it is
+vertically centered; with `iconAndName` the name (11 pt, the look's mutable
+style) follows it inside the pill. In the expanded pane the icon is pinned at
+the top left, centered on the first line of text (never closer than 8 pt to the
+top border) and does not scroll with the text. The text column starts after the
+icon (`TargetAppMetrics.textLeading`: icon, 8 pt gap, but never inside the
+look's own padding). The expanded pane shows the icon only, even with
+`iconAndName`, because there is no room beside wrapped text. The recording dot
+moves to the bottom right while the icon is shown. The inviz pill (84 x 36) is
+too small for the icon, so it keeps the badge outside its left edge (20 pt icon,
+6 pt gap, name when asked). Opacity is 0.85. Sizes live in `TargetAppMetrics`.
 
-**Measurement and margin.** The header's height (`TargetAppMetrics.headerHeight`)
-goes into `OverlayLook.paneHeight(fitting:headerHeight:)` whenever it is shown.
-The panel gets `sideInset` on both sides for the badge beside the pills, so the
-badge is not clipped and the pane stays centered where it was; `dragEnded`
-subtracts the same inset when it reads the pane's frame, so the pane, not the
-badge, is what the anchor positions.
+**Measurement and margin.** `OverlayLook.textWidth(showingTarget:)` is the wrap
+width the view renders and `paneHeight(fitting:showingTarget:)` measures, so the
+pane height matches the narrower column. Only inviz mode reserves
+`sideInset` on both sides of the pane for the badge beside the pill, so the
+badge is not clipped and the pill stays centered where it was; resting and
+expanded panels have no side inset. `dragEnded` subtracts the same inset when it
+reads the pane's frame, so the pane, not the badge, is what the anchor
+positions. Toggling inviz re-places the panel.
 
 ## Future directions (Mauria, 2026-07-05 — recorded, not scheduled)
 
