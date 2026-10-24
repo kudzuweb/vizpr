@@ -194,7 +194,7 @@ struct OverlayLook: Codable, Equatable, Sendable, Identifiable {
     /// Room the panel leaves around the pane: the larger of the glow and
     /// shadow reach and the corner icon's overhang.
     var panelMargin: CGFloat {
-        max(PaneEffects.margin(for: style), ceil(TargetAppMetrics.cornerOverhang(cornerRadius: cornerRadius)))
+        max(PaneEffects.margin(for: style), TargetAppMetrics.cornerOverhang)
     }
 }
 

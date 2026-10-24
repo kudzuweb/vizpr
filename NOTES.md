@@ -459,10 +459,10 @@ where the commit now injects. Vizpr itself never replaces the target: its
 Settings window in front keeps the last other app.
 
 **Placement.** On the resting pill and the expanded pane the icon (28 pt)
-straddles the top-left corner: its center sits on the corner arc at 45 degrees
-(`cornerRadius * 0.293` in from the left and top edges), so about half hangs
-outside the pill. It overlays the pill outside the clip, so it changes neither
-the pill's size nor the text column. `OverlayLook.panelMargin` is the larger
+is tucked into the top-left corner: it hangs 4 pt outside the pill's left and
+top edges (`TargetAppMetrics.cornerOverhang`), whatever the corner radius. It
+overlays the pill outside the clip, so it changes neither the pill's size nor
+the text column. `OverlayLook.panelMargin` is the larger
 of the glow/shadow reach and the icon's overhang, and the panel, the view and
 `dragEnded` all use it. With `iconAndName` the resting pill shows the name
 (11 pt, the look's mutable style) inside the pill, starting just past the icon;
