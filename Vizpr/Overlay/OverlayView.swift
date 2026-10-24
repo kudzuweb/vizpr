@@ -131,7 +131,7 @@ struct OverlayView: View {
                     TargetAppName(name: app.name, look: look)
                         .opacity(TargetAppMetrics.opacity)
                         .accessibilityHidden(true)
-                        .padding(.leading, TargetAppMetrics.nameLeading(cornerRadius: look.cornerRadius))
+                        .padding(.leading, TargetAppMetrics.nameLeading)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
                 }
 
@@ -159,7 +159,7 @@ struct OverlayView: View {
     /// The app icon centered on the pane's top-left corner arc, so about half
     /// of it hangs outside. The expanded pane shows the icon only.
     private func cornerBadge(_ app: TargetApp.Info) -> some View {
-        let inset = TargetAppMetrics.iconCenterInset(cornerRadius: look.cornerRadius)
+        let inset = TargetAppMetrics.iconCenterInset
         let offset = inset - TargetAppMetrics.paneIconSize / 2
         return TargetAppBadge(app: app, display: .icon, iconSize: TargetAppMetrics.paneIconSize, look: look)
             .fixedSize()

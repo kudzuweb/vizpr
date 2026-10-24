@@ -185,12 +185,9 @@ struct PaneMeasurementTests {
         }
     }
 
-    @Test("The corner icon's overhang fits in the panel margin for every corner radius")
+    @Test("The corner icon's overhang fits in the panel margin")
     func marginCoversOverhang() {
-        for radius in stride(from: OverlayLook.cornerRadiusRange.lowerBound, through: OverlayLook.cornerRadiusRange.upperBound, by: 4) {
-            let look = look { $0.cornerRadius = radius }
-            #expect(look.panelMargin >= TargetAppMetrics.cornerOverhang(cornerRadius: radius), "radius \(radius)")
-        }
+        #expect(look { _ in }.panelMargin >= TargetAppMetrics.cornerOverhang)
     }
 
     @Test("Only the inviz pill reserves side room; the pane stays put when it does")

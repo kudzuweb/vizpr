@@ -19,21 +19,16 @@ enum TargetAppMetrics {
     static let nameFontSize: CGFloat = 11
     static let opacity = 0.85
 
-    /// Distance from the pill's left and top edges to the icon's center, which
-    /// sits on the corner arc at 45 degrees.
-    static func iconCenterInset(cornerRadius: CGFloat) -> CGFloat {
-        cornerRadius * (1 - 0.5.squareRoot())
-    }
+    /// How far the corner icon hangs outside the pill on the left and top. Small
+    /// enough that the icon reads as tucked into the corner, large enough that it
+    /// still marks the pill's edge.
+    static let cornerOverhang: CGFloat = 4
 
-    /// How far the corner icon hangs outside the pill on the left and top.
-    static func cornerOverhang(cornerRadius: CGFloat) -> CGFloat {
-        max(0, paneIconSize / 2 - iconCenterInset(cornerRadius: cornerRadius))
-    }
+    /// Distance from the pill's left and top edges to the icon's center.
+    static let iconCenterInset = paneIconSize / 2 - cornerOverhang
 
     /// Where the name starts inside the resting pill: just past the corner icon.
-    static func nameLeading(cornerRadius: CGFloat) -> CGFloat {
-        iconCenterInset(cornerRadius: cornerRadius) + paneIconSize / 2 + iconToNameGap
-    }
+    static let nameLeading = iconCenterInset + paneIconSize / 2 + iconToNameGap
 
     /// Room the panel needs on each side of the pane. Only the inviz pill puts
     /// its indicator outside the pane.
