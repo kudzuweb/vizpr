@@ -265,6 +265,62 @@ The two edge-tracking bugs lived in the untestable shell, so the fix extracted
 the edge logic into a pure `FlagEdgeTracker` with its own unit tests — turning
 shell logic the property tests couldn't reach into tested value-type code.
 
+## Hotkey classified by event time, on its own thread (2026-10-23)
+
+Field problem: the first Fn press after launch was sometimes misclassified (a
+quick tap read as a hold, or the reverse). `debug.log` on 2026-10-21 at 01:22 and
+01:56 EDT shows it. The event tap ran on the main run loop, which a cold
+`AVAudioEngine.start()` blocks for about 2 s, so the callback was serviced late;
+edges were stamped when they were handled, so a tap whose release was handled
+late measured as long. A threshold timer that had already promoted the press to
+`holding` also made the late release commit instead of latch.
+
+- The tap source, the threshold timer and the watchdog run on a dedicated
+  run-loop thread (`HotkeyRunLoopThread`, named `app.vizpr.hotkey`). The monitor's
+  entry points hop onto it. `stop()` waits for teardown, bounded at 2 s, so a
+  wedged thread cannot hang a permission flow or app quit. The tap port is shared
+  with `isTapHealthy` behind a lock.
+- Edges are classified by the event's own timestamp (`EventTimestamp`), which is
+  nanoseconds since boot, the same clock as `nowMonotonic()`. The first version
+  assumed mach ticks and scaled by the timebase; the first live run showed that
+  put every stamp in the future, and the 2026-10-24 field log showed the raw stamp
+  within 0.4 ms of uptime in nanoseconds. Commit 5e269ea removes the scaling.
+- The stamp is used only if it is non-zero, not in the future, and at most 30 s
+  old; otherwise the edge uses handling time, the old behavior. A zero stamp falls
+  back even in the first 30 s after boot.
+- In `holding`, a release runs the same duration check as in `pressed`, so a
+  timer that fired late cannot turn a quick tap into a commit.
+- `HotkeyInput.captureFailed` cancels from pressed, holding and latched and is
+  inert from idle. `HotkeyMonitor.injectCaptureFailure()` feeds it from the audio
+  side; nothing in this branch calls it yet.
+- `stop()` clears the shared port on the caller's thread before the teardown is
+  queued, and the teardown removes only the tap it stopped. A `start()` after a
+  timed-out stop therefore creates a fresh tap that the older teardown leaves
+  alone.
+- `setSecondaryMask` runs on every settings change. An unchanged mask is now a
+  no-op, and a changed one carries over `fnDown`, `secondaryActive` and the
+  post-reset baseline state (`FlagEdgeTracker.replacingSecondaryMask`). Before,
+  a settings change while Fn was held lost the Fn-up edge and left the session
+  stuck.
+- Debug builds log `hotkey event stamp:` once per launch, on the first Fn edge,
+  with `converted` or `fell back to handling time` and the raw numbers. Numbers
+  only, no typed text.
+
+Fail-open invariant, unchanged: `.consume` is emitted only for Fn events. A
+packet without an Fn edge is never deleted. A packet with an Fn edge is deleted
+whole, including any secondary-combo edge in the same packet; that edge is still
+processed by the machine, but the app that would have received it does not see
+the packet.
+
+Verification: the 2026-10-24 once-per-launch log line read `converted` on
+Mauria's machine. In use on her machine since 2026-10-23 inside a combined dev
+build.
+
+Not exercised: `HotkeyMonitor` itself has no tests (the pure pieces do:
+`HotkeyStateMachine`, `FlagEdgeTracker`, `EventTimestamp`, `HotkeyRunLoopThread`),
+and `VizprTranscriptLogger` is now called from the hotkey thread rather than the
+main thread.
+
 ## PR 10 — FieldContextReader (field matrix, 2026-07-05)
 
 Matrix passed via JSONL verification: VS Code -> mode=code (surrounding nil,
