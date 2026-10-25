@@ -7,7 +7,9 @@ import FluidAudio
 ///
 /// Auto-stop is *emitted into the hotkey state machine* via `onAutoStop` — the
 /// pipeline never commits anything itself (§6: VAD never decides commits).
-/// The capture stream fans out to the transcription engine; token events are
+/// The VAD also decides which audio the transcription engine hears: captured
+/// batches pass through a `SpeechGate`, which holds back silence so the ASR
+/// never decodes the long quiet stretch before an auto-stop. Token events are
 /// handed to `onTokenEvent` (SmartCleanup → TokenStream in production), with
 /// the dev logger observing alongside.
 @MainActor
@@ -27,12 +29,12 @@ final class AudioPipeline {
     /// falls back to dev-log-only, useful in bring-up).
     private let onTokenEvent: (@Sendable (TokenEvent) async -> Void)?
     /// Fires once per session after the engine's event stream fully drains —
-    /// i.e. AFTER every event (including the commit-time flush finals, which
-    /// arrive later than the commit action) has been delivered to
+    /// i.e. AFTER every event (including the commit-time tail final, which
+    /// arrives later than the commit action) has been delivered to
     /// onTokenEvent. The dev logger writes its dictation record here; a
-    /// commit-time write would miss the flush (field-observed: short
+    /// commit-time write would miss the tail final (field-observed: short
     /// dictations logged empty raw_asr_text — nothing finalizes before the
-    /// flush unless the session crosses the 10 s confirmation window).
+    /// tail decode unless the session crosses the 10 s window).
     private let onSessionDrained: (@Sendable (Int) async -> Void)?
     /// Fired at stop() when the mic delivered PURE SILENCE for a session
     /// with real length — the AirPods held-route trap (rms 0.0000; second
@@ -120,6 +122,9 @@ final class AudioPipeline {
             var sessionChunks = 0
             #endif
             var fallbackAttempted = false
+            var gate = SpeechGate()
+            var speechActive = false
+            var probability: Float = 0
 
             let stream = await openCapture()
             do {
@@ -140,8 +145,15 @@ final class AudioPipeline {
                         fallbackAttempted = true
                         await self.fallBack(capture)
                     }
-                    fanOut.audio?.yield(samples)
-                    for update in try await detector.process(samples) {
+                    let updates = try await detector.process(samples)
+                    if let latest = updates.last {
+                        speechActive = latest.speechActive
+                        probability = latest.probability
+                    }
+                    for batch in gate.feed(samples, speechActive: speechActive, probability: probability) {
+                        fanOut.audio?.yield(batch)
+                    }
+                    for update in updates {
                         #if DICT_DEV_LOG
                         chunkCount += 1
                         Self.logUpdate(update, chunkCount: chunkCount)
@@ -171,10 +183,14 @@ final class AudioPipeline {
                 #endif
             }
 
-            // Session over: end the engine's input so it flushes its tail and
+            // Session over: release any held audio that may contain speech,
+            // then end the engine's input so it finalizes its tail and
             // finishes its event stream, then let it drain. Runs even when the
             // session task was cancelled by stop() — cancellation only breaks
-            // the capture loop above; the flush must still complete.
+            // the capture loop above; the tail decode must still complete.
+            for batch in gate.end() {
+                fanOut.audio?.yield(batch)
+            }
             fanOut.audio?.finish()
             await fanOut.events?.value
             await onSessionDrained?(epoch)
