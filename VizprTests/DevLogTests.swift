@@ -43,7 +43,7 @@ struct DevLogTests {
         await writer.append(DevCleanupRecord(
             CleanupOutcome(
                 input: "helo wrld", output: "Hello world.",
-                generation: 3, disposition: .applied
+                generation: 3, disposition: .applied, durationMs: 690
             ),
             timestamp: "2026-07-03T00:00:01Z"
         ))
@@ -66,6 +66,7 @@ struct DevLogTests {
         #expect(cleanupRecord["output"] as? String == "Hello world.")
         #expect(cleanupRecord["generation"] as? Int == 3)
         #expect(cleanupRecord["disposition"] as? String == "applied")
+        #expect(cleanupRecord["duration_ms"] as? Int == 690)
     }
 
     @Test("Newlines in transcript text never break the one-line contract")

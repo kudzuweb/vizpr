@@ -109,6 +109,12 @@ struct DevCleanupRecord: Encodable, Sendable {
     let generation: Int
     let disposition: String
     let error: String?
+    let durationMs: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case type, timestamp, input, output, generation, disposition, error
+        case durationMs = "duration_ms"
+    }
 
     init(_ outcome: CleanupOutcome, timestamp: String = Date().ISO8601Format()) {
         self.timestamp = timestamp
@@ -117,6 +123,7 @@ struct DevCleanupRecord: Encodable, Sendable {
         self.generation = outcome.generation
         self.disposition = outcome.disposition.rawValue
         self.error = outcome.errorDescription
+        self.durationMs = outcome.durationMs
     }
 }
 #endif

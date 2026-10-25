@@ -135,6 +135,17 @@ actor SmartCleanup {
         // path reports its disposition through onOutcome — cleanup failures
         // are fail-open for the display (span stays raw) but never silent.
         await tokenStream.launchCleanup { [engine, vocabulary, tokenStream, onOutcome] in
+            #if DICT_DEV_LOG
+            let started = ContinuousClock.now
+            #endif
+            func elapsedMs() -> Int? {
+                #if DICT_DEV_LOG
+                let parts = (ContinuousClock.now - started).components
+                return Int(parts.seconds * 1000 + parts.attoseconds / 1_000_000_000_000_000)
+                #else
+                return nil
+                #endif
+            }
             do {
                 let result = try await engine.clean(request)
                 // POST-PASS is authoritative: re-fix any canonical form the
@@ -153,7 +164,8 @@ actor SmartCleanup {
                     await onOutcome?(CleanupOutcome(
                         input: request.text, output: nil,
                         generation: input.generation, disposition: .failed,
-                        errorDescription: "output was context echo only"
+                        errorDescription: "output was context echo only",
+                        durationMs: elapsedMs()
                     ))
                     return
                 }
@@ -163,18 +175,21 @@ actor SmartCleanup {
                 await onOutcome?(CleanupOutcome(
                     input: request.text, output: cleaned,
                     generation: input.generation,
-                    disposition: applied ? .applied : .stale
+                    disposition: applied ? .applied : .stale,
+                    durationMs: elapsedMs()
                 ))
             } catch is CancellationError {
                 await onOutcome?(CleanupOutcome(
                     input: request.text, output: nil,
-                    generation: input.generation, disposition: .cancelled
+                    generation: input.generation, disposition: .cancelled,
+                    durationMs: elapsedMs()
                 ))
             } catch {
                 await onOutcome?(CleanupOutcome(
                     input: request.text, output: nil,
                     generation: input.generation, disposition: .failed,
-                    errorDescription: String(describing: error)
+                    errorDescription: String(describing: error),
+                    durationMs: elapsedMs()
                 ))
             }
         }
@@ -195,4 +210,6 @@ struct CleanupOutcome: Sendable, Equatable {
     let generation: Int
     let disposition: Disposition
     var errorDescription: String?
+    /// Wall time of the invocation; measured in dev-log builds only.
+    var durationMs: Int?
 }
