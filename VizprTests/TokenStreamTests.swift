@@ -63,13 +63,15 @@ struct TokenStreamTests {
         #expect(await ts.commit() == "The meeting is set.")
     }
 
-    @Test("Draft overlapping the live tail is not duplicated in the display")
-    func draftFinalSeamDedup() async {
+    @Test("A draft continues the live tail with a space and repeats nothing")
+    func draftContinuesLiveTail() async {
+        // Drafts start at the confirmed boundary, so a draft never re-covers
+        // the final before it.
         let ts = stream()
         await ts.beginSession()
         await ts.apply(.finalized(text: "We say negligent discharge",
                                   confidence: 0.9, tokenConfidences: []))
-        await ts.apply(.draft(windowID: 1, text: "discharge for a reason"))
+        await ts.apply(.draft(windowID: 1, text: "for a reason"))
         let displayed = await ts.currentSnapshot().displayed
         #expect(displayed == "We say negligent discharge for a reason")
     }

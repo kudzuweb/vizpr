@@ -156,17 +156,18 @@ actor TokenStream {
 
     private func applyFinalized(_ text: String) {
         // Bounded seam context (last ~200 chars): SeamMerger only inspects the
-        // final character and the trailing ~12 words. Concatenating the whole
-        // settled string here would make per-event work O(session length) —
-        // the acceptance criterion demands it stays bounded.
+        // final character. Concatenating the whole settled string here would
+        // make per-event work O(session length) — the acceptance criterion
+        // demands it stays bounded.
         let addition = SeamMerger.appendix(context: seamContext(), new: text)
         if !addition.isEmpty {
             live += addition
         }
-        // Bump on every accepted finalized event, even a fully-deduplicated
-        // one: the draft is cleared below, so the display changed, and any
-        // cleanup computed before this event is stale (review finding — an
-        // empty addition previously left generation unchanged).
+        // Bump on every accepted finalized event, even one that adds nothing
+        // (a bare terminator the text already ends with): the draft is cleared
+        // below, so the display changed, and any cleanup computed before this
+        // event is stale (review finding — an empty addition previously left
+        // generation unchanged).
         generation += 1
         // The finalized window supersedes its draft — and the draft FLOOR must
         // advance past it, or a straggler draft for the just-finalized window

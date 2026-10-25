@@ -824,6 +824,14 @@ The decisions, by step:
 - **Timings.** Each window logs one line, numbers only:
   `window: pause|forced, decoded N ms, cut M samples`.
 
+- **Seam merging no longer matches words.** Finals do not repeat each other's
+  words, so `SeamMerger.trimOverlap` is removed and `appendix(context:new:)`
+  keeps only its punctuation and spacing rules. A phrase repeated across two
+  finals ("I really" / "really mean it") is kept. The filler and contraction
+  tables stay because `stripContextEcho` aligns a cleanup rewrite with its
+  settled context through them: cleanup drops fillers and may expand
+  contractions when it copies the context.
+
 ## Environment prerequisites discovered
 
 - **Metal Toolchain** is required to build the mlx-swift dependency (it compiles

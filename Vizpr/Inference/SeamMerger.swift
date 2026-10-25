@@ -1,14 +1,17 @@
 import Foundation
 
-/// Pure seam-merge for finalized text arriving from windowed ASR (PLAN.md §5:
-/// "tolerant to dedup nondeterminism at window seams" — TokenStream's side of
-/// that contract).
+/// Pure seam-merge for finalized text arriving from windowed ASR (PLAN.md §5):
+/// the spacing and punctuation rules for joining one final onto the text
+/// before it, plus the echo strip for cleanup output.
+///
+/// Finals no longer repeat each other's words: the engine decodes each window
+/// with audio before it for context and keeps only the words that start inside
+/// the window (`TimedCut`), so nothing here matches words across a seam. A
+/// phrase repeated across two finals is real speech and is kept.
 ///
 /// Field-collected artifacts this handles (2026-07-03 logs, now fixtures):
 /// - a final beginning with orphan punctuation (", a lot of booze…") that must
 ///   glue onto the previous text without a space,
-/// - a final re-transcribing words already present at the tail of the previous
-///   window ("… Good work" / ". Good work, Fable."),
 /// - bare punctuation-only finals (".") that duplicate an existing terminator.
 enum SeamMerger {
 
@@ -26,44 +29,27 @@ enum SeamMerger {
             return incoming
         }
 
-        // Word-overlap trim: the longest run of words ending `context` that
-        // also begins `incoming` was re-transcribed at the seam — drop it.
-        let deduped = trimOverlap(context: context, incoming: incoming)
-        guard !deduped.isEmpty else { return "" }
-
         // Leading punctuation: if the context is already terminated, the seam
         // duplicated the boundary ("…margaritas." + ", a lot…") — strip it.
         // Otherwise it belongs to the previous clause and glues directly
         // ("…margaritas" + ", a lot…").
-        if let first = deduped.first, first.isPunctuation {
+        if let first = incoming.first, first.isPunctuation {
             if let last = context.last, last.isPunctuation {
-                let stripped = String(deduped.drop { $0.isPunctuation || $0.isWhitespace })
+                let stripped = String(incoming.drop { $0.isPunctuation || $0.isWhitespace })
                 return stripped.isEmpty ? "" : " " + stripped
             }
-            return deduped
+            return incoming
         }
-        return " " + deduped
+        return " " + incoming
     }
 
-    /// Longest suffix-of-context == prefix-of-incoming match, compared as
-    /// normalized words (case/punctuation-insensitive), capped for cost.
-    ///
-    /// Guard against eating genuinely repeated speech (review finding: a user
-    /// saying "…that's final. Final answer." must not lose the second word):
-    /// a normalized match of >= 2 words is confidently a seam re-transcription;
-    /// a single-word match trims only when the raw words are IDENTICAL
-    /// including case and punctuation — real emphasis repeats ("final." vs
-    /// "Final") differ in surface form and are preserved.
-    /// Filler tokens ignored when ALIGNING the overlap (field catch: the
-    /// windowed final ended "…Otherwise, we're" and the next window opened
-    /// "Otherwise, uh we're coming" — the "uh" broke token alignment and the
-    /// words rendered twice). Fillers inside a matched overlap are trimmed
-    /// with it; fillers elsewhere are never touched.
+    /// Filler tokens ignored when ALIGNING a cleanup echo with its context:
+    /// cleanup removes fillers, so a copy of the context can lack ones the
+    /// context has.
     private static let fillers: Set<String> = ["uh", "um"]
 
-    /// Contraction variants the ASR renders inconsistently across windows
-    /// (field catch: "…going to feel different than" / "…gonna feel different
-    /// than" rendered twice). Both sides expand before alignment.
+    /// Contraction variants cleanup may normalize when it copies the context
+    /// ("gonna" / "going to"). Both sides expand before alignment.
     private static let expansions: [String: [String]] = [
         "gonna": ["going", "to"], "wanna": ["want", "to"], "gotta": ["got", "to"],
         "kinda": ["kind", "of"], "sorta": ["sort", "of"], "dunno": ["dont", "know"],
@@ -91,55 +77,13 @@ enum SeamMerger {
         return out
     }
 
-    private static func trimOverlap(context: String, incoming: String) -> String {
-        let contextRaw = Array(context.split(separator: " ").suffix(12))
-        let incomingRaw = incoming.split(separator: " ", omittingEmptySubsequences: true)
-        let contextToks = alignmentTokens(contextRaw)
-        let incomingToks = alignmentTokens(Array(incomingRaw.prefix(12)))
-
-        var rawConsumed = 0
-        let maxLen = min(contextToks.count, incomingToks.count)
-        for length in stride(from: maxLen, through: 1, by: -1) {
-            let tail = contextToks.suffix(length).map(\.text)
-            let head = incomingToks.prefix(length).map(\.text)
-            guard tail == head else { continue }
-            // The match must end at a raw-word boundary on the incoming side:
-            // matching only "going" out of gonna→[going, to] would trim the
-            // whole raw word and lose its "to".
-            if length < incomingToks.count,
-               incomingToks[length].raw == incomingToks[length - 1].raw { continue }
-            if length == 1 {
-                // Single-word trims need raw equality modulo the context
-                // word's trailing punctuation ("confirmation." / "confirmation"
-                // is a seam; "final." / "Final" is real repeated speech).
-                let rawContext = contextToks.last.map { String(contextRaw[$0.raw]) } ?? ""
-                let rawIncoming = incomingToks.first.map { String(incomingRaw[$0.raw]) } ?? ""
-                let stripped = String(rawContext.reversed().drop(while: \.isPunctuation).reversed())
-                guard rawContext == rawIncoming || stripped == rawIncoming else { continue }
-            }
-            // Consume through the raw index of the last matched token,
-            // including any fillers interior to the overlap.
-            rawConsumed = incomingToks[length - 1].raw + 1
-            break
-        }
-        guard rawConsumed > 0, rawConsumed <= incomingRaw.count else { return incoming }
-        guard rawConsumed < incomingRaw.count else { return "" }
-
-        // Slice the ORIGINAL string after the overlap words rather than
-        // rejoining split words: rejoining collapses internal whitespace, a
-        // silent transformation the WYSIWYG contract forbids (review finding).
-        let lastOverlapWord = incomingRaw[rawConsumed - 1]
-        let rest = incoming[lastOverlapWord.endIndex...]
-        return String(rest.drop { $0 == " " })
-    }
-
     /// Strip a leading ECHO of `context` from `incoming` — cleanup models
     /// occasionally copy the surrounding settled context into their rewrite
     /// despite the prompt (field catch, 2026-07-05: an entire settled
-    /// paragraph rendered and COMMITTED twice). Unlike the seam trim, the
-    /// echo can be arbitrarily long, so the whole context participates; and
-    /// it must be a substantial verbatim-ish match (≥ 3 tokens) so a rewrite
-    /// legitimately opening with a repeated word is never eaten.
+    /// paragraph rendered and COMMITTED twice). The echo can be arbitrarily
+    /// long, so the whole context participates; and it must be a substantial
+    /// verbatim-ish match (≥ 3 tokens) so a rewrite legitimately opening with
+    /// a repeated word is never eaten.
     static func stripContextEcho(context: String, from incoming: String) -> String {
         guard !context.isEmpty, !incoming.isEmpty else { return incoming }
         let contextRaw = Array(context.split(separator: " "))
@@ -156,7 +100,9 @@ enum SeamMerger {
             guard length >= 3 || length == contextToks.count else { continue }
             guard Array(contextToks.suffix(length)) == incomingToks.prefix(length).map(\.text)
             else { continue }
-            // Raw-word boundary on the incoming side (see trimOverlap).
+            // The match must end at a raw-word boundary on the incoming side:
+            // matching only "going" out of gonna→[going, to] would consume the
+            // whole raw word and lose its "to".
             if length < incomingToks.count,
                incomingToks[length].raw == incomingToks[length - 1].raw { continue }
             let rawConsumed = incomingToks[length - 1].raw + 1
