@@ -16,5 +16,6 @@ enum VizprDevLogDirectory {
 
     static let debugLogURL = url.appendingPathComponent("debug.log")
     static let transcriptsURL = url.appendingPathComponent("transcripts.jsonl")
+    static let audioURL = url.appendingPathComponent("audio", isDirectory: true)
 }
 #endif

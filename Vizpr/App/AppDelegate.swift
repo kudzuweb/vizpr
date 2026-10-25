@@ -52,6 +52,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// race in either order; whichever lands second writes. Main-actor state.
     private var pendingInjection: String?
     private var sessionDrained = false
+    /// Audio of the last session, saved from the status menu.
+    private let lastSessionAudio = LastSessionAudio()
     #endif
 
     /// NSApplication holds its delegate weakly, and a local would be releasable
@@ -196,6 +198,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         audioPipeline?.onDevTimingMark = { [tracker] mark, instant in
             Task { await tracker.mark(mark, at: instant) }
         }
+        audioPipeline?.lastSessionAudio = lastSessionAudio
         #endif
         guard audioPipeline != nil else {
             failLoudly(
@@ -342,6 +345,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func sessionDrained(epoch: Int) async {
         settleGate.noteDrained(epoch: epoch)
         #if DICT_DEV_LOG
+        lastSessionAudio.end(epoch: epoch)
         await handleSessionDrained()
         #endif
     }
@@ -520,6 +524,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     await self?.tokenStream.beginSession()
                     let sessionEpoch = self?.settleGate.beginSession() ?? 0
                     #if DICT_DEV_LOG
+                    self?.lastSessionAudio.begin(at: Date(), epoch: sessionEpoch)
+                    #endif
+                    #if DICT_DEV_LOG
                     await self?.beginDictationRecord(startedAt: startedAt)
                     #endif
                     // Capture starts FIRST (PR 13): the AX field read is
@@ -665,6 +672,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshMenu()
     }
 
+    #if DICT_DEV_LOG
+    @objc private func saveLastSessionAudio() {
+        guard lastSessionAudio.isComplete, let startedAt = lastSessionAudio.startedAt else { return }
+        let raw = lastSessionAudio.raw
+        let gated = lastSessionAudio.gated
+        let directory = VizprDevLogDirectory.audioURL
+        Task.detached {
+            do {
+                let urls = try LastSessionAudio.write(
+                    raw: raw, gated: gated, startedAt: startedAt, to: directory
+                )
+                let rate = MicrophoneCapture.sampleRate
+                await MainActor.run {
+                    VizprTranscriptLogger.note(String(
+                        format: "saved last session audio: %@ (%.2f s), %@ (%.2f s)",
+                        urls.raw.path, Double(raw.count) / rate,
+                        urls.gated.path, Double(gated.count) / rate
+                    ))
+                    NSWorkspace.shared.activateFileViewerSelecting([urls.raw, urls.gated])
+                }
+            } catch {
+                VizprTranscriptLogger.note("saving last session audio failed: \(error)")
+            }
+        }
+    }
+    #endif
+
     // MARK: Menu
 
     private func setUpStatusItem() {
@@ -723,6 +757,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             "Look: \(settingsStore.settings.activeLook.name)", #selector(cycleLook)
         ))
         menu.addItem(cycleItem("Reset Overlay Position", #selector(resetOverlayPosition)))
+        #if DICT_DEV_LOG
+        let saveAudio = cycleItem("Save Last Session's Audio…", #selector(saveLastSessionAudio))
+        saveAudio.isEnabled = lastSessionAudio.isComplete
+        menu.addItem(saveAudio)
+        #endif
 
         let settings = NSMenuItem(
             title: "Settings…", action: #selector(openSettings), keyEquivalent: ","

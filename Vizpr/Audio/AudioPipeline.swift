@@ -53,6 +53,8 @@ final class AudioPipeline {
     /// Reports session timing marks (PR 13 latency audit) with the instant
     /// they happened, so a hop to the receiver cannot skew them.
     var onDevTimingMark: (@Sendable (DevTimingMark, ContinuousClock.Instant) -> Void)?
+    /// Receives the raw and gated audio of each session (last-session audio save).
+    var lastSessionAudio: LastSessionAudio?
     #endif
 
     private var sessionTask: Task<Void, Never>?
@@ -103,6 +105,7 @@ final class AudioPipeline {
         #if DICT_DEV_LOG
         // Captured by value here (a capture list cannot sit inside #if).
         let onDevTimingMark = self.onDevTimingMark
+        let lastSessionAudio = self.lastSessionAudio
         #endif
         sessionTask = Task { @MainActor [source, detector, engine, autoStopTimeout, onAutoStop, onTokenEvent, onSessionDrained] in
             let epoch = sessionEpoch
@@ -132,6 +135,7 @@ final class AudioPipeline {
                     #if DICT_DEV_LOG
                     sessionChunks += 1
                     if sessionChunks == 1 { onDevTimingMark?(.captureStarted, .now) }
+                    lastSessionAudio?.appendRaw(samples, epoch: epoch)
                     #endif
                     // Dead-air failover (field case: a phone call owned the
                     // AirPods; the route delivered zeros) -> swap to the
@@ -151,6 +155,9 @@ final class AudioPipeline {
                     for batch in gate.feed(
                         samples, speechActive: speechActive, chunkProbability: updates.last?.probability
                     ) {
+                        #if DICT_DEV_LOG
+                        lastSessionAudio?.appendGated(batch, epoch: epoch)
+                        #endif
                         fanOut.audio?.yield(.samples(batch))
                     }
                     for update in updates {
@@ -194,6 +201,9 @@ final class AudioPipeline {
             // session task was cancelled by stop() — cancellation only breaks
             // the capture loop above; the tail decode must still complete.
             for batch in gate.end() {
+                #if DICT_DEV_LOG
+                lastSessionAudio?.appendGated(batch, epoch: epoch)
+                #endif
                 fanOut.audio?.yield(.samples(batch))
             }
             fanOut.audio?.finish()
