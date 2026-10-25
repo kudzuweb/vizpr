@@ -548,6 +548,12 @@ and `transcripts.jsonl`. Under tests, `VizprDevLogDirectory` now points both
 writers at `vizpr-tests-<pid>` in the temporary directory, and the existing
 "dev transcript log target:" line says where. Production paths are unchanged.
 
+`VizprTranscriptLogger.note` is also called from several threads, and each call
+opened, seeked and wrote the file unserialized: two callers at the same instant
+sought to the same end offset and one line overwrote the other (a `window:` line
+and an `asr final` line never both landed). A lock now wraps the open-write-close;
+the call stays synchronous so a caller's next line follows its own previous one.
+
 ## Environment prerequisites discovered
 
 - **Metal Toolchain** is required to build the mlx-swift dependency (it compiles

@@ -14,6 +14,11 @@ import os
 /// started via LaunchServices (`open`), which is also the launch path that gives
 /// the event tap correct TCC attribution. Watch with:
 ///   log stream --level debug --predicate 'subsystem == "com.kudzuweb.vizpr"'
+///
+/// `note` is called from several threads (main, the pipeline's fan-out task,
+/// engine actors). Each call opens, seeks and writes the file, so two callers
+/// at the same instant seek to the same end offset and one line overwrites the
+/// other. A lock around the open-write-close keeps every line, in call order.
 enum VizprTranscriptLogger {
     /// Distinctive marker string used by scripts/check-devlog-absent.sh to assert
     /// this code is absent from Release binaries. Must not appear in Release.
@@ -36,20 +41,27 @@ enum VizprTranscriptLogger {
         note("dev transcript log target: \(VizprDevLogDirectory.transcriptsURL.path)")
     }
 
+    private static let fileLock = NSLock()
+
     /// Emit a one-off developer breadcrumb — the human-readable running
     /// commentary next to the structured JSONL records; useful for eyeballing
-    /// the pipeline live. Called from the main thread only (pipeline +
-    /// monitor are main-isolated).
+    /// the pipeline live. Safe from any thread; returns after the line is written.
     static func note(_ message: String) {
         log.debug("[\(buildMarker, privacy: .public)] \(message, privacy: .public)")
         let line = "\(Date().ISO8601Format()) \(message)\n"
         guard let data = line.data(using: .utf8) else { return }
-        if let handle = try? FileHandle(forWritingTo: debugFileURL) {
+        append(data, to: debugFileURL)
+    }
+
+    static func append(_ data: Data, to url: URL) {
+        fileLock.lock()
+        defer { fileLock.unlock() }
+        if let handle = try? FileHandle(forWritingTo: url) {
             defer { try? handle.close() }
             _ = try? handle.seekToEnd()
             try? handle.write(contentsOf: data)
         } else {
-            try? data.write(to: debugFileURL)
+            try? data.write(to: url)
         }
     }
 }
