@@ -708,6 +708,18 @@ Decisions:
   `commit tail: decoded N ms over M samples` to the dev log, which show how
   often the cap fires.
 
+Measuring it: `python3 -I scripts/tail-integrity-report.py
+~/Documents/dictation-dev/debug.log` reads the dev log and prints, over
+committed sessions, how many had a draft after `audio stream ended`, how many
+committed text ending in two words no pre-commit draft showed, how many lost
+the last draft's final two words at commit, and, among sessions under 10 s,
+how many had an `asr final` after the commit action. The matching is rough (a
+re-decode that changes a word counts as both a loss and an invention), so the
+counts are upper bounds. Baseline on the 2026-10-25 log, before this change:
+37 of 106 committed sessions had a late draft, 3 had an invented tail, 3 had
+a lost tail, and 2 of 45 short sessions had a late final. The same command
+after a week of use gives the comparison.
+
 Known limits:
 
 - The settle cap can still fire before the commit decode finishes; the last
