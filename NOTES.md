@@ -1053,6 +1053,15 @@ sought to the same end offset and one line overwrote the other (a `window:` line
 and an `asr final` line never both landed). A lock now wraps the open-write-close;
 the call stays synchronous so a caller's next line follows its own previous one.
 
+## A commit-cancelled cleanup is logged as cancelled (2026-10-25)
+
+`MLXCleanup.clean` now checks for cancellation after the generation stream ends. A
+cleanup cancelled by the commit used to return its empty text, which `SmartCleanup`
+reported as a `failed` record with "output was context echo only". It is now a
+`cancelled` record. Nothing on screen changes. Dev-log counts from before this
+change count these cancellations as failures: 23 of the 24 such failures in the
+2026-10-25 logs.
+
 ## Environment prerequisites discovered
 
 - **Metal Toolchain** is required to build the mlx-swift dependency (it compiles

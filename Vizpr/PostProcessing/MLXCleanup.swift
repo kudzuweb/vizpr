@@ -84,6 +84,10 @@ actor MLXCleanup: CleanupEngine {
                 output += text
             }
         }
+        // A cancelled decode ends the stream without another element, so the
+        // check inside the loop never sees the cancellation. Without this the
+        // empty output is returned as a result and reported as a failure.
+        try Task.checkCancellation()
         return CleanupResult(text: output.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 }
