@@ -732,6 +732,19 @@ a lost tail, and 0 of 60 short sessions had a final after the injected
 snapshot. The same command
 after a week of use gives the comparison.
 
+Live validation, 2026-10-25, six checks on Mauria's machine: a quick tap; an
+11 s utterance; a release on a word, where the commit decode added "and now no
+worries", which the last draft lacked; a pause followed by one word; auto-stop,
+with nothing invented; and Escape, which injected nothing. In every case the
+injected text matched or extended the last draft, and the settle wait was
+released by drain in 131 to 203 ms.
+
+One seam duplication was observed at 2026-10-25T19:26Z. A window's text ended
+"pushes are." because its audio ended mid-word at 12 s. The tail decode, which
+has no left context, heard "are ready" as "already", and the text-based seam
+trim could not match the two, so both stayed. This is deferred to the follow-up
+that cuts windows by token timing and gives the tail decode left context.
+
 Known limits:
 
 - The settle cap can still fire before the commit decode finishes; the last
