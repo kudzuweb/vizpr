@@ -763,6 +763,31 @@ Known limits:
   without an update, so `windowsProcessed` falls one behind for the rest of
   that session.
 
+## Windows by pause (2026-10-25)
+
+FluidAudio's sliding window confirmed a 10 s window after 2 s of further
+audio, so the first final text landed at about 12 s and every 10 s after it.
+Windows were cut on a clock, so a cut landed mid-word about half the time; the
+window kept its 2 s of right context, the next decode heard those words again,
+and a text match was the only thing stopping a duplicate. Field case,
+`debug.log` 2026-10-25T19:26Z: the window's text ended "pushes are." because
+its audio ended at 12 s in the middle of "ready", the tail decode heard "are
+ready" as "already" with no words before it, the match failed, and the
+injected text read "whatever pushes are. whatever pushes already."
+
+The app now owns its windows: a window closes at each pause the VAD reports,
+and every decode is cut by token timing, so no decode repeats another's words.
+The decisions, by step:
+
+- **The engine's input carries pause marks.** `TranscriptionEngine.transcribe`
+  takes `AsyncStream<AudioInput>`, where `AudioInput` is `.samples([Float])` or
+  `.pause`. `AudioPipeline` yields `.pause` after the gate's batches for a
+  capture batch whose VAD updates contain a `speechEnd` event, one per event.
+  The mark carries no position: the gate forwards about 1 s of audio after
+  speech stops and then nothing, so the engine's own sample count when the
+  mark arrives is the pause. The VAD still never decides commits; a mark only
+  lets the engine close a window.
+
 ## Environment prerequisites discovered
 
 - **Metal Toolchain** is required to build the mlx-swift dependency (it compiles

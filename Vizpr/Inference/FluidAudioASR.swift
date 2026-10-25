@@ -273,7 +273,7 @@ actor FluidAudioASR: TranscriptionEngine {
     /// nonisolated: builds the event stream synchronously (satisfying the
     /// protocol's sync shape); all actor state is reached with await inside the
     /// stream's task.
-    nonisolated func transcribe(_ audio: AsyncStream<[Float]>) -> AsyncStream<TokenEvent> {
+    nonisolated func transcribe(_ audio: AsyncStream<AudioInput>) -> AsyncStream<TokenEvent> {
         AsyncStream { continuation in
             let task = Task {
                 guard let manager = try? await self.makeSessionManager() else {
@@ -312,8 +312,9 @@ actor FluidAudioASR: TranscriptionEngine {
 
                     // Pump session audio into the confirmed track and the
                     // draft buffer, then wake the draft task.
-                    for await samples in audio {
+                    for await input in audio {
                         try Task.checkCancellation()
+                        guard case let .samples(samples) = input else { continue }
                         if let buffer = Self.pcmBuffer(from: samples) {
                             await manager.streamAudio(buffer)
                         }

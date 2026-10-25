@@ -151,9 +151,14 @@ final class AudioPipeline {
                     for batch in gate.feed(
                         samples, speechActive: speechActive, chunkProbability: updates.last?.probability
                     ) {
-                        fanOut.audio?.yield(batch)
+                        fanOut.audio?.yield(.samples(batch))
                     }
                     for update in updates {
+                        // After the gate's batches, so the engine has every
+                        // sample of the utterance when it sees the mark.
+                        if update.event?.kind == .speechEnd {
+                            fanOut.audio?.yield(.pause)
+                        }
                         #if DICT_DEV_LOG
                         chunkCount += 1
                         Self.logUpdate(update, chunkCount: chunkCount)
@@ -189,7 +194,7 @@ final class AudioPipeline {
             // session task was cancelled by stop() — cancellation only breaks
             // the capture loop above; the tail decode must still complete.
             for batch in gate.end() {
-                fanOut.audio?.yield(batch)
+                fanOut.audio?.yield(.samples(batch))
             }
             fanOut.audio?.finish()
             await fanOut.events?.value
@@ -236,10 +241,10 @@ final class AudioPipeline {
     private static func startEngineFanOut(
         engine: (any TranscriptionEngine)?,
         onTokenEvent: (@Sendable (TokenEvent) async -> Void)?
-    ) -> (audio: AsyncStream<[Float]>.Continuation?, events: Task<Void, Never>?) {
+    ) -> (audio: AsyncStream<AudioInput>.Continuation?, events: Task<Void, Never>?) {
         guard let engine else { return (nil, nil) }
         let (stream, continuation) = AsyncStream.makeStream(
-            of: [Float].self, bufferingPolicy: .bufferingNewest(256)
+            of: AudioInput.self, bufferingPolicy: .bufferingNewest(256)
         )
         let task = Task { @MainActor in
             for await event in engine.transcribe(stream) {

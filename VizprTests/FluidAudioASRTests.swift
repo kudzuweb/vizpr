@@ -68,11 +68,11 @@ struct FluidAudioASRTests {
         let engine = FluidAudioASR()
         try await engine.prepare()
 
-        let (audio, feeder) = AsyncStream.makeStream(of: [Float].self)
+        let (audio, feeder) = AsyncStream.makeStream(of: AudioInput.self)
         let batchSize = 3210   // deliberately unaligned with any window size
         let feedTask = Task {
             for start in stride(from: 0, to: composite.count, by: batchSize) {
-                feeder.yield(Array(composite[start ..< min(start + batchSize, composite.count)]))
+                feeder.yield(.samples(Array(composite[start ..< min(start + batchSize, composite.count)])))
                 // Drafts decode concurrently with ingestion and stop at end of
                 // input, so feed at a pace that gives the draft task time to
                 // run, as live capture does.
@@ -123,10 +123,10 @@ struct FluidAudioASRTests {
         try await engine.prepare()
 
         for session in 1...2 {
-            let (audio, feeder) = AsyncStream.makeStream(of: [Float].self)
+            let (audio, feeder) = AsyncStream.makeStream(of: AudioInput.self)
             let feedTask = Task {
                 for start in stride(from: 0, to: composite.count, by: 4000) {
-                    feeder.yield(Array(composite[start ..< min(start + 4000, composite.count)]))
+                    feeder.yield(.samples(Array(composite[start ..< min(start + 4000, composite.count)])))
                 }
                 feeder.finish()
             }
@@ -156,10 +156,10 @@ struct FluidAudioASRTests {
         let engine = FluidAudioASR()
         // No prepare() call: the session itself must trigger and await the load.
 
-        let (audio, feeder) = AsyncStream.makeStream(of: [Float].self)
+        let (audio, feeder) = AsyncStream.makeStream(of: AudioInput.self)
         let feedTask = Task {
             for start in stride(from: 0, to: composite.count, by: 4000) {
-                feeder.yield(Array(composite[start ..< min(start + 4000, composite.count)]))
+                feeder.yield(.samples(Array(composite[start ..< min(start + 4000, composite.count)])))
             }
             feeder.finish()
         }
@@ -205,13 +205,13 @@ struct FluidAudioASRTests {
         let engine = FluidAudioASR()
         try await engine.prepare()
 
-        let (audio, feeder) = AsyncStream.makeStream(of: [Float].self)
+        let (audio, feeder) = AsyncStream.makeStream(of: AudioInput.self)
         let log = EventLog()
         let consumer = Task {
             for await event in engine.transcribe(audio) { log.record(event) }
         }
         for start in stride(from: 0, to: speech.count, by: 3200) {
-            feeder.yield(Array(speech[start ..< min(start + 3200, speech.count)]))
+            feeder.yield(.samples(Array(speech[start ..< min(start + 3200, speech.count)])))
             try await Task.sleep(for: .milliseconds(40))
         }
         // Let the last draft decode finish, so what follows is the commit alone.
@@ -239,19 +239,19 @@ struct FluidAudioASRTests {
         let engine = FluidAudioASR()
         try await engine.prepare()
 
-        let (firstAudio, firstFeeder) = AsyncStream.makeStream(of: [Float].self)
+        let (firstAudio, firstFeeder) = AsyncStream.makeStream(of: AudioInput.self)
         let firstLog = EventLog()
         let firstConsumer = Task {
             for await event in engine.transcribe(firstAudio) { firstLog.record(event) }
         }
-        firstFeeder.yield(speech)
+        firstFeeder.yield(.samples(speech))
         try await Task.sleep(for: .milliseconds(1500))
         firstLog.markInputEnded()
         firstFeeder.finish()
 
         // The second session starts at once, while the first is still decoding
         // its tail, and keeps feeding audio the first must never read.
-        let (secondAudio, secondFeeder) = AsyncStream.makeStream(of: [Float].self)
+        let (secondAudio, secondFeeder) = AsyncStream.makeStream(of: AudioInput.self)
         let secondConsumer = Task { () -> Int in
             var finals = 0
             for await event in engine.transcribe(secondAudio) {
@@ -259,7 +259,7 @@ struct FluidAudioASRTests {
             }
             return finals
         }
-        secondFeeder.yield(speech)
+        secondFeeder.yield(.samples(speech))
         await firstConsumer.value
 
         let entries = firstLog.all

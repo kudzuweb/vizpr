@@ -1,5 +1,9 @@
+import AVFoundation
 import Testing
 @testable import Vizpr
+
+/// Class token for locating the test bundle's resources.
+private final class PipelineFixtureLocator {}
 
 /// A capture source that hands the pipeline a pre-built stream.
 private struct FakeCaptureSource: CaptureSource {
@@ -41,7 +45,7 @@ private final class FailureLog {
 private struct FlushingEngine: TranscriptionEngine {
     func prepare() async throws {}
 
-    nonisolated func transcribe(_ audio: AsyncStream<[Float]>) -> AsyncStream<TokenEvent> {
+    nonisolated func transcribe(_ audio: AsyncStream<AudioInput>) -> AsyncStream<TokenEvent> {
         AsyncStream { continuation in
             let task = Task {
                 var sawAudio = false
@@ -55,6 +59,36 @@ private struct FlushingEngine: TranscriptionEngine {
                 continuation.yield(.finalized(
                     text: "flush final.", confidence: 0.9, tokenConfidences: []
                 ))
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+}
+
+/// An engine that records the shape of its input: the sample count heard
+/// before each `.pause` mark and the total.
+private final class InputRecordingEngine: TranscriptionEngine, @unchecked Sendable {
+    private let lock = NSLock()
+    private var heardSamples = 0
+    private var pauseSampleCounts: [Int] = []
+
+    var pauses: [Int] { lock.withLock { pauseSampleCounts } }
+    var totalSamples: Int { lock.withLock { heardSamples } }
+
+    func prepare() async throws {}
+
+    nonisolated func transcribe(_ audio: AsyncStream<AudioInput>) -> AsyncStream<TokenEvent> {
+        AsyncStream { continuation in
+            let task = Task {
+                for await input in audio {
+                    lock.withLock {
+                        switch input {
+                        case let .samples(samples): heardSamples += samples.count
+                        case .pause: pauseSampleCounts.append(heardSamples)
+                        }
+                    }
+                }
                 continuation.finish()
             }
             continuation.onTermination = { _ in task.cancel() }
@@ -111,6 +145,59 @@ struct AudioPipelineTests {
         #expect(entries.last == "drained:7", "drained was not the final callback: \(entries)")
         #expect(entries.contains("final:flush final."),
                 "flush final missing before drain: \(entries)")
+    }
+
+    /// Fixture speech as 16 kHz mono Float32 (same loader as the VAD tests).
+    private func fixtureSamples() throws -> [Float] {
+        let url = try #require(Bundle(for: PipelineFixtureLocator.self)
+            .url(forResource: "speech-sample", withExtension: "wav"))
+        let file = try AVAudioFile(forReading: url)
+        let format = try #require(AVAudioFormat(
+            commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false
+        ))
+        let buffer = try #require(AVAudioPCMBuffer(
+            pcmFormat: format, frameCapacity: AVAudioFrameCount(file.length)
+        ))
+        try file.read(into: buffer)
+        let channel = try #require(buffer.floatChannelData)
+        return Array(UnsafeBufferPointer(start: channel[0], count: Int(buffer.frameLength)))
+    }
+
+    @MainActor
+    @Test("The engine hears one pause mark after the speech's samples, and none for silence alone")
+    func pauseMarkFollowsSpeechEnd() async throws {
+        let speech = try fixtureSamples()
+        let silence = [Float](repeating: 0, count: 3 * 16_000)
+        let (samples, feeder) = AsyncStream.makeStream(of: [Float].self)
+        let engine = InputRecordingEngine()
+        let drained = CallbackLog()
+        let pipeline = AudioPipeline(
+            source: FakeCaptureSource(stream: samples),
+            detector: SpeechDetector(model: try SpeechDetector.loadBundledModel()),
+            engine: engine,
+            onSessionDrained: { epoch in await drained.add("drained:\(epoch)") },
+            onAutoStop: {}
+        )
+
+        pipeline.start(sessionEpoch: 4)
+        let composite = silence + speech + silence
+        for start in stride(from: 0, to: composite.count, by: 4096) {
+            feeder.yield(Array(composite[start ..< min(start + 4096, composite.count)]))
+        }
+        feeder.finish()
+        for _ in 0..<500 {
+            if await drained.entries.contains("drained:4") { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        try #require(await drained.entries.contains("drained:4"))
+
+        // The gate withholds the leading silence, so the mark sits at least a
+        // speech's length into what the engine heard.
+        #expect(engine.pauses.count == 1, "expected one pause mark, got \(engine.pauses)")
+        if let mark = engine.pauses.first {
+            #expect(mark >= speech.count)
+            #expect(mark <= engine.totalSamples)
+        }
     }
 
     @MainActor
