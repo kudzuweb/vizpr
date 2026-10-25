@@ -680,7 +680,10 @@ Decisions:
   often scores under the 0.85 trigger on its first 256 ms chunk). Until the
   VAD first triggers the hold is 4 s, so a quiet utterance it missed is not
   lost. At the end of the stream the hold is released only when the session
-  never triggered or a held chunk scored at least 0.5. The detector keeps
+  never triggered or a batch still in the hold completed a chunk scoring at
+  least 0.5 while the gate was already inactive (the batch that flips the gate
+  to inactive never counts, and a flagged batch trimmed out of the hold no
+  longer counts). The detector keeps
   `speechActive` true for 0.75 s after speech stops, so about 1 s of trailing
   audio is forwarded; before this change the engine received the whole 6 s
   auto-stop silence.

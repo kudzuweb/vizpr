@@ -18,31 +18,41 @@ struct SpeechGate {
     /// after a pause that had not reached the trigger threshold.
     private static let heldSpeechProbability: Float = 0.5
 
-    private var held: [[Float]] = []
+    private struct HeldBatch {
+        let samples: [Float]
+        /// The batch completed a chunk scoring at least 0.5 while the gate was
+        /// already inactive, so it may hold a word the trigger missed. The
+        /// batch that flips the gate to inactive never earns this: its chunk
+        /// still belongs to the speech that just ended.
+        let mayHoldSpeech: Bool
+    }
+
+    private var held: [HeldBatch] = []
     private var heldSampleCount = 0
     private var everActive = false
-    private var heldSpeech = false
+    private var wasActive = false
 
     /// - Parameters:
     ///   - speechActive: the detector's hysteresis state after the latest chunk.
-    ///   - probability: raw score of that chunk. A batch that completed no chunk
-    ///     passes the previous values.
+    ///   - chunkProbability: raw score of the chunk this batch completed, or
+    ///     nil when it completed none.
     /// - Returns: the batches to forward now, in order.
-    mutating func feed(_ samples: [Float], speechActive: Bool, probability: Float) -> [[Float]] {
+    mutating func feed(_ samples: [Float], speechActive: Bool, chunkProbability: Float?) -> [[Float]] {
         if speechActive {
             everActive = true
-            heldSpeech = false
-            let released = held + [samples]
+            wasActive = true
+            let released = held.map(\.samples) + [samples]
             discardHold()
             return released
         }
-        held.append(samples)
+        let scoredSpeech = (chunkProbability ?? 0) >= Self.heldSpeechProbability
+        held.append(HeldBatch(samples: samples, mayHoldSpeech: scoredSpeech && !wasActive))
+        wasActive = false
         heldSampleCount += samples.count
-        if probability >= Self.heldSpeechProbability { heldSpeech = true }
         let limit = everActive ? Self.preRollSamples : Self.untriggeredHoldSamples
-        while let oldest = held.first, heldSampleCount - oldest.count >= limit {
+        while let oldest = held.first, heldSampleCount - oldest.samples.count >= limit {
             held.removeFirst()
-            heldSampleCount -= oldest.count
+            heldSampleCount -= oldest.samples.count
         }
         return []
     }
@@ -51,7 +61,7 @@ struct SpeechGate {
     /// session never activated or the hold contains probable speech, otherwise
     /// nothing. The hold is cleared either way.
     mutating func end() -> [[Float]] {
-        let released = (!everActive || heldSpeech) ? held : []
+        let released = (!everActive || held.contains(where: \.mayHoldSpeech)) ? held.map(\.samples) : []
         discardHold()
         return released
     }

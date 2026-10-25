@@ -124,7 +124,6 @@ final class AudioPipeline {
             var fallbackAttempted = false
             var gate = SpeechGate()
             var speechActive = false
-            var probability: Float = 0
 
             let stream = await openCapture()
             do {
@@ -148,9 +147,10 @@ final class AudioPipeline {
                     let updates = try await detector.process(samples)
                     if let latest = updates.last {
                         speechActive = latest.speechActive
-                        probability = latest.probability
                     }
-                    for batch in gate.feed(samples, speechActive: speechActive, probability: probability) {
+                    for batch in gate.feed(
+                        samples, speechActive: speechActive, chunkProbability: updates.last?.probability
+                    ) {
                         fanOut.audio?.yield(batch)
                     }
                     for update in updates {
