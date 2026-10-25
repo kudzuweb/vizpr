@@ -203,7 +203,8 @@ actor FluidAudioASR: TranscriptionEngine {
         if let result {
             confirmedThrough = cutEnd
             let cut = TimedCut.cut(
-                result: result, decodeStart: decodeStart, cutStart: plan.cutStart, cutEnd: cutEnd
+                result: result, decodeStart: decodeStart, cutStart: plan.cutStart, cutEnd: cutEnd,
+                startTolerance: plan.startTolerance
             )
             if let keptEnd = cut.keptEnd, !cut.text.isEmpty {
                 continuation.yield(.finalized(
@@ -225,7 +226,7 @@ actor FluidAudioASR: TranscriptionEngine {
         guard let confirmedThrough else { return false }
         windowsProcessed += 1
         lastDraftText = ""
-        tracker.confirm(through: confirmedThrough)
+        tracker.confirm(through: confirmedThrough, atPause: plan.kind == .pause)
         trimBuffer()
         return true
     }
@@ -347,7 +348,8 @@ actor FluidAudioASR: TranscriptionEngine {
                         let cut = result.map {
                             TimedCut.cut(
                                 result: $0, decodeStart: plan.range.lowerBound,
-                                cutStart: plan.cutStart, cutEnd: plan.cutEnd
+                                cutStart: plan.cutStart, cutEnd: plan.cutEnd,
+                                startTolerance: plan.startTolerance
                             )
                         }
                         #if DICT_DEV_LOG
