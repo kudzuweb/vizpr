@@ -56,19 +56,20 @@ actor FluidAudioASR: TranscriptionEngine {
     private var tailTracker = DraftTailTracker()
     private var sessionBuffer: [Float] = []
     private var bufferStartSample = 0
-    private var confirmedWindows = 0
+    private var windowsProcessed = 0
     private var lastDraftText = ""
     /// True while tail drafts may be published. Closed (under actor
     /// serialization) before the end-of-session flush, so no tail draft can be
     /// yielded after the flush's finals.
     private var draftsOpen = false
 
-    /// Audio covered by one confirmed window (locked config: 10 s @ 16 kHz).
-    /// Confirmations don't carry reliable session-absolute sample positions, so
-    /// the boundary advances by one window per confirmation — exact for the
-    /// steady state, approximate only during the end-of-session flush, where
-    /// drafts no longer matter.
-    private static let samplesPerConfirmedWindow = Int(lockedConfig.chunkSeconds * 16_000)
+    /// Audio covered by one processed window (locked config: 10 s @ 16 kHz).
+    /// Updates don't carry reliable session-absolute sample positions, so the
+    /// boundary advances by one window per update. The 2 s right context is
+    /// deliberately not added: the tail re-decodes it and SeamMerger trims the
+    /// repeat, whereas moving the boundary past it would cut words straddling
+    /// the window's audio end with nothing to recover them.
+    private static let samplesPerWindow = Int(lockedConfig.chunkSeconds * 16_000)
 
     /// Live setting (PR 11): min audio before the first draft decode —
     /// Mauria's "first draft faster?" lever. Applies from the next session.
@@ -82,7 +83,7 @@ actor FluidAudioASR: TranscriptionEngine {
         tailTracker = DraftTailTracker(minTailSamples: draftMinTailSamples)
         sessionBuffer.removeAll(keepingCapacity: true)
         bufferStartSample = 0
-        confirmedWindows = 0
+        windowsProcessed = 0
         lastDraftText = ""
         draftsOpen = true
     }
@@ -117,7 +118,7 @@ actor FluidAudioASR: TranscriptionEngine {
         guard start >= 0, end <= sessionBuffer.count, start < end else { return nil }
         let slice = Array(sessionBuffer[start ..< end])
         trimBuffer()
-        return DraftPlan(samples: slice, windowID: confirmedWindows)
+        return DraftPlan(samples: slice, windowID: windowsProcessed)
     }
 
     /// Publish a tail draft unless drafts are closed or the text repeats the
@@ -138,10 +139,10 @@ actor FluidAudioASR: TranscriptionEngine {
         }
     }
 
-    /// A confirmed update arrived: the window advanced past another chunk.
-    private func noteConfirmation() {
-        confirmedWindows += 1
-        tailTracker.confirm(through: confirmedWindows * Self.samplesPerConfirmedWindow)
+    /// A window update arrived: the window advanced past another chunk.
+    private func noteWindowProcessed() {
+        windowsProcessed += 1
+        tailTracker.confirm(through: windowsProcessed * Self.samplesPerWindow)
     }
 
     /// Deduplicate consecutive identical drafts (silence produces repeats).
@@ -296,30 +297,24 @@ actor FluidAudioASR: TranscriptionEngine {
         }
     }
 
-    /// Forwards confirmed-track updates as TokenEvents.
+    /// Forwards every window the sliding-window manager processes as a
+    /// finalized TokenEvent. `SlidingWindowAsrManager.appendSamplesAndProcess`
+    /// advances its window whether or not the decode met the confirmation
+    /// threshold, and the next update overwrites the volatile text, so an
+    /// unconfirmed window's text has no later chance to appear. The confidence
+    /// travels with the event and SmartCleanup's gate sends a weak window to
+    /// cleanup.
     private nonisolated func startUpdatesTask(
         manager: SlidingWindowAsrManager, continuation: AsyncStream<TokenEvent>.Continuation
     ) -> Task<Void, Never> {
-        // Forward confirmed-track updates as TokenEvents. windowID
-        // counts confirmations: once text confirms, the window has
-        // advanced, so later drafts belong to a new window and must
-        // not replace the old one's finalized text. (The manager
-        // can also emit its own sub-threshold updates as drafts.)
         Task {
             for await update in await manager.transcriptionUpdates {
-                if update.isConfirmed {
-                    let tokenConfidences = update.tokenTimings.map(\.confidence)
-                    continuation.yield(.finalized(
-                        text: update.text,
-                        confidence: update.confidence,
-                        tokenConfidences: tokenConfidences
-                    ))
-                    await self.noteConfirmation()
-                } else if await self.shouldEmitDraft(update.text) {
-                    continuation.yield(.draft(
-                        windowID: await self.confirmedWindows, text: update.text
-                    ))
-                }
+                continuation.yield(.finalized(
+                    text: update.text,
+                    confidence: update.confidence,
+                    tokenConfidences: update.tokenTimings.map(\.confidence)
+                ))
+                await self.noteWindowProcessed()
             }
         }
     }
