@@ -54,6 +54,8 @@ struct WindowTracker {
 
     /// Absolute sample index where unconfirmed audio begins.
     private(set) var confirmedBoundary = 0
+    /// The boundary sits at a pause (or the session's start), not inside speech.
+    private(set) var boundaryIsPause = true
     /// Absolute sample count appended so far.
     private(set) var totalSamples = 0
     /// Total at the time of the last draft decode.
@@ -92,7 +94,21 @@ struct WindowTracker {
         let cutStart: Int
         let cutEnd: Int
         let kind: Kind
+        /// `cutStart` is a pause (or the session's start), not a point inside
+        /// speech.
+        var cutStartIsPause = false
+
+        /// How far before `cutStart` a word may start and still be kept. At a
+        /// pause the 0.75 s of audio before the boundary scored as silence, so
+        /// no word of the previous window can start in the tolerance. A forced
+        /// boundary is the end of the previous window's last kept word, inside
+        /// speech, so a tolerance there could keep that word a second time.
+        var startTolerance: Int { cutStartIsPause ? WindowTracker.pauseStartToleranceSamples : 0 }
     }
+
+    /// 0.25 s: more than the frame-level disagreement between two decodes of
+    /// one word, well under the 0.75 s of silence a pause requires.
+    static let pauseStartToleranceSamples = 4_000
 
     /// The absolute range a draft decode should cover right now, or nil if a
     /// decode isn't due (not enough new audio, or nothing unconfirmed).
@@ -133,21 +149,27 @@ struct WindowTracker {
                 range: contextStart ..< cutEnd + rightContextSamples,
                 cutStart: confirmedBoundary,
                 cutEnd: cutEnd,
-                kind: .forced
+                kind: .forced,
+                cutStartIsPause: boundaryIsPause
             )
         }
         guard let pause = pendingPause else { return nil }
         pendingPause = nil
         guard pause - confirmedBoundary >= minWindowSamples else { return nil }
         return WindowPlan(
-            range: contextStart ..< pause, cutStart: confirmedBoundary, cutEnd: pause, kind: .pause
+            range: contextStart ..< pause, cutStart: confirmedBoundary, cutEnd: pause, kind: .pause,
+            cutStartIsPause: boundaryIsPause
         )
     }
 
     /// Confirmed text now covers audio up to this absolute sample. Monotonic:
-    /// regressions (stale confirmations) are ignored.
-    mutating func confirm(through sample: Int) {
-        confirmedBoundary = max(confirmedBoundary, min(sample, totalSamples))
+    /// regressions (stale confirmations) are ignored. `atPause` says the new
+    /// boundary is a pause, which the next window's cut tolerates.
+    mutating func confirm(through sample: Int, atPause: Bool = false) {
+        let advanced = min(sample, totalSamples)
+        guard advanced > confirmedBoundary else { return }
+        confirmedBoundary = advanced
+        boundaryIsPause = atPause
     }
 
     /// Ask whether a draft decode is due; consuming the request resets the
@@ -179,7 +201,8 @@ struct WindowTracker {
             range: start ..< totalSamples,
             cutStart: max(confirmedBoundary, start),
             cutEnd: totalSamples,
-            kind: .commit
+            kind: .commit,
+            cutStartIsPause: boundaryIsPause && start <= confirmedBoundary
         )
     }
 

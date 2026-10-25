@@ -1025,12 +1025,15 @@ Known limits:
   earlier window kept, even truncated, starts before the boundary and is
   dropped by the next window; only a word the earlier window omitted is
   recovered.
-- A pause window confirms through the pause, so a word that starts within a
-  frame or so of the pause sample can be placed before it by the next decode
-  and dropped. Speech cannot start that close to the pause in practice: the
-  pause is reported 0.75 s after speech ends, and the gate releases up to 1 s
-  of held audio ahead of resumed speech. The pause test feeds 0.4 s of silence
-  after each pause mark for this reason.
+- A decode can stamp a word's start a frame or more before its true position.
+  Live (2026-10-25T20:40Z), speech resumed 50 ms after a pause mark and the
+  first word was stamped before the boundary and dropped as context. A window
+  or commit decode whose cut starts at a pause (or the session's start)
+  therefore keeps words starting up to 0.25 s before the boundary
+  (`WindowTracker.pauseStartToleranceSamples`). That is safe because the
+  0.75 s of audio before a pause scored as silence, so no word of the previous
+  window can start inside it. A forced boundary is the end of the previous
+  window's last kept word, inside speech, so its tolerance is 0.
 - The decode task is single, so a confirm delays the next draft refresh by one
   decode, about 150 ms.
 - A pause pending when the input ends is not run as a window; the commit

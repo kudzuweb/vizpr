@@ -282,12 +282,9 @@ struct FluidAudioASRTests {
     private func utterances(repeats: Int, pauseMarks: Bool) throws -> [AudioInput] {
         let speech = try fixtureSamples()
         let silence = [Float](repeating: 0, count: Self.sampleRate * 3 / 4)
-        // After a pause the gate releases up to 1 s of held audio ahead of the
-        // resumed speech, so the engine always hears some silence before it.
-        let lead = [Float](repeating: 0, count: pauseMarks ? Self.sampleRate * 2 / 5 : 0)
         var inputs: [AudioInput] = []
         for _ in 0..<repeats {
-            let audio = lead + speech + silence
+            let audio = speech + silence
             for start in stride(from: 0, to: audio.count, by: 3200) {
                 inputs.append(.samples(Array(audio[start ..< min(start + 3200, audio.count)])))
             }

@@ -50,11 +50,16 @@ enum TimedCut {
         return words
     }
 
-    /// Keeps the words whose first token starts in `[cutStart, cutEnd)`.
-    /// Positions are absolute sample indices; `decodeStart` is the absolute
-    /// sample the decode's audio began at.
-    static func cut(result: ASRResult, decodeStart: Int, cutStart: Int, cutEnd: Int) -> Cut {
-        let lower = Double(cutStart - decodeStart) / Double(sampleRate)
+    /// Keeps the words whose first token starts in
+    /// `[cutStart - startTolerance, cutEnd)`. Positions are absolute sample
+    /// indices; `decodeStart` is the absolute sample the decode's audio began
+    /// at. The tolerance covers the decoder stamping a word's start a frame or
+    /// more before its true position, which would otherwise drop a word that
+    /// begins right at the boundary.
+    static func cut(
+        result: ASRResult, decodeStart: Int, cutStart: Int, cutEnd: Int, startTolerance: Int = 0
+    ) -> Cut {
+        let lower = Double(cutStart - startTolerance - decodeStart) / Double(sampleRate)
         let upper = Double(cutEnd - decodeStart) / Double(sampleRate)
         let kept = words(in: result.tokenTimings ?? []).filter { $0.start >= lower && $0.start < upper }
         let tokens = kept.flatMap(\.tokens)

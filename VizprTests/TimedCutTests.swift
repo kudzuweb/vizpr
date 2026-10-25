@@ -43,6 +43,19 @@ struct TimedCutTests {
         #expect(after.text == "fox.")
     }
 
+    @Test("A start tolerance keeps a word stamped just before the boundary; none drops it")
+    func startTolerance() {
+        // "quick" is stamped at 0.5 s; the boundary is one frame (0.08 s) later.
+        let boundary = Int(0.58 * Double(rate))
+        let strict = TimedCut.cut(result: result(sentence), decodeStart: 0, cutStart: boundary, cutEnd: 10 * rate)
+        #expect(strict.text == "brown fox.")
+        let tolerant = TimedCut.cut(
+            result: result(sentence), decodeStart: 0, cutStart: boundary, cutEnd: 10 * rate,
+            startTolerance: 4_000
+        )
+        #expect(tolerant.text == "quick brown fox.")
+    }
+
     @Test("A cut over the whole decode rebuilds the result's text")
     func fullRangeEqualsResultText() {
         let decoded = result(sentence)

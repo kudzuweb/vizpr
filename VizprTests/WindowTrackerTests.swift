@@ -108,7 +108,9 @@ struct WindowTrackerTests {
     func commitPlanCarriesContext() {
         var t = tracker(commitCap: 50_000)
         t.append(sampleCount: 9000)
-        #expect(t.commitPlan() == WindowTracker.WindowPlan(range: 0 ..< 9000, cutStart: 0, cutEnd: 9000, kind: .commit))
+        #expect(t.commitPlan() == WindowTracker.WindowPlan(
+            range: 0 ..< 9000, cutStart: 0, cutEnd: 9000, kind: .commit, cutStartIsPause: true
+        ))
         t.confirm(through: 6000)
         // leftContext is 2000 in this fixture.
         #expect(t.commitPlan() == WindowTracker.WindowPlan(range: 4000 ..< 9000, cutStart: 6000, cutEnd: 9000, kind: .commit))
@@ -198,7 +200,7 @@ struct WindowTrackerTests {
         var t = defaultTracker()
         t.append(sampleCount: 192_000)
         #expect(t.takeConfirmPlan() == WindowTracker.WindowPlan(
-            range: 0 ..< 192_000, cutStart: 0, cutEnd: 160_000, kind: .forced
+            range: 0 ..< 192_000, cutStart: 0, cutEnd: 160_000, kind: .forced, cutStartIsPause: true
         ))
         // Without a confirm the plan would repeat on every wake.
         #expect(t.takeConfirmPlan()?.kind == .forced)
@@ -249,6 +251,31 @@ struct WindowTrackerTests {
         let plan = t.takeConfirmPlan()
         #expect(plan?.range == 268_000 ..< 492_000)
         #expect((plan?.range.count ?? .max) <= ASRConstants.maxModelSamples)
+    }
+
+    @Test("A window starting at the session start or after a pause window tolerates early words; after a forced window it does not")
+    func startToleranceFollowsBoundaryKind() {
+        var t = defaultTracker()
+        t.append(sampleCount: 100_000)
+        t.notePause()
+        let first = t.takeConfirmPlan()
+        #expect(first?.cutStartIsPause == true)
+        #expect(first?.startTolerance == 4_000)
+        t.confirm(through: 100_000, atPause: true)
+
+        t.append(sampleCount: 192_000)
+        let forced = t.takeConfirmPlan()
+        #expect(forced?.kind == .forced)
+        #expect(forced?.cutStartIsPause == true)
+        t.confirm(through: 258_000)   // a forced window's boundary is inside speech
+        #expect(t.boundaryIsPause == false)
+
+        t.append(sampleCount: 20_000)
+        t.notePause()
+        let afterForced = t.takeConfirmPlan()
+        #expect(afterForced?.cutStartIsPause == false)
+        #expect(afterForced?.startTolerance == 0)
+        #expect(t.commitPlan()?.startTolerance == 0)
     }
 
     @Test("confirm(through:) moves the boundary to a kept word's end and the draft tail follows")
