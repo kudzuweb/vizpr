@@ -172,17 +172,24 @@ actor FluidAudioASR: TranscriptionEngine {
 
     /// Emit a window's cut as a final and move the confirmed boundary. Runs as
     /// one actor call so the final and the new boundary are never seen apart.
-    /// A forced window is cut at the widest gap between words near its end.
-    /// The boundary moves to the end of the last word the window kept, so a
-    /// word it left out at its edge is decoded whole by the next window; with
-    /// no word kept it moves to the window's end, or a forced window would
-    /// plan again on every wake. A failed pause window confirms nothing: its
-    /// audio stays in the tail for the next window or the commit decode.
+    /// A forced window is cut at the widest gap between words near its end,
+    /// and its boundary moves to the end of the last word it kept, so a word it
+    /// left out at its edge is decoded whole by the next window. A pause
+    /// window confirms through the pause: the silence between its last word
+    /// and the pause was heard and yielded nothing, and leaving it unconfirmed
+    /// would make the commit decode run over context plus silence. A window
+    /// that kept no word confirms through its end, or a forced window would
+    /// plan again on every wake. A failed decode confirms nothing and emits
+    /// nothing: the audio stays in the tail, and the caller retries the window
+    /// on the next wake (a pause is consumed, so its audio goes to the next
+    /// window or the commit decode instead).
+    /// - Returns: whether the boundary moved.
+    @discardableResult
     private func finishWindow(
         _ plan: WindowTracker.WindowPlan, result: ASRResult?, decodeMs: Int?, session: Int,
         to continuation: AsyncStream<TokenEvent>.Continuation
-    ) {
-        guard session == sessionCounter else { return }
+    ) -> Bool {
+        guard session == sessionCounter else { return false }
         let decodeStart = plan.range.lowerBound
         var cutEnd = plan.cutEnd
         if plan.kind == .forced, let result {
@@ -192,8 +199,9 @@ actor FluidAudioASR: TranscriptionEngine {
             cutEnd = min(max(point, plan.cutStart), plan.range.upperBound)
         }
 
-        var confirmedThrough: Int? = cutEnd
+        var confirmedThrough: Int?
         if let result {
+            confirmedThrough = cutEnd
             let cut = TimedCut.cut(
                 result: result, decodeStart: decodeStart, cutStart: plan.cutStart, cutEnd: cutEnd
             )
@@ -201,10 +209,10 @@ actor FluidAudioASR: TranscriptionEngine {
                 continuation.yield(.finalized(
                     text: cut.text, confidence: cut.confidence, tokenConfidences: cut.tokenConfidences
                 ))
-                confirmedThrough = min(decodeStart + keptEnd, cutEnd)
+                if plan.kind == .forced {
+                    confirmedThrough = min(decodeStart + keptEnd, cutEnd)
+                }
             }
-        } else if plan.kind == .pause {
-            confirmedThrough = nil
         }
 
         #if DICT_DEV_LOG
@@ -214,11 +222,12 @@ actor FluidAudioASR: TranscriptionEngine {
         VizprTranscriptLogger.note("window: \(kind), \(decoded), cut \(cutSamples) samples")
         #endif
 
-        guard let confirmedThrough else { return }
+        guard let confirmedThrough else { return false }
         windowsProcessed += 1
         lastDraftText = ""
         tracker.confirm(through: confirmedThrough)
         trimBuffer()
+        return true
     }
 
     /// The decode plan for the commit-time tail, or nil when nothing is
@@ -375,7 +384,7 @@ actor FluidAudioASR: TranscriptionEngine {
     ) -> Task<Void, Never> {
         Task {
             for await _ in wakeups {
-                while let work = await self.takeWork(session: session) {
+                drain: while let work = await self.takeWork(session: session) {
                     switch work {
                     case let .window(plan, samples):
                         #if DICT_DEV_LOG
@@ -387,9 +396,10 @@ actor FluidAudioASR: TranscriptionEngine {
                         #else
                         let decodeMs: Int? = nil
                         #endif
-                        await self.finishWindow(
+                        let confirmed = await self.finishWindow(
                             plan, result: result, decodeMs: decodeMs, session: session, to: continuation
                         )
+                        if !confirmed { break drain }
                     case let .draft(samples, windowID):
                         if let result = await self.decode(samples) {
                             await self.emitTailDraft(
@@ -397,7 +407,7 @@ actor FluidAudioASR: TranscriptionEngine {
                             )
                         }
                     }
-                    if case .draft = work { break }
+                    if case .draft = work { break drain }
                 }
             }
         }

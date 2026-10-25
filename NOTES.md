@@ -945,12 +945,18 @@ stand. The decisions, by step:
   joining the kept tokens. A forced window is cut at the midpoint of the widest
   gap between words that lies inside 9 to 11 s after the boundary; with no such
   gap it cuts at the first word starting at or after 10 s, else at 10 s.
-- **The boundary moves to where the last kept word ends.** A word the window
-  omitted at its edge is decoded whole by the next window, and a word it kept
-  starts before the boundary, so the next window drops it. With no word kept
-  the boundary moves to the window's end, or a forced window would plan again
-  on every wake. A pause window whose decode fails confirms nothing; its audio
-  stays in the tail for the next window or the commit decode.
+- **Where the boundary moves.** A forced window confirms through the end of
+  its last kept word: a word it omitted at its edge is decoded whole by the
+  next window, and a word it kept starts before the boundary, so the next
+  window drops it. A pause window confirms through the pause, because the
+  silence between its last word and the pause was heard and yielded nothing;
+  leaving it unconfirmed would make every dictation that ends after a pause
+  run a commit decode over context plus silence. A window that kept no word
+  (an empty cut) confirms through its end, or a forced window would plan again
+  on every wake. A failed decode confirms nothing and emits nothing: a forced
+  window is retried on the next wake, and a pause window, whose pause is
+  consumed, leaves its audio in the tail for the next window or the commit
+  decode.
 - **A pause pending when the input ends is not run.** The commit decode covers
   everything past the boundary, so planning stops when the input ends and one
   decode replaces a window plus the commit decode behind it.
@@ -977,8 +983,9 @@ stand. The decisions, by step:
   (`applyCleanup` settles the prefix of what it wrote), the cleanup failed
   (including an echo-only rewrite), the gate skipped cleanup, or cleanup is
   off (the last two through `resolveLive(generation:)`). A skip while another
-  cleanup is in flight settles nothing, so an earlier low-confidence span
-  keeps its cleanup; a result for an older generation settles nothing;
+  cleanup is in flight settles nothing at that moment, so an earlier
+  low-confidence span keeps its cleanup, and the refusal is retried when the
+  running cleanups finish if the generation is still current; a result for an older generation settles nothing;
   commit is unchanged (strict cancel, the display is committed as shown).
   The two-sentence rule stays as `settledSentenceBacklog`, so text still
   settles when cleanups keep going stale under fast speech.
@@ -1014,12 +1021,21 @@ Known limits:
   10 s. Two decodes can place the same word's start a frame or more apart
   (FluidAudio's emission-delay correction is a median shift, not a per-token
   alignment). Confirming through the end of the last kept word makes the next
-  window the one that decides any word the previous one omitted, so a word is
-  kept once or, at worst, truncated in one window and recovered in the next.
+  window the one that decides any word the previous one omitted. A word the
+  earlier window kept, even truncated, starts before the boundary and is
+  dropped by the next window; only a word the earlier window omitted is
+  recovered.
+- A pause window confirms through the pause, so a word that starts within a
+  frame or so of the pause sample can be placed before it by the next decode
+  and dropped. Speech cannot start that close to the pause in practice: the
+  pause is reported 0.75 s after speech ends, and the gate releases up to 1 s
+  of held audio ahead of resumed speech. The pause test feeds 0.4 s of silence
+  after each pause mark for this reason.
 - The decode task is single, so a confirm delays the next draft refresh by one
   decode, about 150 ms.
-- A pause pending when the input ends, and one that follows a forced window,
-  are not run as windows; the next window or the commit decode covers them.
+- A pause pending when the input ends is not run as a window; the commit
+  decode covers it. A pause less than 0.5 s past a forced window's cut is
+  cleared with it; a pause further past survives and closes the next window.
 
 ## Environment prerequisites discovered
 
