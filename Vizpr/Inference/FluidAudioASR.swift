@@ -350,8 +350,9 @@ actor FluidAudioASR: TranscriptionEngine {
                         let elapsed = ContinuousClock.now - started
                         let elapsedMs = Int(elapsed.components.seconds) * 1000
                             + Int(elapsed.components.attoseconds / 1_000_000_000_000_000)
+                        let outcome = result?.text.isEmpty == false ? "decoded" : "empty"
                         VizprTranscriptLogger.note(
-                            "commit tail: decoded \(elapsedMs) ms over \(plan.samples.count) samples"
+                            "commit tail: \(outcome) \(elapsedMs) ms over \(plan.samples.count) samples"
                         )
                         #endif
                         if let result, !result.text.isEmpty {

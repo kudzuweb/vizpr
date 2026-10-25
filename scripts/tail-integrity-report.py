@@ -6,7 +6,7 @@ Usage: python3 -I scripts/tail-integrity-report.py ~/Documents/dictation-dev/deb
 
 A log record is a timestamped line plus the untimestamped lines that follow it,
 because COMMIT and display text span lines. A session runs from
-`hotkey action: startDictation` to its COMMIT record; sessions that `cancel`,
+`hotkey action: startDictation` to the next one; sessions that `cancel`,
 that are restarted before committing, or that commit a redacted secure-input
 field are skipped. Words are compared lowercased with punctuation stripped,
 because cleanup rewrites both sides.
@@ -19,7 +19,12 @@ Four counts per committed session:
                   from the commit text.
   short, late final
                   among sessions under 10 s (`audio stream ended after N
-                  chunks`, 256 ms each), an `asr final` followed the commit.
+                  chunks`, 256 ms each), an `asr final` was logged after the
+                  COMMIT record, so its text missed the injected snapshot.
+
+The late draft count can include a harmless draft that finished after `audio
+stream ended` but before the engine closed drafts, since that one lands before
+the settle and is part of the snapshot.
 
 Matching is rough: a re-decode that changes a word counts as a loss and an
 invention, so the counts are upper bounds.
@@ -59,28 +64,32 @@ def words(text):
 
 
 def split_sessions(records):
-    """Yield the records of each session that reached a COMMIT with text."""
-    session = None
+    """Yield the records of each session that reached a COMMIT with text. A
+    session runs until the next startDictation, so records that arrive after
+    its COMMIT record belong to it."""
+    session, committed = None, False
     for stamp, text in records:
         if text.startswith("hotkey action: startDictation"):
-            session = []
+            if session and committed:
+                yield session
+            session, committed = [], False
         elif session is None:
             continue
-        elif text.startswith("hotkey action: cancel"):
+        elif text.startswith("hotkey action: cancel") and not committed:
             session = None
-            continue
-        if session is None:
             continue
         session.append((stamp, text))
         if text.startswith("COMMIT "):
-            if "skippedSecureInput" not in text.split("\n")[0][:60]:
-                yield session
-            session = None
+            committed = "skippedSecureInput" not in text.split("\n")[0][:60]
+            if not committed:
+                session = None
+    if session and committed:
+        yield session
 
 
 def analyse(session):
     stamp = session[0][0]
-    commit_action = ended = None
+    commit_action = ended = commit_index = None
     chunks = None
     pre_commit_drafts, finals_after_commit, drafts_after_ended = [], 0, 0
     commit_text = ""
@@ -95,11 +104,14 @@ def analyse(session):
             body = text.split(": ", 1)[1] if ": " in text else ""
             if commit_action is None:
                 pre_commit_drafts.append(body)
-            if ended is not None:
+            if ended is not None and commit_index is None:
                 drafts_after_ended += 1
-        elif text.startswith("asr final") and commit_action is not None:
-            finals_after_commit += 1
-        elif text.startswith("COMMIT "):
+        elif text.startswith("asr final") and commit_index is not None:
+            # The test suite's fake engine writes this line into the live log.
+            if not text.endswith("flush final."):
+                finals_after_commit += 1
+        elif text.startswith("COMMIT ") and commit_index is None:
+            commit_index = index
             commit_text = COMMIT_TEXT.split(text, maxsplit=1)[-1] if COMMIT_TEXT.search(text) else ""
     if commit_action is None or not commit_text.strip():
         return None
@@ -133,7 +145,8 @@ def main():
         ("late draft (draft after audio stream ended)", "late_draft", sessions),
         ("invented tail (commit ends in words no draft showed)", "invented", sessions),
         ("lost tail (last draft ends in words the commit lacks)", "lost", sessions),
-        ("short session with an asr final after commit", "late_final", short),
+        ("short session with a final that arrived after the injected snapshot",
+         "late_final", short),
     ]
     print(f"committed sessions: {total} (under {SHORT_SESSION_SECONDS} s: {len(short)})")
     for label, key, pool in counts:

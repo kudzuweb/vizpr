@@ -671,7 +671,9 @@ Decisions:
   clears its session task at once, so a new `transcribe` can begin while the
   previous one still finishes. `beginSession()` returns a session number and
   every actor call the finishing task makes carries it and does nothing once
-  it has moved on.
+  it has moved on. The guard is at the engine level only: a window the old
+  session delivers late still reaches its own stream and `TokenStream`, which
+  is the pipeline-level follow-up.
 - **The ASR no longer hears long silence.** `SpeechGate` sits between the VAD
   and the engine in `AudioPipeline`. While the VAD reports speech it forwards
   audio; otherwise it holds the latest 1 s (pre-roll, because a soft onset
@@ -702,10 +704,13 @@ Decisions:
   | 12 s | 142.9 ms | 150.0 ms |
   | 15 s | 174.1 ms | 180.6 ms |
 
-  Saved settings replace defaults on load, so an existing `settings.json`
-  keeps its stored `settleCapMs` until it is changed in the Settings window.
+  Saved settings replace defaults on load: Mauria's persisted `settleCapMs`
+  of 350 overrides the new 500 default. The worst case, a running draft decode
+  plus the commit decode, is about 360 ms at p90, so she should set the Commit
+  settle cap slider to 500 in Settings.
   Each commit writes `settle: drained|capped after N ms` and
-  `commit tail: decoded N ms over M samples` to the dev log, which show how
+  `commit tail: decoded N ms over M samples` (or `commit tail: empty N ms over
+  M samples` when the decode returned no text) to the dev log, which show how
   often the cap fires.
 
 Measuring it: `python3 -I scripts/tail-integrity-report.py
@@ -713,11 +718,15 @@ Measuring it: `python3 -I scripts/tail-integrity-report.py
 committed sessions, how many had a draft after `audio stream ended`, how many
 committed text ending in two words no pre-commit draft showed, how many lost
 the last draft's final two words at commit, and, among sessions under 10 s,
-how many had an `asr final` after the commit action. The matching is rough (a
+how many had an `asr final` logged after the COMMIT record (its text missed
+the injected snapshot). A late draft can be harmless when it finished after
+`audio stream ended` but before the engine closed drafts, since it lands
+before the settle. The matching is rough (a
 re-decode that changes a word counts as both a loss and an invention), so the
 counts are upper bounds. Baseline on the 2026-10-25 log, before this change:
-37 of 106 committed sessions had a late draft, 3 had an invented tail, 3 had
-a lost tail, and 2 of 45 short sessions had a late final. The same command
+37 of 107 committed sessions had a late draft, 4 had an invented tail, 4 had
+a lost tail, and 0 of 60 short sessions had a final after the injected
+snapshot. The same command
 after a week of use gives the comparison.
 
 Known limits:
