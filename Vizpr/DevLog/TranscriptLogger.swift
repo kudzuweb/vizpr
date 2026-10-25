@@ -24,19 +24,16 @@ enum VizprTranscriptLogger {
     /// Debug breadcrumbs also land here: unified logging drops debug-level
     /// lines under load, and a flat file is diagnosable after the fact.
     private static let debugFileURL: URL = {
-        let dir = ("~/Documents/dictation-dev" as NSString).expandingTildeInPath
         try? FileManager.default.createDirectory(
-            atPath: dir, withIntermediateDirectories: true
+            at: VizprDevLogDirectory.url, withIntermediateDirectories: true
         )
-        return URL(fileURLWithPath: dir + "/debug.log")
+        return VizprDevLogDirectory.debugLogURL
     }()
 
     /// Report where the dev transcript log is written (the structured JSONL
     /// records land there via VizprDevLogWriter).
     static func announce() {
-        let path = ("~/Documents/dictation-dev/transcripts.jsonl" as NSString)
-            .expandingTildeInPath
-        note("dev transcript log target: \(path)")
+        note("dev transcript log target: \(VizprDevLogDirectory.transcriptsURL.path)")
     }
 
     /// Emit a one-off developer breadcrumb — the human-readable running

@@ -540,6 +540,14 @@ belong with the Settings work rather than the hotkey PR:
   commit; TokenStream's generation checks must drop these (they arrive after
   the snapshot).
 
+## Test runs no longer write the dev log (2026-10-25)
+
+The test host is the Debug app, so suites with fake engines (AudioPipelineTests,
+FluidAudioASRTests) appended their traffic to `~/Documents/dictation-dev/debug.log`
+and `transcripts.jsonl`. Under tests, `VizprDevLogDirectory` now points both
+writers at `vizpr-tests-<pid>` in the temporary directory, and the existing
+"dev transcript log target:" line says where. Production paths are unchanged.
+
 ## Environment prerequisites discovered
 
 - **Metal Toolchain** is required to build the mlx-swift dependency (it compiles
