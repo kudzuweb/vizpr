@@ -1078,6 +1078,17 @@ monitor and the pipeline from the loaded store. `WindowTracker`'s
 ranges are `VizprSettings.holdThresholdRangeMs` and `autoStopRangeSeconds`,
 used by `clamped()` and by the sliders.
 
+## Plain display names for settings (2026-10-25)
+
+Every remaining control in the Behavior and Models panes now says what it does
+in a full phrase, for example "Hold the hotkey this long for push-to-talk" with
+the caption "A shorter tap keeps listening until you press again." The hold
+threshold's wording says "the hotkey" because it governs the secondary chord
+as well as Fn, and "press again" because any next press of either key commits.
+The auto-stop wording says "hands-free mode" because auto-stop is ignored while
+a key is held. The names are proposals to rename later; the keys and the saved
+file are unchanged.
+
 ## Environment prerequisites discovered
 
 - **Metal Toolchain** is required to build the mlx-swift dependency (it compiles

@@ -107,13 +107,13 @@ struct BehaviorPane: View {
             Section("Hotkeys") {
                 Toggle("Enable dictation hotkey", isOn: bind(store, \.hotkeyEnabled))
                 LabeledContent("Start / stop") {
-                    Text("Fn  (hold = push-to-talk, tap = latch)")
+                    Text("Fn starts dictation: hold to talk, or tap to keep listening until you press again.")
                         .foregroundStyle(.secondary)
                 }
                 LabeledContent("Cancel") {
                     Text("⎋ Esc").foregroundStyle(.secondary)
                 }
-                LabeledContent("Secondary chord") {
+                LabeledContent("Also start dictation with this chord") {
                     HStack(spacing: 10) {
                         modifierToggle("⌃", "control")
                         modifierToggle("⌥", "option")
@@ -125,25 +125,28 @@ struct BehaviorPane: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Dictation") {
-                sliderRow("Auto-stop after silence", bind(store, \.autoStopSeconds),
+                sliderRow("In hands-free mode, finish and paste after this much silence",
+                          bind(store, \.autoStopSeconds),
                           range: VizprSettings.autoStopRangeSeconds, unit: "s")
-                sliderRow("Hold threshold (tap vs hold)", bind(store, \.holdThresholdMs),
-                          range: VizprSettings.holdThresholdRangeMs, unit: "ms")
+                sliderRow("Hold the hotkey this long for push-to-talk",
+                          bind(store, \.holdThresholdMs),
+                          range: VizprSettings.holdThresholdRangeMs, unit: "ms",
+                          caption: "A shorter tap keeps listening until you press again.")
             }
             Section("Cleanup") {
-                Toggle("Clean up transcripts (local LLM)", isOn: bind(store, \.cleanupEnabled))
-                Toggle("Always use code mode", isOn: bind(store, \.codeModeOverride))
+                Toggle("Clean up transcripts with the on-device model", isOn: bind(store, \.cleanupEnabled))
+                Toggle("Always clean up as code, as in editors and terminals", isOn: bind(store, \.codeModeOverride))
             }
             Section("Output") {
                 Toggle("Restore clipboard after paste", isOn: bind(store, \.restoreClipboard))
-                Toggle("Inviz mode (indicator only, no live preview)",
+                Toggle("Inviz mode: show only the indicator, never the live text",
                        isOn: bind(store, \.invizMode))
-                Picker("Show target app", selection: bind(store, \.targetAppDisplay)) {
+                Picker("Show the app the text will go to", selection: bind(store, \.targetAppDisplay)) {
                     Text("Off").tag(TargetAppDisplay.off)
                     Text("Icon").tag(TargetAppDisplay.icon)
                     Text("Icon and name").tag(TargetAppDisplay.iconAndName)
                 }
-                Toggle("Fall back to built-in mic if input is silent",
+                Toggle("Switch to the built-in microphone when the current input is silent",
                        isOn: bind(store, \.silentInputFallback))
             }
         }
@@ -169,16 +172,22 @@ struct BehaviorPane: View {
     }
 
     private func sliderRow(_ title: String, _ value: Binding<Int>,
-                           range: ClosedRange<Int>, unit: String) -> some View {
-        HStack {
-            Text(title)
-            Slider(value: Binding(
-                get: { Double(value.wrappedValue) },
-                set: { value.wrappedValue = Int($0) }
-            ), in: Double(range.lowerBound)...Double(range.upperBound))
-            Text("\(value.wrappedValue)\(unit)")
-                .monospacedDigit()
-                .frame(width: 64, alignment: .trailing)
+                           range: ClosedRange<Int>, unit: String,
+                           caption: String? = nil) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack {
+                Text(title)
+                Slider(value: Binding(
+                    get: { Double(value.wrappedValue) },
+                    set: { value.wrappedValue = Int($0) }
+                ), in: Double(range.lowerBound)...Double(range.upperBound))
+                Text("\(value.wrappedValue)\(unit)")
+                    .monospacedDigit()
+                    .frame(width: 64, alignment: .trailing)
+            }
+            if let caption {
+                Text(caption).font(.caption).foregroundStyle(.secondary)
+            }
         }
     }
 }
@@ -537,10 +546,10 @@ struct ModelsPane: View {
 
     var body: some View {
         Form {
-            Section("Speech recognition") {
+            Section("Speech recognition model") {
                 modelList(kind: .asr, selection: \.asrModelID)
             }
-            Section("Cleanup") {
+            Section("Cleanup model") {
                 modelList(kind: .cleanup, selection: \.cleanupModelID)
             }
             Section {
