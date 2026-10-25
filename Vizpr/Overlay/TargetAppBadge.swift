@@ -9,7 +9,7 @@ import SwiftUI
 /// sits outside the left edge.
 enum TargetAppMetrics {
     /// Icon on the resting pill's and the expanded pane's corner.
-    static let paneIconSize: CGFloat = 28
+    static let paneIconSize: CGFloat = 24
     /// Icon beside the inviz pill.
     static let invizIconSize: CGFloat = 20
     /// Space between the inviz pill's left edge and the indicator beside it.
@@ -20,9 +20,10 @@ enum TargetAppMetrics {
     static let opacity = 0.85
 
     /// How far the corner icon hangs outside the pill on the left and top. Small
-    /// enough that the icon reads as tucked into the corner, large enough that it
-    /// still marks the pill's edge.
-    static let cornerOverhang: CGFloat = 4
+    /// enough that the icon reads as tucked into the corner, large enough that
+    /// the part inside the pill (`paneIconSize - cornerOverhang`) stays within
+    /// the pane's default horizontal padding and never sits over the text.
+    static let cornerOverhang: CGFloat = 6
 
     /// Distance from the pill's left and top edges to the icon's center.
     static let iconCenterInset = paneIconSize / 2 - cornerOverhang
