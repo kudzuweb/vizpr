@@ -22,6 +22,11 @@ Four counts per committed session:
                   chunks`, 256 ms each), an `asr final` was logged after the
                   COMMIT record, so its text missed the injected snapshot.
 
+From the windows-by-pause change on (NOTES), finals arrive at each pause and
+after 12 s of unbroken speech, not only at the commit, so a session of any
+length can have finals before `audio stream ended`. The 10 s cut-off below
+dates from the sliding window and is unchanged.
+
 The late draft count can include a harmless draft that finished after `audio
 stream ended` but before the engine closed drafts, since that one lands before
 the settle and is part of the snapshot.

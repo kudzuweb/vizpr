@@ -788,6 +788,42 @@ The decisions, by step:
   mark arrives is the pause. The VAD still never decides commits; a mark only
   lets the engine close a window.
 
+- **The engine owns its windows.** `SlidingWindowAsrManager` is gone; the
+  batch `AsrManager` does every decode, in one decode task per session.
+  `WindowTracker` (renamed from `DraftTailTracker`) plans three kinds of
+  decode, each over a range that starts 2 s before its window for acoustic
+  context:
+  - *pause*: the last `.pause` mark closes a window from the confirmed
+    boundary to the mark, if it follows at least 0.5 s of unconfirmed audio. A
+    shorter pause is dropped, not deferred.
+  - *forced*: 12 s of unconfirmed audio without a pause closes a window of
+    10 s, decoded to 12 s so the cut can land between words. The forced check
+    runs first, so a pause window never covers more than 12 s of unconfirmed
+    audio plus context, which keeps every decode under FluidAudio's 240,000
+    sample single-pass limit.
+  - *commit*: as on tail integrity, with the 2 s of context and the cut.
+- **Words are cut by token timing, not matched by text.** `TimedCut` groups a
+  decode's `tokenTimings` into words (a word starts at a token whose text
+  starts with a space; a punctuation piece stays with its word) and keeps the
+  words whose first token starts inside the window. The text is rebuilt by
+  joining the kept tokens. A forced window is cut at the midpoint of the widest
+  gap between words that lies inside 9 to 11 s after the boundary; with no such
+  gap it cuts at the first word starting at or after 10 s, else at 10 s.
+- **The boundary moves to where the last kept word ends.** A word the window
+  omitted at its edge is decoded whole by the next window, and a word it kept
+  starts before the boundary, so the next window drops it. With no word kept
+  the boundary moves to the window's end, or a forced window would plan again
+  on every wake. A pause window whose decode fails confirms nothing; its audio
+  stays in the tail for the next window or the commit decode.
+- **A pause pending when the input ends is not run.** The commit decode covers
+  everything past the boundary, so planning stops when the input ends and one
+  decode replaces a window plus the commit decode behind it.
+- **Draft de-duplication restarts at each window.** The engine suppressed a
+  draft equal to the previous one; that memory now clears at each confirm, so
+  a phrase repeated in the next window is not hidden.
+- **Timings.** Each window logs one line, numbers only:
+  `window: pause|forced, decoded N ms, cut M samples`.
+
 ## Environment prerequisites discovered
 
 - **Metal Toolchain** is required to build the mlx-swift dependency (it compiles

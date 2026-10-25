@@ -108,10 +108,10 @@ struct FluidAudioASRTests {
 
     @Test("A second session on the same engine still transcribes")
     func secondSessionStillTranscribes() async throws {
-        // Field regression: SlidingWindowAsrManager is single-use (finish()
-        // permanently ends its input stream; reset() does not rebuild it), so a
-        // reused manager made every session after the first a silent no-op.
-        // The engine must produce events for BOTH sequential sessions.
+        // Field regression from when the engine used FluidAudio's single-use
+        // sliding-window manager: a reused manager made every session after
+        // the first a silent no-op. The engine must produce events for BOTH
+        // sequential sessions.
         DownloadUtils.enforceOffline = true
         let speech = try fixtureSamples()
         let gap = [Float](repeating: 0, count: Self.sampleRate / 2)
@@ -143,9 +143,7 @@ struct FluidAudioASRTests {
     func sessionBeforePrepareStillTranscribes() async throws {
         // Dictation is not gated on the launch warm: transcribe() awaits the
         // single-flight prepare internally, so a session started on a cold
-        // engine blocks for the model load instead of finishing empty (the
-        // prior behavior: makeSessionManager returned nil and the stream
-        // silently ended).
+        // engine blocks for the model load instead of finishing empty.
         DownloadUtils.enforceOffline = true
         let speech = try fixtureSamples()
         let gap = [Float](repeating: 0, count: Self.sampleRate / 2)
@@ -276,6 +274,80 @@ struct FluidAudioASRTests {
         secondFeeder.finish()
         let secondFinals = await secondConsumer.value
         #expect(secondFinals == 1, "the second session should still commit normally")
+    }
+
+    /// The fixture's utterance, `repeats` times, each followed by 0.75 s of
+    /// silence (what the VAD waits for before reporting a pause) and, when
+    /// `pauseMarks` is set, a pause mark, in 0.2 s batches.
+    private func utterances(repeats: Int, pauseMarks: Bool) throws -> [AudioInput] {
+        let speech = try fixtureSamples()
+        let silence = [Float](repeating: 0, count: Self.sampleRate * 3 / 4)
+        var inputs: [AudioInput] = []
+        for _ in 0..<repeats {
+            let audio = speech + silence
+            for start in stride(from: 0, to: audio.count, by: 3200) {
+                inputs.append(.samples(Array(audio[start ..< min(start + 3200, audio.count)])))
+            }
+            if pauseMarks { inputs.append(.pause) }
+        }
+        return inputs
+    }
+
+    /// Runs a session over `inputs` at about five times real time, waits for
+    /// the decodes in flight, ends the input, and returns the session's events.
+    private func run(_ engine: FluidAudioASR, feeding inputs: [AudioInput]) async throws -> EventLog {
+        let (audio, feeder) = AsyncStream.makeStream(of: AudioInput.self)
+        let log = EventLog()
+        let consumer = Task {
+            for await event in engine.transcribe(audio) { log.record(event) }
+        }
+        for input in inputs {
+            feeder.yield(input)
+            try await Task.sleep(for: .milliseconds(40))
+        }
+        try await Task.sleep(for: .milliseconds(1500))
+        log.markInputEnded()
+        feeder.finish()
+        await consumer.value
+        return log
+    }
+
+    private func finalTexts(_ events: [TokenEvent]) -> [String] {
+        events.compactMap { if case let .finalized(text, _, _) = $0 { text } else { nil } }
+    }
+
+    /// How many times the fixture's lead word appears: one per utterance, so a
+    /// count above the number of utterances means a window repeated words.
+    private func leadWordCount(in texts: [String]) -> Int {
+        texts.joined(separator: " ").lowercased().components(separatedBy: "testing").count - 1
+    }
+
+    @Test("Each pause closes one window, and no utterance's words reach two finals")
+    func pausesCloseWindows() async throws {
+        DownloadUtils.enforceOffline = true
+        let engine = FluidAudioASR()
+        try await engine.prepare()
+        let log = try await run(engine, feeding: utterances(repeats: 3, pauseMarks: true))
+
+        let beforeEnd = finalTexts(log.all.filter { !$0.afterInputEnded }.map(\.event))
+        let afterEnd = finalTexts(log.afterInputEnded)
+        #expect(beforeEnd.count == 3, "expected one final per pause before the input ended: \(beforeEnd)")
+        #expect(leadWordCount(in: beforeEnd + afterEnd) == 3, "a window repeated words: \(beforeEnd + afterEnd)")
+    }
+
+    @Test("Twelve seconds of speech without a pause yields a forced window before the input ends")
+    func forcedWindowWithoutPause() async throws {
+        DownloadUtils.enforceOffline = true
+        let engine = FluidAudioASR()
+        try await engine.prepare()
+        // 5 x (1.8 s speech + 0.75 s silence) = 12.9 s with no pause mark.
+        let log = try await run(engine, feeding: utterances(repeats: 5, pauseMarks: false))
+
+        let beforeEnd = finalTexts(log.all.filter { !$0.afterInputEnded }.map(\.event))
+        let afterEnd = finalTexts(log.afterInputEnded)
+        #expect(beforeEnd.count == 1, "expected the forced window's final before the input ended: \(beforeEnd)")
+        #expect(afterEnd.count == 1, "expected the commit decode to cover the rest: \(afterEnd)")
+        #expect(leadWordCount(in: beforeEnd + afterEnd) == 5, "the forced cut repeated or lost words: \(beforeEnd + afterEnd)")
     }
 
     private func assertGoldenExpectations(finals: [Final], drafts: [(windowID: Int, text: String)]) {
