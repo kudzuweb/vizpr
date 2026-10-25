@@ -639,7 +639,7 @@ who starts speaking immediately; she waited ~0.4 s):
 | action → capture start begins | ~245 ms | FIX: synchronous AX field read + session begins run BEFORE the pipeline starts; reorder so capture starts first, AX/overlay follow concurrently |
 | capture setup (engine build, route query) | ~218 ms | PARTIAL: AVCaptureDevice.default device-name lookup is dev-log-only decoration on the hot path — move off. Engine build cost is real |
 | engine.start() (HAL spin-up) | ~74 ms | leave (keeping the mic hot is a privacy non-starter) |
-| speech → first draft | draftMinTailMs floor (1.5 s default) | leave — user lever, quality-bound (sub-1.5 s tails decode junk, field-observed) |
+| speech → first draft | draftMinTailMs floor (1.5 s default) | leave — user lever, quality-bound (sub-1.5 s tails decode junk, field-observed); since 2026-10-25 a constant in `Tuning.swift`, see "Tuning values and single defaults" |
 | draft refresh cadence | fixed 1 s + decode inline in the audio pump | DONE in PR 13: the cadence is adaptive with a 500 ms floor (a decode starts when the previous finishes and 500 ms of new audio has arrived), and decoding is decoupled from ingestion. Same decoder, same tail = accuracy unchanged |
 | commit → inject | ~170 ms observed (settle window worked) | already good |
 | engine swap (Models pane) | pipeline rebuild + warm | rare; acceptable |
@@ -852,6 +852,8 @@ Decisions:
   of 350 overrides the new 500 default. The worst case, a running draft decode
   plus the commit decode, is about 360 ms at p90, so she should set the Commit
   settle cap slider to 500 in Settings.
+  *(2026-10-25, later: the setting and its slider are gone; the cap is
+  `Tuning.settleCapMs`. See "Tuning values and single defaults".)*
   Each commit writes `settle: drained|capped after N ms` and
   `commit tail: decoded N ms over M samples` (or `commit tail: empty N ms over
   M samples` when the decode returned no text) to the dev log, which show how
@@ -999,7 +1001,8 @@ stand. The decisions, by step:
   lets it stop counting itself as in flight.
 - **The "Settle window" setting is gone.** `settleSentences` leaves
   `VizprSettings` and the Behavior tab; an old `settings.json` that has the
-  key still loads, because decoding ignores unknown keys. Cleanup latency on the
+  key still loads, because decoding ignores unknown keys (since 2026-10-25 the
+  next load also drops it from the file). Cleanup latency on the
   bundled model with an empty context (10 runs after a warm run, 2026-10-25):
   one 13-word sentence p50 680 ms, p90 689 ms; two sentences (27 words) p50
   1,024 ms, p90 1,032 ms; three sentences (41 words) p50 1,348 ms, p90
@@ -1052,6 +1055,28 @@ opened, seeked and wrote the file unserialized: two callers at the same instant
 sought to the same end offset and one line overwrote the other (a `window:` line
 and an `asr final` line never both landed). A lock now wraps the open-write-close;
 the call stays synchronous so a caller's next line follows its own previous one.
+
+## Tuning values and single defaults (2026-10-25)
+
+The two development levers, the commit settle cap and the draft minimum tail,
+are no longer settings. They are `Tuning.settleCapMs` (500) and
+`Tuning.draftMinTailMs` (1500) in `Vizpr/App/Tuning.swift`, each with the rule
+it comes from. Change one there and every consumer follows: `AppDelegate`
+reads the cap at each commit, and `FluidAudioASR` derives its first-draft
+sample count from the draft minimum. Their two Behavior sliders are gone. An
+old `settings.json` that still carries `settleCapMs`, `draftMinTailMs` or
+`settleSentences` loads normally and sheds those keys on that load
+(`VizprSettings.removedKeys`).
+
+The rule from here on: a tuning value lives in `Tuning.swift`, a user choice
+lives in `VizprSettings`, and every default is written once. The hold
+threshold, the secondary chord and the auto-stop timeout have their default
+only in the `VizprSettings` field; `HotkeyStateMachine`, `HotkeyMonitor` and
+`AudioPipeline` take them as required arguments, and `AppDelegate` builds the
+monitor and the pipeline from the loaded store. `WindowTracker`'s
+`minTailSamples` is required too. The hold-threshold and auto-stop clamp
+ranges are `VizprSettings.holdThresholdRangeMs` and `autoStopRangeSeconds`,
+used by `clamped()` and by the sliders.
 
 ## Environment prerequisites discovered
 

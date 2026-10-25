@@ -33,17 +33,6 @@ struct VizprSettings: Codable, Equatable, Sendable {
     // MARK: Session behavior
     /// Auto-stop after this much silence, seconds.
     var autoStopSeconds: Int = 6
-    /// Tail-settle cap at commit, milliseconds (§15 amendment). The commit waits
-    /// for one decode of the unconfirmed tail (up to 15 s of audio), and a cap
-    /// below the decode time commits the last draft and drops the decode.
-    /// Rule: 2 x p90(15 s decode) + 100 ms, rounded up to 50 ms, clamped to
-    /// 350...1000 — the factor of 2 covers a draft decode still running when
-    /// the input ends plus the commit decode queued behind it. Measured
-    /// 2026-10-25 on the bundled model: p90 of 180.6 ms over 10 runs gives 500.
-    var settleCapMs: Int = 500
-    /// Draft track minimum tail before the first decode, milliseconds —
-    /// Mauria's "first draft faster?" lever; lower = earlier + junkier.
-    var draftMinTailMs: Int = 1500
 
     // MARK: Cleanup
     var cleanupEnabled: Bool = true
@@ -94,18 +83,22 @@ struct VizprSettings: Codable, Equatable, Sendable {
 
     static let `default` = VizprSettings()
 
+    /// Valid ranges, shared by `clamped()` and the Behavior pane's sliders.
+    static let holdThresholdRangeMs = 100...1_000
+    static let autoStopRangeSeconds = 2...60
+
     /// Clamp every numeric into its safe range (decode-time guard).
     func clamped() -> VizprSettings {
         var s = self
-        s.holdThresholdMs = min(max(s.holdThresholdMs, 100), 1_000)
+        s.holdThresholdMs = min(max(s.holdThresholdMs, Self.holdThresholdRangeMs.lowerBound),
+                               Self.holdThresholdRangeMs.upperBound)
         s.secondaryModifiers = s.secondaryModifiers.filter { Self.validModifiers.contains($0) }
-        if s.secondaryModifiers.count < 2 { s.secondaryModifiers = ["control", "option"] }
+        if s.secondaryModifiers.count < 2 { s.secondaryModifiers = Self.default.secondaryModifiers }
         if s.primaryTrigger != "fn" { s.primaryTrigger = "fn" }   // only Fn yet
         if s.asrModelID?.isEmpty == true { s.asrModelID = nil }
         if s.cleanupModelID?.isEmpty == true { s.cleanupModelID = nil }
-        s.autoStopSeconds = min(max(s.autoStopSeconds, 2), 60)
-        s.settleCapMs = min(max(s.settleCapMs, 0), 1_000)
-        s.draftMinTailMs = min(max(s.draftMinTailMs, 500), 4_000)
+        s.autoStopSeconds = min(max(s.autoStopSeconds, Self.autoStopRangeSeconds.lowerBound),
+                                Self.autoStopRangeSeconds.upperBound)
         s.overlayAnchors = s.overlayAnchors.mapValues { $0.clamped() }
         // Built-ins are read-only constants, so a stored look may not shadow
         // one, and ids must be unique for selection to be unambiguous.
@@ -146,8 +139,8 @@ final class SettingsStore: ObservableObject {
         do {
             settings = try VizprSettings.load(from: data)
             // Rewrite once so migrated looks keep their ids and the legacy
-            // keys leave the file.
-            if VizprSettings.hasLegacyKeys(data) { persist() }
+            // and removed keys leave the file.
+            if VizprSettings.hasStaleKeys(data) { persist() }
         } catch {
             keepUnreadableFile(at: url)
         }
@@ -293,11 +286,15 @@ extension VizprSettings {
         return try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
     }
 
+    /// Keys that were settings once and no longer are. The decoder ignores
+    /// them; listing them here makes the next load drop them from the file.
+    private static let removedKeys = ["settleCapMs", "draftMinTailMs", "settleSentences"]
+
     /// True when `data` is a settings object still carrying pre-looks color
-    /// keys, so the store knows to save the migrated form.
-    static func hasLegacyKeys(_ data: Data) -> Bool {
+    /// keys or removed keys, so the store knows to save the current form.
+    static func hasStaleKeys(_ data: Data) -> Bool {
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
-        return LegacyAppearance.keys.contains { object[$0] != nil }
+        return (LegacyAppearance.keys + removedKeys).contains { object[$0] != nil }
     }
 
     /// The pre-looks appearance keys, as they were saved.

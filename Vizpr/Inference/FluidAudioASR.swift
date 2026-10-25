@@ -42,7 +42,7 @@ actor FluidAudioASR: TranscriptionEngine {
     /// ~443 MB and seconds of load time). Stateless per call (a fresh
     /// TdtDecoderState each decode), so a new session needs no new manager.
     private var batchManager: AsrManager?
-    private var tracker = WindowTracker()
+    private var tracker = WindowTracker(minTailSamples: FluidAudioASR.draftMinTailSamples)
     private var sessionBuffer: [Float] = []
     private var bufferStartSample = 0
     /// Windows confirmed this session, including ones that kept no word.
@@ -57,20 +57,16 @@ actor FluidAudioASR: TranscriptionEngine {
     private var decodingOpen = false
     private var sessionCounter = 0
 
-    /// Live setting (PR 11): min audio before the first draft decode —
-    /// Mauria's "first draft faster?" lever. Applies from the next session.
-    private var draftMinTailSamples = 24_000
-
-    func setDraftMinTail(milliseconds: Int) {
-        draftMinTailSamples = max(1, milliseconds) * 16   // 16 kHz
-    }
+    /// Audio needed before the first draft decode (`Tuning.draftMinTailMs`).
+    private static let draftMinTailSamples =
+        Tuning.draftMinTailMs * Int(MicrophoneCapture.sampleRate) / 1000
 
     /// Starts a session and returns its identity. Every later actor call from
     /// that session's task passes it back and is ignored once another session
     /// has begun.
     private func beginSession() -> Int {
         sessionCounter += 1
-        tracker = WindowTracker(minTailSamples: draftMinTailSamples)
+        tracker = WindowTracker(minTailSamples: Self.draftMinTailSamples)
         sessionBuffer.removeAll(keepingCapacity: true)
         bufferStartSample = 0
         windowsProcessed = 0

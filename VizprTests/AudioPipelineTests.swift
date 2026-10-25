@@ -120,6 +120,7 @@ struct AudioPipelineTests {
             source: FakeCaptureSource(stream: samples),
             detector: SpeechDetector(model: try SpeechDetector.loadBundledModel()),
             engine: FlushingEngine(),
+            autoStopTimeout: .seconds(VizprSettings.default.autoStopSeconds),
             onTokenEvent: { event in
                 switch event {
                 case let .draft(_, text): await log.add("draft:\(text)")
@@ -175,6 +176,7 @@ struct AudioPipelineTests {
             source: FakeCaptureSource(stream: samples),
             detector: SpeechDetector(model: try SpeechDetector.loadBundledModel()),
             engine: engine,
+            autoStopTimeout: .seconds(VizprSettings.default.autoStopSeconds),
             onSessionDrained: { epoch in await drained.add("drained:\(epoch)") },
             onAutoStop: {}
         )
@@ -208,6 +210,7 @@ struct AudioPipelineTests {
         let pipeline = AudioPipeline(
             source: FailingCaptureSource(),
             detector: SpeechDetector(model: try SpeechDetector.loadBundledModel()),
+            autoStopTimeout: .seconds(VizprSettings.default.autoStopSeconds),
             onSessionDrained: { epoch in await drained.add("drained:\(epoch)") },
             onAutoStop: {}
         )
@@ -231,6 +234,7 @@ struct AudioPipelineTests {
         let pipeline = AudioPipeline(
             source: FakeCaptureSource(stream: samples),
             detector: SpeechDetector(model: try SpeechDetector.loadBundledModel()),
+            autoStopTimeout: .seconds(VizprSettings.default.autoStopSeconds),
             onSessionDrained: { epoch in await drained.add("drained:\(epoch)") },
             onAutoStop: {}
         )
@@ -255,6 +259,7 @@ struct AudioPipelineTests {
         let pipeline = AudioPipeline(
             source: SilentRouteSource(stream: samples, result: result),
             detector: SpeechDetector(model: try SpeechDetector.loadBundledModel()),
+            autoStopTimeout: .seconds(VizprSettings.default.autoStopSeconds),
             onSessionDrained: { epoch in await drained.add("drained:\(epoch)") },
             onAutoStop: {}
         )

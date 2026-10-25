@@ -126,13 +126,9 @@ struct BehaviorPane: View {
             }
             Section("Dictation") {
                 sliderRow("Auto-stop after silence", bind(store, \.autoStopSeconds),
-                          range: 2...60, unit: "s")
+                          range: VizprSettings.autoStopRangeSeconds, unit: "s")
                 sliderRow("Hold threshold (tap vs hold)", bind(store, \.holdThresholdMs),
-                          range: 100...1000, unit: "ms")
-                sliderRow("First-draft delay", bind(store, \.draftMinTailMs),
-                          range: 500...4000, unit: "ms")
-                sliderRow("Commit settle cap", bind(store, \.settleCapMs),
-                          range: 0...1000, unit: "ms")
+                          range: VizprSettings.holdThresholdRangeMs, unit: "ms")
             }
             Section("Cleanup") {
                 Toggle("Clean up transcripts (local LLM)", isOn: bind(store, \.cleanupEnabled))
@@ -173,13 +169,13 @@ struct BehaviorPane: View {
     }
 
     private func sliderRow(_ title: String, _ value: Binding<Int>,
-                           range: ClosedRange<Double>, unit: String) -> some View {
+                           range: ClosedRange<Int>, unit: String) -> some View {
         HStack {
             Text(title)
             Slider(value: Binding(
                 get: { Double(value.wrappedValue) },
                 set: { value.wrappedValue = Int($0) }
-            ), in: range)
+            ), in: Double(range.lowerBound)...Double(range.upperBound))
             Text("\(value.wrappedValue)\(unit)")
                 .monospacedDigit()
                 .frame(width: 64, alignment: .trailing)

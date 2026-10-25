@@ -118,7 +118,7 @@ struct HotkeyStateMachine {
     let holdThreshold: Duration
     private(set) var state: HotkeyState
 
-    init(holdThreshold: Duration = .milliseconds(280), state: HotkeyState = .idle) {
+    init(holdThreshold: Duration, state: HotkeyState = .idle) {
         self.holdThreshold = holdThreshold
         self.state = state
     }

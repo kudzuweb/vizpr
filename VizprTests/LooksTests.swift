@@ -49,8 +49,6 @@ struct LooksTests {
         #expect(settings.holdThresholdMs == 350)
         #expect(settings.secondaryModifiers == ["command", "shift"])
         #expect(settings.autoStopSeconds == 12)
-        #expect(settings.settleCapMs == 200)
-        #expect(settings.draftMinTailMs == 2000)
         #expect(settings.cleanupEnabled == false)
         #expect(settings.codeModeOverride == true)
         #expect(settings.asrModelID == "my-asr")
@@ -251,8 +249,6 @@ struct LooksTests {
         settings.holdThresholdMs = 410
         settings.secondaryModifiers = ["command", "shift", "option"]
         settings.autoStopSeconds = 17
-        settings.settleCapMs = 120
-        settings.draftMinTailMs = 2500
         settings.cleanupEnabled = false
         settings.codeModeOverride = true
         settings.asrModelID = "asr-x"
@@ -388,6 +384,28 @@ struct SettingsStoreLoadingTests {
             JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any]
         )
         #expect(object["tintHex"] == nil && object["colorPresets"] == nil)
+        #expect(SettingsStore(fileURL: url).settings == first)
+    }
+
+    @Test("Loading a file with removed keys drops them from the file and keeps the rest")
+    func removedKeysAreShed() throws {
+        let lookID = "5A1B6A52-6F42-4B7E-8D5C-2C0B5C1D9E01"
+        let url = try tempFile("""
+        {"settleCapMs": 500, "settleSentences": 4, "autoStopSeconds": 3,
+         "looks": [{"id": "\(lookID)", "name": "Mine", "cornerRadius": 12}]}
+        """)
+        let first = SettingsStore(fileURL: url).settings
+
+        let object = try #require(
+            JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any]
+        )
+        #expect(object["settleCapMs"] == nil)
+        #expect(object["draftMinTailMs"] == nil)
+        #expect(object["settleSentences"] == nil)
+        #expect(object["autoStopSeconds"] as? Int == 3)
+        let looks = try #require(object["looks"] as? [[String: Any]])
+        #expect(looks.map { $0["id"] as? String } == [lookID])
+        #expect(first.autoStopSeconds == 3)
         #expect(SettingsStore(fileURL: url).settings == first)
     }
 
