@@ -21,9 +21,10 @@ enum TargetAppMetrics {
 
     /// How far the corner icon hangs outside the pill on the left and top. Small
     /// enough that the icon reads as tucked into the corner, large enough that
-    /// the part inside the pill (`paneIconSize - cornerOverhang`) stays within
-    /// the pane's default horizontal padding and never sits over the text.
-    static let cornerOverhang: CGFloat = 6
+    /// the part inside the pill (`paneIconSize - cornerOverhang`) stays within a
+    /// point of the pane's default horizontal padding, which the first glyph's
+    /// side bearing absorbs, so the icon never sits over the text.
+    static let cornerOverhang: CGFloat = 5
 
     /// Distance from the pill's left and top edges to the icon's center.
     static let iconCenterInset = paneIconSize / 2 - cornerOverhang
