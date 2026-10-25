@@ -6,7 +6,7 @@ or a look of your own), and on release the text
 is injected into the focused app. You proofread as you speak — what the overlay
 shows at the moment you stop is exactly what gets injected. The overlay also
 shows the icon of the app that will receive the text (and, if you like, its
-name); Settings → Behavior → Show target app turns that off or adds the name.
+name); Settings → Behavior → Show the app the text will go to turns that off or adds the name.
 
 - ASR: Parakeet TDT 0.6B v2 (CoreML / Apple Neural Engine) via FluidAudio
 - Cleanup: local LLM (Qwen3-4B-Instruct-2507) via mlx-swift-lm

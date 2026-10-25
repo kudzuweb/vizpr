@@ -11,6 +11,6 @@ enum Tuning {
     static let settleCapMs = 500
 
     /// Audio the draft track needs before its first decode, milliseconds.
-    /// Tails shorter than 1.5 s decode to junk (set 2026-10-25).
+    /// Tails shorter than 1.5 s decode to junk (field-observed; a constant since 2026-10-25).
     static let draftMinTailMs = 1500
 }

@@ -639,10 +639,13 @@ who starts speaking immediately; she waited ~0.4 s):
 | action → capture start begins | ~245 ms | FIX: synchronous AX field read + session begins run BEFORE the pipeline starts; reorder so capture starts first, AX/overlay follow concurrently |
 | capture setup (engine build, route query) | ~218 ms | PARTIAL: AVCaptureDevice.default device-name lookup is dev-log-only decoration on the hot path — move off. Engine build cost is real |
 | engine.start() (HAL spin-up) | ~74 ms | leave (keeping the mic hot is a privacy non-starter) |
-| speech → first draft | draftMinTailMs floor (1.5 s default) | leave — user lever, quality-bound (sub-1.5 s tails decode junk, field-observed); since 2026-10-25 a constant in `Tuning.swift`, see "Tuning values and single defaults" |
+| speech → first draft | draftMinTailMs floor (1.5 s default) | leave — user lever, quality-bound (sub-1.5 s tails decode junk, field-observed) |
 | draft refresh cadence | fixed 1 s + decode inline in the audio pump | DONE in PR 13: the cadence is adaptive with a 500 ms floor (a decode starts when the previous finishes and 500 ms of new audio has arrived), and decoding is decoupled from ingestion. Same decoder, same tail = accuracy unchanged |
 | commit → inject | ~170 ms observed (settle window worked) | already good |
 | engine swap (Models pane) | pipeline rebuild + warm | rare; acceptable |
+
+*(2026-10-25: draftMinTailMs is no longer a user lever; it is a constant in
+`Tuning.swift`. See "Tuning values and single defaults".)*
 
 Also: before PR 13 the dev JSONL carried no timings (the "feedstock" claim
 in Future Directions was wrong). PR 13 adds session timing marks to the
@@ -1001,13 +1004,14 @@ stand. The decisions, by step:
   lets it stop counting itself as in flight.
 - **The "Settle window" setting is gone.** `settleSentences` leaves
   `VizprSettings` and the Behavior tab; an old `settings.json` that has the
-  key still loads, because decoding ignores unknown keys (since 2026-10-25 the
-  next load also drops it from the file). Cleanup latency on the
+  key still loads, because decoding ignores unknown keys. Cleanup latency on the
   bundled model with an empty context (10 runs after a warm run, 2026-10-25):
   one 13-word sentence p50 680 ms, p90 689 ms; two sentences (27 words) p50
   1,024 ms, p90 1,032 ms; three sentences (41 words) p50 1,348 ms, p90
   1,370 ms. Text therefore turns white about 0.7 to 1.4 s after a window's
   cleanup starts.
+  *(2026-10-25, later: an old file now also drops the key on its next load.
+  See "Tuning values and single defaults".)*
 
 - **The dictation record measures settling.** `t_first_settled_ms` is the
   time from the startDictation action to the first snapshot whose settled text
