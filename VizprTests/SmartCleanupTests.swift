@@ -111,6 +111,36 @@ struct SmartCleanupTests {
         #expect(await ts.live == "HELO WRLD")
     }
 
+    @Test("A trusted mid-sentence span skips cleanup and its complete sentences settle")
+    func skippedSpanSettles() async {
+        let ts = TokenStream()
+        let engine = FakeCleanupEngine()
+        let smart = SmartCleanup(tokenStream: ts, engine: engine)
+        await ts.beginSession()
+
+        await smart.ingest(.finalized(
+            text: "We shipped it. Then we", confidence: 0.99, tokenConfidences: [0.99]
+        ))
+        await settle()
+        #expect(await engine.requestCount == 0)
+        #expect(await ts.settled == "We shipped it. ")
+        #expect(await ts.live == "Then we")
+    }
+
+    @Test("With cleanup disabled, a final's complete sentences settle at once")
+    func disabledCleanupSettles() async {
+        let ts = TokenStream()
+        let engine = FakeCleanupEngine()
+        let smart = SmartCleanup(tokenStream: ts, engine: engine)
+        await smart.setRuntime(enabled: false, codeModeOverride: false)
+        await ts.beginSession()
+
+        await smart.ingest(.finalized(text: "helo wrld.", confidence: 0.2, tokenConfidences: [0.2]))
+        await settle()
+        #expect(await engine.requestCount == 0)
+        #expect(await ts.settled == "helo wrld.")
+    }
+
     @Test("A closed sentence triggers cleanup even at high confidence")
     func sentenceBoundaryTriggers() async {
         let ts = TokenStream()
@@ -145,7 +175,9 @@ struct SmartCleanupTests {
 
         await smart.ingest(.finalized(text: "ship to github now.", confidence: 0.5, tokenConfidences: [0.5]))
         await settle()
-        #expect(await ts.live == "ship to GitHub now.")
+        // The rewrite is a complete sentence, so it settled with the fix applied.
+        #expect(await ts.currentSnapshot().displayed == "ship to GitHub now.")
+        #expect(await ts.settled == "ship to GitHub now.")
     }
 
     @Test("Cleanup passes settled context and the vocab hint to the engine")
@@ -245,8 +277,10 @@ struct SmartCleanupTests {
         #expect(outcomes.count == 1)
         #expect(outcomes.first?.disposition == .failed)
         #expect(outcomes.first?.errorDescription?.isEmpty == false)
-        // Fail-open: the raw span is still displayed.
-        #expect(await ts.live == "will explode.")
+        // Fail-open: the raw span is still displayed, and its failed cleanup
+        // resolved it, so it settled.
+        #expect(await ts.currentSnapshot().displayed == "will explode.")
+        #expect(await ts.settled == "will explode.")
     }
 
     @Test("Commit cancels an in-flight cleanup and its late result never applies")

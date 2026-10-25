@@ -48,7 +48,6 @@ struct LooksTests {
         #expect(settings.hotkeyEnabled == false)
         #expect(settings.holdThresholdMs == 350)
         #expect(settings.secondaryModifiers == ["command", "shift"])
-        #expect(settings.settleSentences == 3)
         #expect(settings.autoStopSeconds == 12)
         #expect(settings.settleCapMs == 200)
         #expect(settings.draftMinTailMs == 2000)
@@ -230,7 +229,6 @@ struct LooksTests {
         settings.hotkeyEnabled = false
         settings.holdThresholdMs = 410
         settings.secondaryModifiers = ["command", "shift", "option"]
-        settings.settleSentences = 4
         settings.autoStopSeconds = 17
         settings.settleCapMs = 120
         settings.draftMinTailMs = 2500

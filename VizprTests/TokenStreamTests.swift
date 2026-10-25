@@ -18,8 +18,8 @@ private struct SplitMix64: RandomNumberGenerator {
 @Suite("TokenStream")
 struct TokenStreamTests {
 
-    private func stream(settle: Int = 2) -> TokenStream {
-        TokenStream(settleSentences: settle)
+    private func stream() -> TokenStream {
+        TokenStream()
     }
 
     // MARK: Regions
@@ -76,9 +76,9 @@ struct TokenStreamTests {
         #expect(displayed == "We say negligent discharge for a reason")
     }
 
-    @Test("Settle policy: only the trailing N sentences stay live")
-    func settlePolicy() async {
-        let ts = stream(settle: 2)
+    @Test("Backstop: text older than two sentences settles even with no cleanup resolved")
+    func settleBackstop() async {
+        let ts = stream()
         await ts.beginSession()
         await ts.apply(.finalized(text: "One. Two. Three. Four.", confidence: 0.9, tokenConfidences: []))
         #expect(await ts.settled == "One. Two. ")
@@ -121,7 +121,7 @@ struct TokenStreamTests {
         // is a Sendable reference (unlike move-only Atomic), so the closure can
         // share it with the test.
         let cancelObserved = AtomicCounter()
-        _ = await ts.launchCleanup {
+        _ = await ts.launchCleanup { _ in
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 2_000_000)
             }
@@ -162,19 +162,101 @@ struct TokenStreamTests {
         await ts.apply(.finalized(text: "More text.", confidence: 0.9, tokenConfidences: []))
         #expect(await !ts.applyCleanup(expectedGeneration: gen, rewrittenLive: "Hello world."))
 
-        // A fresh result against the current generation applies.
+        // A fresh result against the current generation applies, and its
+        // complete sentences settle.
         let current = await ts.generation
         #expect(await ts.applyCleanup(expectedGeneration: current, rewrittenLive: "Hello world. More text."))
-        #expect(await ts.live == "Hello world. More text.")
+        #expect(await ts.settled == "Hello world. More text.")
+        #expect(await ts.live.isEmpty)
         // Applying bumped the generation: replaying the same result is stale.
         #expect(await !ts.applyCleanup(expectedGeneration: current, rewrittenLive: "replay"))
+    }
+
+    // MARK: Settling as cleanup resolves
+
+    @Test("An applied cleanup settles the complete sentences of its rewrite and leaves a fragment live")
+    func appliedCleanupSettlesCompleteSentences() async {
+        let ts = stream()
+        await ts.beginSession()
+        await ts.apply(.finalized(text: "helo world. how are", confidence: 0.5, tokenConfidences: []))
+        let generation = await ts.generation
+        #expect(await ts.applyCleanup(expectedGeneration: generation, rewrittenLive: "Hello world. How are"))
+        #expect(await ts.settled == "Hello world. ")
+        #expect(await ts.live == "How are")
+    }
+
+    @Test("A skipped cleanup settles the complete sentences of the raw text")
+    func skippedCleanupSettles() async {
+        let ts = stream()
+        await ts.beginSession()
+        let generation = await ts.apply(.finalized(
+            text: "We shipped it. Then we", confidence: 0.95, tokenConfidences: []
+        ))
+        await ts.resolveLive(generation: generation)
+        #expect(await ts.settled == "We shipped it. ")
+        #expect(await ts.live == "Then we")
+    }
+
+    @Test("A skip while another cleanup is running settles nothing")
+    func skipWhileCleanupRunningSettlesNothing() async {
+        let ts = stream()
+        await ts.beginSession()
+        await ts.apply(.finalized(text: "helo world.", confidence: 0.5, tokenConfidences: []))
+        let release = AtomicCounter()
+        _ = await ts.launchCleanup { _ in
+            while release.value == 0 { try? await Task.sleep(nanoseconds: 2_000_000) }
+        }
+        let generation = await ts.apply(.finalized(text: "More text.", confidence: 0.95, tokenConfidences: []))
+        await ts.resolveLive(generation: generation)
+        #expect(await ts.settled.isEmpty)
+        #expect(await ts.live == "helo world. More text.")
+        release.increment()
+    }
+
+    @Test("A resolution for an older generation settles nothing")
+    func staleResolutionSettlesNothing() async {
+        let ts = stream()
+        await ts.beginSession()
+        let old = await ts.apply(.finalized(text: "First one.", confidence: 0.95, tokenConfidences: []))
+        await ts.apply(.finalized(text: "Second one.", confidence: 0.95, tokenConfidences: []))
+        await ts.resolveLive(generation: old)
+        #expect(await ts.settled.isEmpty)
+    }
+
+    @Test("A cleanup that fails settles the raw text it was given")
+    func failedCleanupSettles() async throws {
+        let ts = stream()
+        await ts.beginSession()
+        let generation = await ts.apply(.finalized(text: "Raw text.", confidence: 0.5, tokenConfidences: []))
+        _ = await ts.launchCleanup { id in
+            await ts.resolveLive(generation: generation, finishedCleanup: id)
+        }
+        try await Task.sleep(nanoseconds: 20_000_000)
+        #expect(await ts.settled == "Raw text.")
+    }
+
+    @Test("The space before the next final goes with the settled text, so a cleanup rewrite cannot join words")
+    func separatorAfterFullSettle() async {
+        let ts = stream()
+        await ts.beginSession()
+        let first = await ts.apply(.finalized(text: "Hello there.", confidence: 0.95, tokenConfidences: []))
+        await ts.resolveLive(generation: first)
+        #expect(await ts.live.isEmpty)
+
+        let second = await ts.apply(.finalized(text: "Next one", confidence: 0.5, tokenConfidences: []))
+        #expect(await ts.settled == "Hello there. ")
+        #expect(await ts.live == "Next one")
+
+        // Cleanup returns trimmed text; the display must still read as written.
+        #expect(await ts.applyCleanup(expectedGeneration: second, rewrittenLive: "Next one"))
+        #expect(await ts.currentSnapshot().displayed == "Hello there. Next one")
     }
 
     // MARK: Long-session bounds
 
     @Test("Long latched session: live stays bounded, settled only grows")
     func longSessionBounded() async {
-        let ts = stream(settle: 2)
+        let ts = stream()
         await ts.beginSession()
         var settledLength = 0
         for index in 0..<300 {
@@ -215,7 +297,7 @@ struct TokenStreamPropertyTests {
     func settleMonotonicity() async {
         for seed in UInt64(1)...300 {
             var rng = SplitMix64(seed: seed)
-            let ts = TokenStream(settleSentences: 1 + Int(rng.next() % 3))
+            let ts = TokenStream()
             await ts.beginSession()
             var previousSettled = ""
             var windowID = 0
@@ -267,7 +349,7 @@ struct TokenStreamPropertyTests {
     func commitSeals() async {
         for seed in UInt64(1)...100 {
             var rng = SplitMix64(seed: seed)
-            let ts = TokenStream(settleSentences: 2)
+            let ts = TokenStream()
             await ts.beginSession()
             for _ in 0..<(5 + rng.next() % 40) {
                 if rng.next() % 3 == 0 {

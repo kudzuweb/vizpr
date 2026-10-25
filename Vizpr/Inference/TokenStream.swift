@@ -35,16 +35,24 @@ struct DisplaySnapshot: Sendable, Equatable {
 ///   monotonic: nothing in this type ever mutates settled except appending.
 ///   This is the user's "what I proofread is final" guarantee as code, pinned
 ///   by a randomized property test.
-/// - `live` — recent finalized text inside the settle window. Cleanup (PR 6)
-///   may rewrite it, gated by generation tags.
+/// - `live` — finalized text whose cleanup has not resolved. Cleanup (PR 6)
+///   may rewrite it, gated by generation tags. Live settles when the cleanup
+///   launched for its current generation resolves (applied, failed, or never
+///   launched because the gate skipped it): the complete sentences settle and
+///   a trailing sentence fragment stays live, so a pause mid-sentence never
+///   settles half a sentence ahead of the cleanup that sees the whole. A
+///   result for an older generation settles nothing. As a backstop, text
+///   older than `settledSentenceBacklog` sentences settles regardless, so live
+///   stays bounded when cleanups keep going stale under fast speech.
 /// - `draft` — the active window's tentative text; replaces per windowID.
 ///
 /// Commit contract (§2, locked): `commit()` snapshots the displayed text,
 /// cancels every registered cleanup task (strict cancel — never awaited), and
 /// returns the string. Displayed-at-stop == injected, byte for byte.
 actor TokenStream {
-    /// Settle window size in sentences (user-tunable in Settings, PR 11).
-    private var settleSentences: Int
+    /// Sentences that may stay live while cleanups are pending; older text
+    /// settles even if no cleanup has resolved.
+    static let settledSentenceBacklog = 2
 
     private(set) var settled = ""
     private(set) var live = ""
@@ -69,15 +77,6 @@ actor TokenStream {
     private var nextCleanupID = 0
 
     private var snapshotContinuation: AsyncStream<DisplaySnapshot>.Continuation?
-
-    init(settleSentences: Int = 2) {
-        self.settleSentences = settleSentences
-    }
-
-    /// Live setting (PR 11): takes effect at the next settle pass.
-    func setSettleSentences(_ count: Int) {
-        settleSentences = max(1, count)
-    }
 
     /// Create THE display snapshot stream; only the latest matters, so older
     /// unconsumed snapshots are dropped. Single-consumer by design: calling
@@ -136,14 +135,18 @@ actor TokenStream {
 
     // MARK: Token events
 
-    func apply(_ event: TokenEvent) {
-        guard sessionActive else { return }
+    /// - Returns: the live-region generation after the event, which the caller
+    ///   hands to `resolveLive` if it decides no cleanup will follow.
+    @discardableResult
+    func apply(_ event: TokenEvent) -> Int {
+        guard sessionActive else { return generation }
         switch event {
         case let .draft(windowID, text):
             applyDraft(windowID: windowID, text: text)
         case let .finalized(text, _, _):
             applyFinalized(text)
         }
+        return generation
     }
 
     private func applyDraft(windowID: Int, text: String) {
@@ -160,7 +163,15 @@ actor TokenStream {
         // make per-event work O(session length) — the acceptance criterion
         // demands it stays bounded.
         let addition = SeamMerger.appendix(context: seamContext(), new: text)
-        if !addition.isEmpty {
+        if live.isEmpty, !settled.isEmpty {
+            // Everything before this text settled. The separating space goes
+            // with the settled side: cleanup returns trimmed text, so a space
+            // left at the front of live would be lost when it rewrites live
+            // and the words would join.
+            let separator = addition.prefix { $0.isWhitespace }
+            settled += separator
+            live += addition.dropFirst(separator.count)
+        } else {
             live += addition
         }
         // Bump on every accepted finalized event, even one that adds nothing
@@ -186,15 +197,28 @@ actor TokenStream {
         return String(settled.suffix(budget - live.count)) + live
     }
 
-    /// Move everything older than the trailing `settleSentences` sentences
-    /// from live into settled (§3). One-way: settled only ever grows by
-    /// appending the exact prefix removed from live.
+    /// The backstop: move everything older than the trailing
+    /// `settledSentenceBacklog` sentences from live into settled (§3). One-way:
+    /// settled only ever grows by appending the exact prefix removed from live.
     private func settle() {
         let sentences = SentenceSplitter.split(live)
-        guard sentences.count > settleSentences else { return }
-        let toSettle = sentences.prefix(sentences.count - settleSentences).joined()
-        settled += toSettle
-        live = String(live.dropFirst(toSettle.count))
+        guard sentences.count > Self.settledSentenceBacklog else { return }
+        moveToSettled(sentences.prefix(sentences.count - Self.settledSentenceBacklog).joined())
+    }
+
+    /// Settle the complete sentences of live; a trailing fragment stays live.
+    private func settleCompleteSentences() {
+        let complete = SentenceSplitter.split(live).prefix { sentence in
+            guard let last = sentence.last(where: { !$0.isWhitespace }) else { return false }
+            return last == "." || last == "!" || last == "?"
+        }
+        moveToSettled(complete.joined())
+    }
+
+    private func moveToSettled(_ prefix: String) {
+        guard !prefix.isEmpty else { return }
+        settled += prefix
+        live = String(live.dropFirst(prefix.count))
         generation += 1
     }
 
@@ -205,12 +229,15 @@ actor TokenStream {
     /// effects can run (task-body effects on this actor serialize after this
     /// method), and auto-deregisters on completion — closing the review-found
     /// race where a self-managed task could finish before registration.
+    ///
+    /// The operation receives its own id, which it passes to `resolveLive` when
+    /// it finishes without a result to apply.
     @discardableResult
-    func launchCleanup(_ operation: @escaping @Sendable () async -> Void) -> Int {
+    func launchCleanup(_ operation: @escaping @Sendable (_ cleanupID: Int) async -> Void) -> Int {
         let id = nextCleanupID
         nextCleanupID += 1
         let task = Task { [weak self] in
-            await operation()
+            await operation(id)
             await self?.deregisterCleanup(id)
         }
         cleanupTasks[id] = task
@@ -235,8 +262,22 @@ actor TokenStream {
         guard sessionActive, expectedGeneration == generation else { return false }
         live = rewrittenLive
         generation += 1
+        settleCompleteSentences()
         publish()
         return true
+    }
+
+    /// The cleanup for this generation will not rewrite live (the gate skipped
+    /// it, cleanup is off, or it failed): settle the complete sentences of the
+    /// text as it stands. Settles nothing when the generation moved on or when
+    /// another cleanup is still running, whose result may rewrite an earlier
+    /// span. `finishedCleanup` is the caller's own cleanup, which no longer
+    /// counts as running.
+    func resolveLive(generation expected: Int, finishedCleanup: Int? = nil) {
+        if let finishedCleanup { cleanupTasks.removeValue(forKey: finishedCleanup) }
+        guard sessionActive, expected == generation, cleanupTasks.isEmpty else { return }
+        settleCompleteSentences()
+        publish()
     }
 
     // MARK: Snapshot

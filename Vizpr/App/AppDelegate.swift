@@ -285,8 +285,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         textInjector.setRestoreEnabled(settings.restoreClipboard)
         overlay.setLook(settings.activeLook)
         overlay.setInviz(settings.invizMode)
-        Task { [tokenStream, smartCleanup, asrEngine] in
-            await tokenStream.setSettleSentences(settings.settleSentences)
+        Task { [smartCleanup, asrEngine] in
             await smartCleanup?.setRuntime(
                 enabled: settings.cleanupEnabled,
                 codeModeOverride: settings.codeModeOverride

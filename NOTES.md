@@ -832,6 +832,37 @@ The decisions, by step:
   settled context through them: cleanup drops fillers and may expand
   contractions when it copies the context.
 
+- **Text turns white when its cleanup resolves.** Finalized text used to
+  settle only when two more sentences arrived. Now the cleanup launched for the
+  live region's current generation settles the complete sentences of the live
+  region when it resolves, and a trailing sentence fragment stays live, so a
+  pause mid-sentence never settles half a sentence before the sentence-end
+  cleanup sees the whole. Resolution means: the rewrite applied
+  (`applyCleanup` settles the prefix of what it wrote), the cleanup failed
+  (including an echo-only rewrite), the gate skipped cleanup, or cleanup is
+  off (the last two through `resolveLive(generation:)`). A skip while another
+  cleanup is in flight settles nothing, so an earlier low-confidence span
+  keeps its cleanup; a result for an older generation settles nothing;
+  commit is unchanged (strict cancel, the display is committed as shown).
+  The two-sentence rule stays as `settledSentenceBacklog`, so text still
+  settles when cleanups keep going stale under fast speech.
+- **The space before the next final goes with the settled text.** When a
+  resolution settles all of live, the next final's leading space is appended
+  to settled, not live. Cleanup returns trimmed text, so a space left at the
+  front of live would be lost when cleanup rewrites it, and the display would
+  read "Hello there.Next one".
+- **`launchCleanup` hands its operation its own id.** A failed cleanup resolves
+  the live region from inside its own task, which is still registered; the id
+  lets it stop counting itself as in flight.
+- **The "Settle window" setting is gone.** `settleSentences` leaves
+  `VizprSettings` and the Behavior tab; an old `settings.json` that has the
+  key still loads, because decoding ignores unknown keys. Cleanup latency on the
+  bundled model with an empty context (10 runs after a warm run, 2026-10-25):
+  one 13-word sentence p50 680 ms, p90 689 ms; two sentences (27 words) p50
+  1,024 ms, p90 1,032 ms; three sentences (41 words) p50 1,348 ms, p90
+  1,370 ms. Text therefore turns white about 0.7 to 1.4 s after a window's
+  cleanup starts.
+
 ## Environment prerequisites discovered
 
 - **Metal Toolchain** is required to build the mlx-swift dependency (it compiles

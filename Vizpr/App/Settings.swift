@@ -31,8 +31,6 @@ struct VizprSettings: Codable, Equatable, Sendable {
     static let validModifiers: Set<String> = ["control", "option", "shift", "command"]
 
     // MARK: Session behavior
-    /// Settle window, sentences (TokenStream live-region size).
-    var settleSentences: Int = 2
     /// Auto-stop after this much silence, seconds.
     var autoStopSeconds: Int = 6
     /// Tail-settle cap at commit, milliseconds (§15 amendment). The commit waits
@@ -96,7 +94,6 @@ struct VizprSettings: Codable, Equatable, Sendable {
         if s.primaryTrigger != "fn" { s.primaryTrigger = "fn" }   // only Fn yet
         if s.asrModelID?.isEmpty == true { s.asrModelID = nil }
         if s.cleanupModelID?.isEmpty == true { s.cleanupModelID = nil }
-        s.settleSentences = min(max(s.settleSentences, 1), 6)
         s.autoStopSeconds = min(max(s.autoStopSeconds, 2), 60)
         s.settleCapMs = min(max(s.settleCapMs, 0), 1_000)
         s.draftMinTailMs = min(max(s.draftMinTailMs, 500), 4_000)
