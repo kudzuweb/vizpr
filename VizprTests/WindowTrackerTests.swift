@@ -206,11 +206,36 @@ struct WindowTrackerTests {
         #expect(t.takeConfirmPlan() == nil)
     }
 
-    @Test("A forced plan wins over a pending pause and clears it")
+    @Test("A forced plan wins over a pending pause and clears a pause before its cut")
     func forcedBeatsPause() {
         var t = defaultTracker()
+        t.append(sampleCount: 150_000)
+        t.notePause()                       // before the nominal cut at 160,000
+        t.append(sampleCount: 50_000)
+        #expect(t.takeConfirmPlan()?.kind == .forced)
+        t.confirm(through: 160_000)
+        #expect(t.takeConfirmPlan() == nil)
+    }
+
+    @Test("A pause pending past a forced cut survives the forced plan and plans on the next call")
+    func pauseAfterForcedCutSurvives() {
+        var t = defaultTracker()
         t.append(sampleCount: 200_000)
-        t.notePause()
+        t.notePause()                       // 40,000 past the cut at 160,000
+        #expect(t.takeConfirmPlan()?.kind == .forced)
+        t.confirm(through: 158_000)
+        #expect(t.takeConfirmPlan() == WindowTracker.WindowPlan(
+            range: 126_000 ..< 200_000, cutStart: 158_000, cutEnd: 200_000, kind: .pause
+        ))
+        #expect(t.takeConfirmPlan() == nil)
+    }
+
+    @Test("A pause less than 0.5 s past the forced cut is cleared with it")
+    func pauseJustAfterForcedCutCleared() {
+        var t = defaultTracker()
+        t.append(sampleCount: 164_000)
+        t.notePause()                       // 4,000 past the cut at 160,000
+        t.append(sampleCount: 28_000)
         #expect(t.takeConfirmPlan()?.kind == .forced)
         t.confirm(through: 160_000)
         #expect(t.takeConfirmPlan() == nil)

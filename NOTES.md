@@ -878,8 +878,9 @@ Known limits:
   kept once or, at worst, truncated in one window and recovered in the next.
 - The decode task is single, so a confirm delays the next draft refresh by one
   decode, about 150 ms.
-- A pause pending when the input ends, and one that follows a forced window,
-  are not run as windows; the next window or the commit decode covers them.
+- A pause pending when the input ends is not run as a window; the commit
+  decode covers it. A pause less than 0.5 s past a forced window's cut is
+  cleared with it; a pause further past survives and closes the next window.
 
 ## Environment prerequisites discovered
 

@@ -116,15 +116,23 @@ struct WindowTracker {
     /// that follows at least `minWindowSamples` of unconfirmed audio. Consumes
     /// the pending pause either way, so a pause too soon after a confirmation
     /// cannot fire later. The forced check runs first, which keeps a pause
-    /// plan from covering more than 12 s of unconfirmed audio plus its context.
+    /// plan from covering more than 12 s of unconfirmed audio plus its context;
+    /// a forced plan keeps a pending pause that lies at least
+    /// `minWindowSamples` past its nominal end.
     mutating func takeConfirmPlan() -> WindowPlan? {
         let contextStart = max(0, confirmedBoundary - leftContextSamples)
         if totalSamples - confirmedBoundary >= forcedWindowSamples + rightContextSamples {
-            pendingPause = nil
+            let cutEnd = confirmedBoundary + forcedWindowSamples
+            // A pause far enough past the cut survives: the next call plans
+            // its window from the new boundary. Any earlier pause is covered
+            // by the forced window.
+            if let pause = pendingPause, pause - cutEnd < minWindowSamples {
+                pendingPause = nil
+            }
             return WindowPlan(
-                range: contextStart ..< confirmedBoundary + forcedWindowSamples + rightContextSamples,
+                range: contextStart ..< cutEnd + rightContextSamples,
                 cutStart: confirmedBoundary,
-                cutEnd: confirmedBoundary + forcedWindowSamples,
+                cutEnd: cutEnd,
                 kind: .forced
             )
         }
