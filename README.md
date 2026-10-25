@@ -4,7 +4,9 @@ A local, on-device, streaming dictation app for macOS. Hold or tap the Fn key,
 speak, watch a live transcript in a floating HUD (glass, an opaque animated slab,
 or a look of your own), and on release the text
 is injected into the focused app. You proofread as you speak — what the overlay
-shows at the moment you stop is exactly what gets injected.
+shows at the moment you stop is exactly what gets injected. The overlay also
+shows the icon of the app that will receive the text (and, if you like, its
+name); Settings → Behavior → Show target app turns that off or adds the name.
 
 - ASR: Parakeet TDT 0.6B v2 (CoreML / Apple Neural Engine) via FluidAudio
 - Cleanup: local LLM (Qwen3-4B-Instruct-2507) via mlx-swift-lm
@@ -35,6 +37,11 @@ Release builds exclude it entirely.
 `design/renders/` holds rendered stills of the overlay's looks, committed so the
 look's evolution is visible in history. `design/references/` holds inspiration
 images; they are third-party work, so the folder is gitignored and stays local.
+
+A look can use any installed font, and any `.ttf`, `.otf` or `.ttc` file you put in
+`~/Library/Application Support/Vizpr/Fonts` (Settings → Appearance → Open Fonts
+Folder). Those fonts load into Vizpr only and are never installed system-wide;
+Reload Fonts picks up files added while the app is running.
 
 ## Installing (for others)
 

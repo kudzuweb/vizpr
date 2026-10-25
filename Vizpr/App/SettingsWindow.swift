@@ -6,6 +6,7 @@ import SwiftUI
 @MainActor
 final class SettingsWindowController {
     private var window: NSWindow?
+    private var closeObserver: NSObjectProtocol?
 
     func show(settings: SettingsStore, vocabulary: VocabularyModel, models: ModelsModel) {
         if let window {
@@ -17,13 +18,26 @@ final class SettingsWindowController {
         let hosting = NSHostingController(rootView: view)
         let window = NSWindow(contentViewController: hosting)
         window.title = "Vizpr Settings"
-        window.styleMask = [.titled, .closable, .miniaturizable]
-        window.setContentSize(NSSize(width: 560, height: 480))
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+        window.setContentSize(NSSize(width: 760, height: 820))
         window.isReleasedWhenClosed = false
         self.window = window
+        // Closing releases the window and its views, which stops the
+        // Appearance preview's animation; the next show() builds a fresh one.
+        closeObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification, object: window, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.windowClosed() }
+        }
         window.center()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func windowClosed() {
+        closeObserver.map(NotificationCenter.default.removeObserver)
+        closeObserver = nil
+        window = nil
     }
 }
 
@@ -44,7 +58,7 @@ struct SettingsRootView: View {
             ModelsPane(store: store, models: models)
                 .tabItem { Label("Models", systemImage: "cpu") }
         }
-        .frame(minWidth: 560, minHeight: 460)
+        .frame(minWidth: 640, minHeight: 600)
         .padding()
         // Field catch (Mauria): grouped-form TextFields render borderless —
         // literally invisible until you click the blank space. Rounded
@@ -128,6 +142,11 @@ struct BehaviorPane: View {
                 Toggle("Restore clipboard after paste", isOn: bind(store, \.restoreClipboard))
                 Toggle("Inviz mode (indicator only, no live preview)",
                        isOn: bind(store, \.invizMode))
+                Picker("Show target app", selection: bind(store, \.targetAppDisplay)) {
+                    Text("Off").tag(TargetAppDisplay.off)
+                    Text("Icon").tag(TargetAppDisplay.icon)
+                    Text("Icon and name").tag(TargetAppDisplay.iconAndName)
+                }
                 Toggle("Fall back to built-in mic if input is silent",
                        isOn: bind(store, \.silentInputFallback))
             }
@@ -165,148 +184,6 @@ struct BehaviorPane: View {
                 .monospacedDigit()
                 .frame(width: 64, alignment: .trailing)
         }
-    }
-}
-
-// MARK: - Appearance
-
-struct AppearancePane: View {
-    @ObservedObject var store: SettingsStore
-
-    private var activeLook: OverlayLook { store.settings.activeLook }
-    private var editable: Bool { !activeLook.isBuiltIn }
-
-    var body: some View {
-        Form {
-            lookSection
-            Section("Edit \(activeLook.name)") {
-                if !editable {
-                    Text("Duplicate a built-in look to edit it.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                Group {
-                    Picker("Surface", selection: lookBinding(\.surface)) {
-                        ForEach(OverlayLook.Surface.allCases, id: \.self) { surface in
-                            Text(surface.rawValue.capitalized).tag(surface)
-                        }
-                    }
-                    sliderRow("Corner radius", lookBinding(\.cornerRadius),
-                              range: OverlayLook.cornerRadiusRange) { String(format: "%.0f pt", $0) }
-                    ColorPicker("Tint", selection: hexBinding(\.tintHex))
-                    sliderRow("Tint strength", lookBinding(\.tintStrength),
-                              range: OverlayLook.tintStrengthRange) { String(format: "%.0f%%", $0 * 100) }
-                    Toggle("Link text color to tint", isOn: lookBinding(\.colorsLinked))
-                    if !activeLook.colorsLinked {
-                        Toggle("Use system text colors", isOn: Binding(
-                            get: { activeLook.textBaseHex == nil },
-                            set: { on in store.updateActiveLook { $0.textBaseHex = on ? nil : "FFFFFF" } }
-                        ))
-                        if activeLook.textBaseHex != nil {
-                            ColorPicker("Text color", selection: textHexBinding)
-                        }
-                    }
-                    Picker("Font", selection: lookBinding(\.fontDesign)) {
-                        ForEach(OverlayLook.FontDesign.allCases, id: \.self) { design in
-                            Text(design.rawValue.capitalized).tag(design)
-                        }
-                    }
-                    sliderRow("Font size", lookBinding(\.fontSize),
-                              range: OverlayLook.fontSizeRange) { String(format: "%.0f pt", $0) }
-                    Text("Final and provisional text always keep a fixed contrast ratio.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                .disabled(!editable)
-            }
-        }
-        .formStyle(.grouped)
-    }
-
-    private var lookSection: some View {
-        Section("Looks (\(store.settings.looks.count)/\(VizprSettings.maxLooks))") {
-            ForEach(OverlayLook.builtIns + store.settings.looks) { look in
-                Button { store.selectLook(look.id) } label: {
-                    HStack {
-                        Circle().fill(look.tintColor).frame(width: 14, height: 14)
-                        Text(look.name)
-                        Spacer()
-                        if look.id == activeLook.id {
-                            Image(systemName: "checkmark")
-                        }
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            }
-            if editable {
-                TextField("Name", text: Binding(
-                    get: { activeLook.name },
-                    set: { name in store.updateActiveLook { $0.name = name } }
-                ))
-            }
-            HStack {
-                Button("Duplicate") { store.duplicateLook(activeLook) }
-                    .disabled(store.settings.looks.count >= VizprSettings.maxLooks)
-                Button("Delete", role: .destructive) { store.deleteLook(activeLook.id) }
-                    .disabled(!editable)
-            }
-            Button("Delete All Looks", role: .destructive) {
-                store.deleteAllLooks()
-            }
-            .disabled(store.settings.looks.isEmpty)
-        }
-    }
-
-    private func sliderRow(_ title: String, _ value: Binding<Double>,
-                           range: ClosedRange<Double>,
-                           format: @escaping (Double) -> String) -> some View {
-        HStack {
-            Text(title)
-            Slider(value: value, in: range)
-            Text(format(value.wrappedValue))
-                .monospacedDigit().frame(width: 56, alignment: .trailing)
-        }
-    }
-
-    /// Reads the active look and writes through `updateActiveLook`, which
-    /// ignores built-ins.
-    private func lookBinding<T>(_ keyPath: WritableKeyPath<OverlayLook, T>) -> Binding<T> {
-        Binding(
-            get: { activeLook[keyPath: keyPath] },
-            set: { value in store.updateActiveLook { $0[keyPath: keyPath] = value } }
-        )
-    }
-
-    private func hexBinding(_ keyPath: WritableKeyPath<OverlayLook, String>) -> Binding<Color> {
-        Binding(
-            get: { Color(hex: activeLook[keyPath: keyPath]) ?? .white },
-            set: { color in
-                if let hex = color.hexString {
-                    store.updateActiveLook { $0[keyPath: keyPath] = hex }
-                }
-            }
-        )
-    }
-
-    private var textHexBinding: Binding<Color> {
-        Binding(
-            get: { activeLook.textBaseHex.flatMap { Color(hex: $0) } ?? .white },
-            set: { color in
-                if let hex = color.hexString {
-                    store.updateActiveLook { $0.textBaseHex = hex }
-                }
-            }
-        )
-    }
-}
-
-extension Color {
-    /// 6-digit RGB hex of the color in sRGB (nil if not convertible).
-    var hexString: String? {
-        guard let converted = NSColor(self).usingColorSpace(.sRGB) else { return nil }
-        let r = Int(round(converted.redComponent * 255))
-        let g = Int(round(converted.greenComponent * 255))
-        let b = Int(round(converted.blueComponent * 255))
-        return String(format: "%02X%02X%02X", r, g, b)
     }
 }
 
