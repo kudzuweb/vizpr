@@ -686,6 +686,28 @@ Decisions:
   continuation when the stream is built, so subscribing before
   `startStreaming` means a quick tap's `cancel()` always finishes it.
 
+- **Settle cap default is 500 ms (was 350).** The commit now waits for one
+  tail decode of up to 15 s, and a cap below the decode time commits the last
+  draft and drops the decode, losing the last second of speech in the cases
+  this change exists to fix. Rule: 2 x p90(15 s decode) + 100 ms, rounded up
+  to 50 ms, clamped to 350-1000, where the 2 covers a draft decode still
+  running when the input ends plus the commit decode behind it on the
+  `AsrManager` actor. Batch decode of the bundled model, 10 runs each after a
+  warm-up, 2026-10-25:
+
+  | Clip | p50 | p90 |
+  |---|---|---|
+  | 3 s | 113.2 ms | 115.8 ms |
+  | 6 s | 122.9 ms | 125.9 ms |
+  | 12 s | 142.9 ms | 150.0 ms |
+  | 15 s | 174.1 ms | 180.6 ms |
+
+  Saved settings replace defaults on load, so an existing `settings.json`
+  keeps its stored `settleCapMs` until it is changed in the Settings window.
+  Each commit writes `settle: drained|capped after N ms` and
+  `commit tail: decoded N ms over M samples` to the dev log, which show how
+  often the cap fires.
+
 Known limits:
 
 - The settle cap can still fire before the commit decode finishes; the last

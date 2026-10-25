@@ -35,8 +35,14 @@ struct VizprSettings: Codable, Equatable, Sendable {
     var settleSentences: Int = 2
     /// Auto-stop after this much silence, seconds.
     var autoStopSeconds: Int = 6
-    /// Flush-settle cap at commit, milliseconds (§15 amendment).
-    var settleCapMs: Int = 350
+    /// Tail-settle cap at commit, milliseconds (§15 amendment). The commit waits
+    /// for one decode of the unconfirmed tail (up to 15 s of audio), and a cap
+    /// below the decode time commits the last draft and drops the decode.
+    /// Rule: 2 x p90(15 s decode) + 100 ms, rounded up to 50 ms, clamped to
+    /// 350...1000 — the factor of 2 covers a draft decode still running when
+    /// the input ends plus the commit decode queued behind it. Measured
+    /// 2026-10-25 on the bundled model: p90 of 180.6 ms over 10 runs gives 500.
+    var settleCapMs: Int = 500
     /// Draft track minimum tail before the first decode, milliseconds —
     /// Mauria's "first draft faster?" lever; lower = earlier + junkier.
     var draftMinTailMs: Int = 1500
