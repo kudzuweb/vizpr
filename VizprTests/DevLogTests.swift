@@ -167,7 +167,7 @@ struct DevLogTests {
 
     private let timingKeys = [
         "t_capture_ms", "t_speech_onset_ms", "t_first_draft_ms", "t_first_preview_ms",
-        "t_commit_ms", "t_injected_ms", "draft_count",
+        "t_first_settled_ms", "t_commit_ms", "t_injected_ms", "draft_count",
         "draft_interval_mean_ms", "draft_interval_max_ms"
     ]
 
@@ -192,8 +192,11 @@ struct DevLogTests {
         let start = ContinuousClock.now
         await tracker.begin(at: start)
         await tracker.mark(.captureStarted, at: start + .milliseconds(212))
+        await tracker.mark(.firstSettled, at: start + .milliseconds(3100))
+        await tracker.mark(.firstSettled, at: start + .milliseconds(6000))
         let partial = try encodedObject(await record(from: tracker))
         #expect((partial["t_capture_ms"] as? Int) == 212)
+        #expect((partial["t_first_settled_ms"] as? Int) == 3100)
         #expect(partial["t_injected_ms"] is NSNull)
     }
 

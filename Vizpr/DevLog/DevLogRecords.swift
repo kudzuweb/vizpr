@@ -48,6 +48,7 @@ struct DevSessionTimings: Sendable {
     var speechOnsetMs: Int?
     var firstDraftMs: Int?
     var firstPreviewMs: Int?
+    var firstSettledMs: Int?
     var commitMs: Int?
     var injectedMs: Int?
     var draftCount = 0
@@ -63,6 +64,7 @@ extension DevSessionTimings: Encodable {
         case speechOnsetMs = "t_speech_onset_ms"
         case firstDraftMs = "t_first_draft_ms"
         case firstPreviewMs = "t_first_preview_ms"
+        case firstSettledMs = "t_first_settled_ms"
         case commitMs = "t_commit_ms"
         case injectedMs = "t_injected_ms"
         case draftCount = "draft_count"
@@ -76,6 +78,7 @@ extension DevSessionTimings: Encodable {
         try container.encode(speechOnsetMs, forKey: .speechOnsetMs)
         try container.encode(firstDraftMs, forKey: .firstDraftMs)
         try container.encode(firstPreviewMs, forKey: .firstPreviewMs)
+        try container.encode(firstSettledMs, forKey: .firstSettledMs)
         try container.encode(commitMs, forKey: .commitMs)
         try container.encode(injectedMs, forKey: .injectedMs)
         try container.encode(draftCount, forKey: .draftCount)

@@ -249,6 +249,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     let renderedAt = ContinuousClock.now
                     Task { await tracker.mark(.firstPreview, at: renderedAt) }
                 }
+                if !snapshot.settled.isEmpty {
+                    let renderedAt = ContinuousClock.now
+                    Task { await tracker.mark(.firstSettled, at: renderedAt) }
+                }
                 if snapshot != .empty {
                     VizprTranscriptLogger.note("display: \(snapshot.displayed)")
                 }

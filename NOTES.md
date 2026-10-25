@@ -863,6 +863,10 @@ The decisions, by step:
   1,370 ms. Text therefore turns white about 0.7 to 1.4 s after a window's
   cleanup starts.
 
+- **The dictation record measures settling.** `t_first_settled_ms` is the
+  time from the startDictation action to the first snapshot whose settled text
+  is non-empty, next to `t_first_preview_ms`. Dev-log builds only.
+
 ## Environment prerequisites discovered
 
 - **Metal Toolchain** is required to build the mlx-swift dependency (it compiles
