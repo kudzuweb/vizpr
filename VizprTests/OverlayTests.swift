@@ -51,7 +51,8 @@ struct SettleGateTests {
         let epoch = gate.beginSession()
         gate.noteDrained(epoch: epoch)
         let start = ContinuousClock.now
-        await gate.awaitDrain(cap: .seconds(5))
+        let outcome = await gate.awaitDrain(cap: .seconds(5))
+        #expect(outcome == .drained)
         #expect(ContinuousClock.now - start < .milliseconds(100))
     }
 
@@ -64,8 +65,9 @@ struct SettleGateTests {
             gate.noteDrained(epoch: epoch)
         }
         let start = ContinuousClock.now
-        await gate.awaitDrain(cap: .seconds(5))
+        let outcome = await gate.awaitDrain(cap: .seconds(5))
         let elapsed = ContinuousClock.now - start
+        #expect(outcome == .drained)
         #expect(elapsed < .seconds(1), "waiter held past the drain: \(elapsed)")
     }
 
@@ -74,8 +76,9 @@ struct SettleGateTests {
         let gate = SettleGate()
         gate.beginSession()
         let start = ContinuousClock.now
-        await gate.awaitDrain(cap: .milliseconds(80))
+        let outcome = await gate.awaitDrain(cap: .milliseconds(80))
         let elapsed = ContinuousClock.now - start
+        #expect(outcome == .capped)
         #expect(elapsed >= .milliseconds(80))
         #expect(elapsed < .seconds(2), "cap did not bound the wait: \(elapsed)")
     }

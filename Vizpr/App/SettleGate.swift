@@ -1,15 +1,21 @@
 import Foundation
 
-/// The flush-settle window (NOTES: §15 amendment, adopted 2026-07-04).
+/// How a settle wait ended, for the dev log's settle line.
+enum SettleOutcome {
+    case drained
+    case capped
+}
+
+/// The tail-settle window (NOTES: §15 amendment, adopted 2026-07-04).
 /// Commit no longer snapshots at the instant of release: it waits for the
-/// session to DRAIN — every ASR event including the commit-time flush
+/// session to DRAIN — every ASR event including the commit-time tail final
 /// delivered to the display — or a hard cap, whichever first. WYSIWYG is
 /// preserved as displayed==injected, with "at stop" now "at stop + settle".
 ///
 /// This is a data-loss fix (quick tap-speak-release under ~2 s used to
 /// commit an empty display and the speech vanished; field-verified fixed).
 /// Cleanup remains STRICT-CANCEL — the settle applies only to the bounded
-/// ASR flush.
+/// ASR tail decode.
 ///
 /// Session identity: drains are epoch-tagged. A late drain from a cancelled
 /// or capped session must not satisfy the NEXT session's settle (review
@@ -38,8 +44,9 @@ final class SettleGate {
     }
 
     /// Wait until the current session drains, bounded by `cap`.
-    func awaitDrain(cap: Duration) async {
-        if drained { return }
+    @discardableResult
+    func awaitDrain(cap: Duration) async -> SettleOutcome {
+        if drained { return .drained }
         let waitEpoch = epoch
         let timeout = Task { @MainActor [weak self] in
             // A cancelled timeout must NOT fall through to resume (review
@@ -55,6 +62,7 @@ final class SettleGate {
         resume()
         await withCheckedContinuation { continuation = $0 }
         timeout.cancel()
+        return drained ? .drained : .capped
     }
 
     /// App terminating: release any parked waiter so shutdown can proceed.

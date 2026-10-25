@@ -536,13 +536,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     let commitAt = ContinuousClock.now
                     #endif
                     self?.audioPipeline?.stop()
-                    // Flush-settle window (§15 amendment): let the ASR flush
-                    // land on the display — in the mutable color — before
+                    // Tail-settle window (§15 amendment): let the ASR tail
+                    // final land on the display — in the mutable color — before
                     // snapshotting, bounded so a hung engine can't hold the
                     // commit hostage. WYSIWYG holds: displayed==injected,
                     // "at stop" is now "at stop + settle".
                     let cap = self?.settingsStore.settings.settleCapMs ?? 350
+                    #if DICT_DEV_LOG
+                    let settleStart = ContinuousClock.now
+                    let settle = await self?.settleGate.awaitDrain(cap: .milliseconds(cap))
+                    if let settle {
+                        let waited = ContinuousClock.now - settleStart
+                        let waitedMs = Int(waited.components.seconds) * 1000
+                            + Int(waited.components.attoseconds / 1_000_000_000_000_000)
+                        VizprTranscriptLogger.note(
+                            "settle: \(settle == .drained ? "drained" : "capped") after \(waitedMs) ms"
+                        )
+                    }
+                    #else
                     await self?.settleGate.awaitDrain(cap: .milliseconds(cap))
+                    #endif
                     // Atomic WYSIWYG gate: snapshot displayed text, cancel
                     // in-flight cleanup. The injector receives exactly this
                     // string and transforms nothing (§12).
