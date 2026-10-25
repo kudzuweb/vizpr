@@ -171,6 +171,113 @@ struct FluidAudioASRTests {
         #expect(sawFinal, "cold-engine session produced no finalized events")
     }
 
+    /// Events from one engine stream, each tagged with whether the session's
+    /// audio input had already ended when it arrived.
+    private final class EventLog: @unchecked Sendable {
+        private let lock = NSLock()
+        private var entries: [(event: TokenEvent, afterInputEnded: Bool)] = []
+        private var inputEnded = false
+
+        func markInputEnded() { lock.withLock { inputEnded = true } }
+        func record(_ event: TokenEvent) {
+            lock.withLock { entries.append((event, inputEnded)) }
+        }
+        var all: [(event: TokenEvent, afterInputEnded: Bool)] { lock.withLock { entries } }
+        var afterInputEnded: [TokenEvent] { all.filter(\.afterInputEnded).map(\.event) }
+    }
+
+    /// What the draft decoder produces for `samples` directly, bypassing the engine.
+    private func directDecode(_ samples: [Float]) async throws -> String {
+        let directory = try #require(Bundle.main.resourceURL?
+            .appendingPathComponent("Models/parakeet-tdt-0.6b-v2"))
+        let models = try await AsrModels.load(from: directory, version: .v2)
+        let manager = AsrManager(config: .default)
+        try await manager.loadModels(models)
+        var state = TdtDecoderState.make(decoderLayers: await manager.decoderLayerCount)
+        return try await manager.transcribe(samples, decoderState: &state).text
+    }
+
+    @Test("A short session's committed tail is the draft decoder's output, with no draft after input ends")
+    func shortSessionTailIsDraftDecode() async throws {
+        DownloadUtils.enforceOffline = true
+        let speech = try fixtureSamples()   // ~2.6 s: under the 10 s confirmation context
+
+        let engine = FluidAudioASR()
+        try await engine.prepare()
+
+        let (audio, feeder) = AsyncStream.makeStream(of: [Float].self)
+        let log = EventLog()
+        let consumer = Task {
+            for await event in engine.transcribe(audio) { log.record(event) }
+        }
+        for start in stride(from: 0, to: speech.count, by: 3200) {
+            feeder.yield(Array(speech[start ..< min(start + 3200, speech.count)]))
+            try await Task.sleep(for: .milliseconds(40))
+        }
+        // Let the last draft decode finish, so what follows is the commit alone.
+        try await Task.sleep(for: .milliseconds(1500))
+        log.markInputEnded()
+        feeder.finish()
+        await consumer.value
+
+        let after = log.afterInputEnded
+        #expect(!after.contains { if case .draft = $0 { true } else { false } },
+                "a draft arrived after the input ended: \(after)")
+        let finals = after.compactMap { event -> String? in
+            if case let .finalized(text, _, _) = event { text } else { nil }
+        }
+        #expect(finals.count == 1, "expected exactly one commit final, got \(finals)")
+        #expect(finals.first == (try await directDecode(speech)),
+                "the commit final is not the draft decoder's output for the same samples")
+    }
+
+    @Test("A session begun while the previous one finishes adds no event to the previous stream")
+    func overlappingSessionDoesNotLeak() async throws {
+        DownloadUtils.enforceOffline = true
+        let speech = try fixtureSamples()
+
+        let engine = FluidAudioASR()
+        try await engine.prepare()
+
+        let (firstAudio, firstFeeder) = AsyncStream.makeStream(of: [Float].self)
+        let firstLog = EventLog()
+        let firstConsumer = Task {
+            for await event in engine.transcribe(firstAudio) { firstLog.record(event) }
+        }
+        firstFeeder.yield(speech)
+        try await Task.sleep(for: .milliseconds(1500))
+        firstLog.markInputEnded()
+        firstFeeder.finish()
+
+        // The second session starts at once, while the first is still decoding
+        // its tail, and keeps feeding audio the first must never read.
+        let (secondAudio, secondFeeder) = AsyncStream.makeStream(of: [Float].self)
+        let secondConsumer = Task { () -> Int in
+            var finals = 0
+            for await event in engine.transcribe(secondAudio) {
+                if case .finalized = event { finals += 1 }
+            }
+            return finals
+        }
+        secondFeeder.yield(speech)
+        await firstConsumer.value
+
+        let entries = firstLog.all
+        let finalIndices = entries.indices.filter {
+            if case .finalized = entries[$0].event { entries[$0].afterInputEnded } else { false }
+        }
+        #expect(finalIndices.count <= 1, "more than one commit final on the first stream")
+        if let index = finalIndices.first {
+            #expect(index == entries.count - 1, "an event followed the first stream's commit final")
+        }
+        #expect(!firstLog.afterInputEnded.contains { if case .draft = $0 { true } else { false } },
+                "a draft reached the first stream after its input ended")
+
+        secondFeeder.finish()
+        let secondFinals = await secondConsumer.value
+        #expect(secondFinals == 1, "the second session should still commit normally")
+    }
+
     private func assertGoldenExpectations(finals: [Final], drafts: [(windowID: Int, text: String)]) {
         // Golden expectations, tolerant to window-seam nondeterminism AND to
         // Parakeet's inverse text normalization: the fixture says "testing one

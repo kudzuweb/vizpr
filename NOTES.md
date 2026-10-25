@@ -629,6 +629,81 @@ belong with the Settings work rather than the hotkey PR:
   commit; TokenStream's generation checks must drop these (they arrive after
   the snapshot).
 
+## Tail integrity at commit (2026-10-25)
+
+At commit, the gray tail draft the user proofread used to be replaced by
+FluidAudio's end-of-stream flush, which decodes the same audio differently:
+it splits the unconfirmed tail at 10 s window boundaries, decodes the last
+fragment with no right context, and hands sub-threshold windows to an
+un-gated draft path. Two field cases from `debug.log`:
+
+- **Words lost, 2026-10-24T00:17:17Z.** The last draft read "...logging so you
+  can look"; the flush emitted finals "...so you." and "."; the injected text
+  ended "so you." The session was 11.26 s with no confirmation, so the flush
+  decoded [0, 10 s) and then [8 s, 11.26 s) as separate windows.
+- **Words invented, 2026-10-24T18:18:50Z.** The last real final was "...in the
+  CLI." (confidence 0.99), the VAD reported probability 0.00 from chunk 388
+  on, and tail drafts read "So it's uh yeah." After `audio stream ended` the
+  flush emitted a draft ". to spend half of my", which was injected and
+  confirmed by Mauria as a hallucination.
+
+Decisions:
+
+- **The tail's final text is a draft-style decode.** On end of input,
+  `FluidAudioASR` closes drafts, awaits the draft task, calls the manager's
+  `cancel()` (not `finish()`, which is the flush), awaits the update stream,
+  then decodes everything past the confirmed boundary once with the same
+  no-context batch decoder the drafts use and emits it as `.finalized`. The
+  commit range is capped at 15 s (`ASRConstants.maxModelSamples`), wider than
+  the 12 s draft cap, because `cancel()` drops a window decode still in
+  flight and, for the session's first window, nothing else covers its first
+  seconds. The decode is fresh every time: the last draft plan rarely ends at
+  the final sample, so reusing a finished draft would be the rare path.
+- **Every sliding-window update is finalized.** The manager advances its
+  window whether or not a decode met the 0.80 threshold and overwrites the
+  volatile text on the next update, so an unconfirmed window's text had no
+  later chance to appear. Its confidence travels with the event and
+  SmartCleanup's 0.85 gate sends weak text to cleanup. The boundary stays
+  `windowsProcessed x 10 s`, without the 2 s right context: the tail
+  re-decodes that 2 s and `SeamMerger` trims the repeat, while a boundary
+  past it would cut words straddling the window's audio end.
+- **Late work from a finished session is ignored.** `AudioPipeline.stop()`
+  clears its session task at once, so a new `transcribe` can begin while the
+  previous one still finishes. `beginSession()` returns a session number and
+  every actor call the finishing task makes carries it and does nothing once
+  it has moved on.
+- **The ASR no longer hears long silence.** `SpeechGate` sits between the VAD
+  and the engine in `AudioPipeline`. While the VAD reports speech it forwards
+  audio; otherwise it holds the latest 1 s (pre-roll, because a soft onset
+  often scores under the 0.85 trigger on its first 256 ms chunk). Until the
+  VAD first triggers the hold is 4 s, so a quiet utterance it missed is not
+  lost. At the end of the stream the hold is released only when the session
+  never triggered or a held chunk scored at least 0.5. The detector keeps
+  `speechActive` true for 0.75 s after speech stops, so about 1 s of trailing
+  audio is forwarded; before this change the engine received the whole 6 s
+  auto-stop silence.
+- **Subscribe to updates before streaming.** The manager builds its update
+  continuation when the stream is built, so subscribing before
+  `startStreaming` means a quick tap's `cancel()` always finishes it.
+
+Known limits:
+
+- The settle cap can still fire before the commit decode finishes; the last
+  draft is then committed and the decode dropped, as before.
+- An unconfirmed tail longer than 15 s loses its front. That needs a window
+  decode more than 3 s late, which the field cadence does not show.
+- A quiet utterance the VAD never triggers on is decoded only from the last
+  4 s of the session and shows no live draft while it is spoken.
+- Soft speech inside a long pause that never reaches 0.5 probability is
+  dropped (11 of 3,173 sampled chunks were inactive while scoring 0.3-0.85).
+- The commit decode has no left context, so the first word after a
+  confirmation can decode slightly weaker; this is the draft policy today.
+- The seam trim is text-based, so a genuine repeat of the previous window's
+  last words can still be trimmed.
+- A window FluidAudio skips through `attemptErrorRecovery` advances its center
+  without an update, so `windowsProcessed` falls one behind for the rest of
+  that session.
+
 ## Environment prerequisites discovered
 
 - **Metal Toolchain** is required to build the mlx-swift dependency (it compiles

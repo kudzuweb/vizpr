@@ -41,7 +41,7 @@ actor FluidAudioASR: TranscriptionEngine {
     /// (observed live: transcription worked exactly once per launch).
     private var models: AsrModels?
 
-    // MARK: Draft track (PR 4.5)
+    // MARK: Draft track (PR 4.5) and commit tail
     //
     // The sliding-window manager's advertised 1s hypothesis updates are dead
     // config in the pinned revision — nothing consumes hypothesisChunkSeconds,
@@ -50,8 +50,19 @@ actor FluidAudioASR: TranscriptionEngine {
     // decode over the unconfirmed tail, published as .draft events. Decoding runs
     // in its own task, decoupled from audio ingestion, and refreshes as fast as
     // the decoder sustains (floor: DraftTailTracker.cadenceFloorSamples).
-    // One session at a time (enforced by AudioPipeline); this state is reset in
-    // beginSession().
+    //
+    // When the input ends, the tail's final text comes from that same decoder,
+    // not from the sliding-window manager's flush: the flush splits the tail at
+    // window boundaries, decodes its last fragment with no right context and
+    // can decode silence into words, so the text the user proofread as a draft
+    // would be replaced by a different decode of the same audio. The manager is
+    // cancelled instead of finished, and one more draft-style decode of the
+    // tail is published as the final event.
+    //
+    // AudioPipeline runs one session at a time, but a new transcribe() can begin
+    // while the previous one is still finishing; `sessionCounter` lets the
+    // finishing task's calls into this actor detect that and do nothing. This
+    // state is reset in beginSession().
     private var batchManager: AsrManager?
     private var tailTracker = DraftTailTracker()
     private var sessionBuffer: [Float] = []
@@ -59,9 +70,10 @@ actor FluidAudioASR: TranscriptionEngine {
     private var windowsProcessed = 0
     private var lastDraftText = ""
     /// True while tail drafts may be published. Closed (under actor
-    /// serialization) before the end-of-session flush, so no tail draft can be
-    /// yielded after the flush's finals.
+    /// serialization) when the input ends, so no tail draft can be yielded
+    /// after the commit final.
     private var draftsOpen = false
+    private var sessionCounter = 0
 
     /// Audio covered by one processed window (locked config: 10 s @ 16 kHz).
     /// Updates don't carry reliable session-absolute sample positions, so the
@@ -79,16 +91,22 @@ actor FluidAudioASR: TranscriptionEngine {
         draftMinTailSamples = max(1, milliseconds) * 16   // 16 kHz
     }
 
-    private func beginSession() {
+    /// Starts a session and returns its identity. Every later actor call from
+    /// that session's task passes it back and is ignored once another session
+    /// has begun.
+    private func beginSession() -> Int {
+        sessionCounter += 1
         tailTracker = DraftTailTracker(minTailSamples: draftMinTailSamples)
         sessionBuffer.removeAll(keepingCapacity: true)
         bufferStartSample = 0
         windowsProcessed = 0
         lastDraftText = ""
         draftsOpen = true
+        return sessionCounter
     }
 
-    private func closeDrafts() {
+    private func closeDrafts(session: Int) {
+        guard session == sessionCounter else { return }
         draftsOpen = false
     }
 
@@ -99,7 +117,8 @@ actor FluidAudioASR: TranscriptionEngine {
     }
 
     /// Ingest session audio. Buffer bookkeeping only; never decodes.
-    private func ingest(_ samples: [Float]) {
+    private func ingest(_ samples: [Float], session: Int) {
+        guard session == sessionCounter else { return }
         sessionBuffer.append(contentsOf: samples)
         tailTracker.append(sampleCount: samples.count)
         trimBuffer()
@@ -107,7 +126,8 @@ actor FluidAudioASR: TranscriptionEngine {
 
     /// A decode plan if a draft pass is due, or nil. The slice is copied here,
     /// inside the actor call, so later trims cannot invalidate it.
-    private func takeDraftPlan() -> DraftPlan? {
+    private func takeDraftPlan(session: Int) -> DraftPlan? {
+        guard session == sessionCounter, draftsOpen else { return nil }
         guard let request = tailTracker.takeDecodeRequest() else { return nil }
         // Decode from the unconfirmed boundary (not the left-context start):
         // including confirmed audio would re-transcribe already-final text into
@@ -125,9 +145,10 @@ actor FluidAudioASR: TranscriptionEngine {
     /// last one. Yields inside the actor so that `closeDrafts()` strictly
     /// orders against it.
     private func emitTailDraft(
-        _ text: String, windowID: Int, to continuation: AsyncStream<TokenEvent>.Continuation
+        _ text: String, windowID: Int, session: Int,
+        to continuation: AsyncStream<TokenEvent>.Continuation
     ) {
-        guard draftsOpen, shouldEmitDraft(text) else { return }
+        guard session == sessionCounter, draftsOpen, shouldEmitDraft(text) else { return }
         continuation.yield(.draft(windowID: windowID, text: text))
     }
 
@@ -139,8 +160,19 @@ actor FluidAudioASR: TranscriptionEngine {
         }
     }
 
+    /// The decode plan for the commit-time tail: everything past the confirmed
+    /// boundary, or nil when nothing is unconfirmed or the session has moved.
+    private func takeCommitPlan(session: Int) -> DraftPlan? {
+        guard session == sessionCounter, let range = tailTracker.commitRange() else { return nil }
+        let start = range.lowerBound - bufferStartSample
+        let end = range.upperBound - bufferStartSample
+        guard start >= 0, end <= sessionBuffer.count else { return nil }
+        return DraftPlan(samples: Array(sessionBuffer[start ..< end]), windowID: windowsProcessed)
+    }
+
     /// A window update arrived: the window advanced past another chunk.
-    private func noteWindowProcessed() {
+    private func noteWindowProcessed(session: Int) {
+        guard session == sessionCounter else { return }
         windowsProcessed += 1
         tailTracker.confirm(through: windowsProcessed * Self.samplesPerWindow)
     }
@@ -152,14 +184,26 @@ actor FluidAudioASR: TranscriptionEngine {
         return true
     }
 
-    /// Stateless draft decode of the unconfirmed tail. Errors are swallowed —
-    /// a failed draft pass costs one refresh, never the session.
-    private func decodeDraft(_ samples: [Float]) async -> String? {
+    private struct TailDecode {
+        let text: String
+        let confidence: Float
+        let tokenConfidences: [Float]
+    }
+
+    /// Stateless decode of the unconfirmed tail with no left context, for both
+    /// drafts and the commit final. Errors are swallowed — a failed draft pass
+    /// costs one refresh, and a failed commit decode falls back to the last
+    /// draft the user already saw.
+    private func decodeDraft(_ samples: [Float]) async -> TailDecode? {
         guard let batchManager else { return nil }
         do {
             var state = TdtDecoderState.make(decoderLayers: await batchManager.decoderLayerCount)
             let result = try await batchManager.transcribe(samples, decoderState: &state)
-            return result.text
+            return TailDecode(
+                text: result.text,
+                confidence: result.confidence,
+                tokenConfidences: result.tokenTimings?.map(\.confidence) ?? []
+            )
         } catch {
             return nil
         }
@@ -237,11 +281,17 @@ actor FluidAudioASR: TranscriptionEngine {
                     return
                 }
                 do {
-                    await self.beginSession()
+                    let session = await self.beginSession()
+                    // Subscribe before streaming starts: the manager's update
+                    // continuation is created when the stream is built, so a
+                    // cancel() after a very short session still finishes it.
+                    // Subscribing inside the task would let that cancel() find
+                    // no continuation and leave the task waiting forever.
+                    let updates = await manager.transcriptionUpdates
                     try await manager.startStreaming(source: .microphone)
 
                     let updatesTask = self.startUpdatesTask(
-                        manager: manager, continuation: continuation
+                        updates: updates, session: session, continuation: continuation
                     )
 
                     // Draft task: decodes the unconfirmed tail whenever woken,
@@ -252,7 +302,9 @@ actor FluidAudioASR: TranscriptionEngine {
                     let (wakeups, wake) = AsyncStream.makeStream(
                         of: Void.self, bufferingPolicy: .bufferingNewest(1)
                     )
-                    let draftTask = self.startDraftTask(wakeups: wakeups, continuation: continuation)
+                    let draftTask = self.startDraftTask(
+                        wakeups: wakeups, session: session, continuation: continuation
+                    )
                     defer {
                         wake.finish()
                         draftTask.cancel()
@@ -265,26 +317,55 @@ actor FluidAudioASR: TranscriptionEngine {
                         if let buffer = Self.pcmBuffer(from: samples) {
                             await manager.streamAudio(buffer)
                         }
-                        await self.ingest(samples)
+                        await self.ingest(samples, session: session)
                         wake.yield()
                     }
 
-                    // Stop tail drafts before the flush so none can land after
-                    // the flush's finals. The draft task is not awaited: that
-                    // would delay the flush by up to one decode.
+                    // Input ended (commit/cancel upstream). Close drafts, then
+                    // wait for any draft decode already running: FluidAudio
+                    // checks cancellation only between model stages, so
+                    // cancelling would not stop it, and waiting guarantees no
+                    // draft lands after the commit final. It costs at most
+                    // one decode.
                     wake.finish()
-                    await self.closeDrafts()
-                    draftTask.cancel()
+                    await self.closeDrafts(session: session)
+                    await draftTask.value
 
-                    // Input ended (commit/cancel upstream): finish() flushes the
-                    // remaining assembled audio, and that flush publishes the
-                    // tail through transcriptionUpdates as confirmed updates —
-                    // which the updates task above already forwards. Its return
-                    // value is the WHOLE transcript, so emitting it as an event
-                    // would duplicate everything already finalized (observed
-                    // live: the full session text repeated in the last event).
-                    _ = try await manager.finish()
-                    updatesTask.cancel()
+                    // cancel() instead of finish(): finish() flushes the
+                    // assembled audio as window-boundary fragments, which is
+                    // the decode this path replaces. cancel() ends the update
+                    // stream, so awaiting the updates task guarantees every
+                    // delivered window has advanced the confirmed boundary.
+                    await manager.cancel()
+                    await updatesTask.value
+
+                    // The tail's final text is one more draft-style decode over
+                    // everything past the boundary.
+                    if let plan = await self.takeCommitPlan(session: session) {
+                        #if DICT_DEV_LOG
+                        let started = ContinuousClock.now
+                        #endif
+                        let result = await self.decodeDraft(plan.samples)
+                        #if DICT_DEV_LOG
+                        let elapsed = ContinuousClock.now - started
+                        let elapsedMs = Int(elapsed.components.seconds) * 1000
+                            + Int(elapsed.components.attoseconds / 1_000_000_000_000_000)
+                        VizprTranscriptLogger.note(
+                            "commit tail: decoded \(elapsedMs) ms over \(plan.samples.count) samples"
+                        )
+                        #endif
+                        if let result, !result.text.isEmpty {
+                            continuation.yield(.finalized(
+                                text: result.text,
+                                confidence: result.confidence,
+                                tokenConfidences: result.tokenConfidences
+                            ))
+                        }
+                    } else {
+                        #if DICT_DEV_LOG
+                        VizprTranscriptLogger.note("commit tail: nothing to decode")
+                        #endif
+                    }
                 } catch {
                     await manager.cancel()
                 }
@@ -305,29 +386,33 @@ actor FluidAudioASR: TranscriptionEngine {
     /// travels with the event and SmartCleanup's gate sends a weak window to
     /// cleanup.
     private nonisolated func startUpdatesTask(
-        manager: SlidingWindowAsrManager, continuation: AsyncStream<TokenEvent>.Continuation
+        updates: AsyncStream<SlidingWindowTranscriptionUpdate>, session: Int,
+        continuation: AsyncStream<TokenEvent>.Continuation
     ) -> Task<Void, Never> {
         Task {
-            for await update in await manager.transcriptionUpdates {
+            for await update in updates {
                 continuation.yield(.finalized(
                     text: update.text,
                     confidence: update.confidence,
                     tokenConfidences: update.tokenTimings.map(\.confidence)
                 ))
-                await self.noteWindowProcessed()
+                await self.noteWindowProcessed(session: session)
             }
         }
     }
 
     /// Runs one draft decode per wake: plan, decode, publish.
     private nonisolated func startDraftTask(
-        wakeups: AsyncStream<Void>, continuation: AsyncStream<TokenEvent>.Continuation
+        wakeups: AsyncStream<Void>, session: Int,
+        continuation: AsyncStream<TokenEvent>.Continuation
     ) -> Task<Void, Never> {
         Task {
             for await _ in wakeups {
-                guard let plan = await self.takeDraftPlan(),
-                      let text = await self.decodeDraft(plan.samples) else { continue }
-                await self.emitTailDraft(text, windowID: plan.windowID, to: continuation)
+                guard let plan = await self.takeDraftPlan(session: session),
+                      let result = await self.decodeDraft(plan.samples) else { continue }
+                await self.emitTailDraft(
+                    result.text, windowID: plan.windowID, session: session, to: continuation
+                )
             }
         }
     }

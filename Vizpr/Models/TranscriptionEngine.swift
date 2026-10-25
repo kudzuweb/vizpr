@@ -25,8 +25,9 @@ protocol TranscriptionEngine: Sendable {
     func prepare() async throws
 
     /// Transcribe one dictation session: consume the audio stream (16 kHz mono
-    /// Float32 batches) and emit token events until the input ends, then finish
-    /// with the engine's final flush. Cancelling the surrounding task stops
-    /// transcription promptly.
+    /// Float32 batches) and emit token events until the input ends. After the
+    /// input ends the engine finalizes the unconfirmed tail with one more tail
+    /// decode and emits no further drafts. Cancelling the surrounding task
+    /// stops transcription promptly.
     func transcribe(_ audio: AsyncStream<[Float]>) -> AsyncStream<TokenEvent>
 }
