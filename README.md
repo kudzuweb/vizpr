@@ -30,7 +30,8 @@ gitignored — `project.yml` plus the Swift sources are the source of truth. Run
 `scripts/bootstrap.sh` again whenever `project.yml` changes.
 
 Debug builds include a compile-gated dev transcript logger (`DICT_DEV_LOG`);
-Release builds exclude it entirely.
+Release builds exclude it entirely. The logs go to `~/Documents/dictation-dev/`;
+under `xcodebuild test` they go to a per-run temporary directory instead.
 
 ## Design
 

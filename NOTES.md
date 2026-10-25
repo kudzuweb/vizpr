@@ -1039,6 +1039,19 @@ Known limits:
 - A pause pending when the input ends is not run as a window; the commit
   decode covers it. A pause less than 0.5 s past a forced window's cut is
   cleared with it; a pause further past survives and closes the next window.
+## Test runs no longer write the dev log (2026-10-25)
+
+The test host is the Debug app, so suites with fake engines (AudioPipelineTests,
+FluidAudioASRTests) appended their traffic to `~/Documents/dictation-dev/debug.log`
+and `transcripts.jsonl`. Under tests, `VizprDevLogDirectory` now points both
+writers at `vizpr-tests-<pid>` in the temporary directory, and the existing
+"dev transcript log target:" line says where. Production paths are unchanged.
+
+`VizprTranscriptLogger.note` is also called from several threads, and each call
+opened, seeked and wrote the file unserialized: two callers at the same instant
+sought to the same end offset and one line overwrote the other (a `window:` line
+and an `asr final` line never both landed). A lock now wraps the open-write-close;
+the call stays synchronous so a caller's next line follows its own previous one.
 
 ## Environment prerequisites discovered
 
