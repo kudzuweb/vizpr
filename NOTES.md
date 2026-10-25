@@ -511,7 +511,8 @@ itself. Each `t_*` field is integer milliseconds since the startDictation
 action, or `null` when the mark never happened: `t_capture_ms` (first audio
 chunk), `t_speech_onset_ms` (first VAD speech start), `t_first_draft_ms`
 (first draft reaches the tracker), `t_first_preview_ms` (first non-empty
-display snapshot rendered), `t_commit_ms` (commit action received) and
+display snapshot rendered), `t_first_settled_ms` (first snapshot with
+non-empty settled text, added by windows by pause), `t_commit_ms` (commit action received) and
 `t_injected_ms` (inject returned). `draft_count` counts drafts;
 `draft_interval_mean_ms` and `draft_interval_max_ms` give the gaps between
 consecutive drafts, `null` below two drafts. Baseline to beat: first preview
@@ -755,13 +756,6 @@ Known limits:
   4 s of the session and shows no live draft while it is spoken.
 - Soft speech inside a long pause that never reaches 0.5 probability is
   dropped (11 of 3,173 sampled chunks were inactive while scoring 0.3-0.85).
-- The commit decode has no left context, so the first word after a
-  confirmation can decode slightly weaker; this is the draft policy today.
-- The seam trim is text-based, so a genuine repeat of the previous window's
-  last words can still be trimmed.
-- A window FluidAudio skips through `attemptErrorRecovery` advances its center
-  without an update, so `windowsProcessed` falls one behind for the rest of
-  that session.
 
 ## Windows by pause (2026-10-25)
 
@@ -777,7 +771,9 @@ injected text read "whatever pushes are. whatever pushes already."
 
 The app now owns its windows: a window closes at each pause the VAD reports,
 and every decode is cut by token timing, so no decode repeats another's words.
-The decisions, by step:
+This replaces the sliding-window decisions in "Tail integrity at commit" (the
+window boundary, the seam trim, cancelling the manager); its other decisions
+stand. The decisions, by step:
 
 - **The engine's input carries pause marks.** `TranscriptionEngine.transcribe`
   takes `AsyncStream<AudioInput>`, where `AudioInput` is `.samples([Float])` or
@@ -866,6 +862,24 @@ The decisions, by step:
 - **The dictation record measures settling.** `t_first_settled_ms` is the
   time from the startDictation action to the first snapshot whose settled text
   is non-empty, next to `t_first_preview_ms`. Dev-log builds only.
+
+Known limits:
+
+- A VAD `speechEnd` needs 0.75 s of silence, so a window closes only at a real
+  pause. Text turns final no sooner than 0.75 s after the pause plus the
+  decode; speech with no pauses waits for the forced 10 s window.
+- White text waits for cleanup, so the lag after a pause is the cleanup time
+  above; the two-sentence backstop bounds it while cleanup lags.
+- A forced window cuts on the clock, at the widest gap between words near
+  10 s. Two decodes can place the same word's start a frame or more apart
+  (FluidAudio's emission-delay correction is a median shift, not a per-token
+  alignment). Confirming through the end of the last kept word makes the next
+  window the one that decides any word the previous one omitted, so a word is
+  kept once or, at worst, truncated in one window and recovered in the next.
+- The decode task is single, so a confirm delays the next draft refresh by one
+  decode, about 150 ms.
+- A pause pending when the input ends, and one that follows a forced window,
+  are not run as windows; the next window or the commit decode covers them.
 
 ## Environment prerequisites discovered
 

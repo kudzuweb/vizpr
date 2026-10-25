@@ -1,15 +1,17 @@
 /// Token events flowing out of a transcription engine (PLAN.md §5 + §11).
 ///
-/// FluidAudio runs Parakeet TDT as an offline encoder over overlapping sliding
-/// windows: text inside the active window legitimately *revises* as audio
-/// accumulates, and commits to final when a window advances past it. The event
-/// model mirrors that honestly:
+/// Parakeet TDT is an offline encoder, so text inside the unconfirmed tail
+/// legitimately *revises* as audio accumulates, and commits to final when the
+/// engine closes a window over it (at a pause, or after 12 s of speech without
+/// one). The event model mirrors that honestly:
 ///
-/// - `.draft` — the active window's tentative text. A new draft with the same
-///   `windowID` REPLACES the previous one (TokenStream's draft-replaces-draft
-///   rule); a new `windowID` means the window advanced and a fresh draft began.
-/// - `.finalized` — text the engine has committed. Never revised afterward.
-///   Carries overall and per-token confidence for the cleanup gate (§1).
+/// - `.draft` — the unconfirmed tail's tentative text. A new draft with the
+///   same `windowID` REPLACES the previous one (TokenStream's
+///   draft-replaces-draft rule); a new `windowID` means a window closed and a
+///   fresh draft began.
+/// - `.finalized` — text the engine has committed. Never revised afterward,
+///   and never repeating the words of an earlier final. Carries overall and
+///   per-token confidence for the cleanup gate (§1).
 enum TokenEvent: Sendable, Equatable {
     case draft(windowID: Int, text: String)
     case finalized(text: String, confidence: Float, tokenConfidences: [Float])
