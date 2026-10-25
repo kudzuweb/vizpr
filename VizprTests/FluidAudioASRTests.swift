@@ -282,9 +282,12 @@ struct FluidAudioASRTests {
     private func utterances(repeats: Int, pauseMarks: Bool) throws -> [AudioInput] {
         let speech = try fixtureSamples()
         let silence = [Float](repeating: 0, count: Self.sampleRate * 3 / 4)
+        // After a pause the gate releases up to 1 s of held audio ahead of the
+        // resumed speech, so the engine always hears some silence before it.
+        let lead = [Float](repeating: 0, count: pauseMarks ? Self.sampleRate * 2 / 5 : 0)
         var inputs: [AudioInput] = []
         for _ in 0..<repeats {
-            let audio = speech + silence
+            let audio = lead + speech + silence
             for start in stride(from: 0, to: audio.count, by: 3200) {
                 inputs.append(.samples(Array(audio[start ..< min(start + 3200, audio.count)])))
             }
@@ -333,6 +336,9 @@ struct FluidAudioASRTests {
         let afterEnd = finalTexts(log.afterInputEnded)
         #expect(beforeEnd.count == 3, "expected one final per pause before the input ended: \(beforeEnd)")
         #expect(leadWordCount(in: beforeEnd + afterEnd) == 3, "a window repeated words: \(beforeEnd + afterEnd)")
+        // A pause window confirms through the pause, so nothing is left for a
+        // commit decode over context plus silence.
+        #expect(afterEnd.isEmpty, "the commit decode emitted after the last pause: \(afterEnd)")
     }
 
     @Test("Twelve seconds of speech without a pause yields a forced window before the input ends")

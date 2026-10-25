@@ -223,6 +223,27 @@ struct TokenStreamTests {
         #expect(await ts.settled.isEmpty)
     }
 
+    @Test("A skip blocked by a running cleanup settles when that cleanup returns stale")
+    func blockedSkipRetriedWhenCleanupsDrain() async throws {
+        let ts = stream()
+        await ts.beginSession()
+        let first = await ts.apply(.finalized(text: "First one.", confidence: 0.5, tokenConfidences: []))
+        let release = AtomicCounter()
+        _ = await ts.launchCleanup { _ in
+            while release.value == 0 { try? await Task.sleep(nanoseconds: 2_000_000) }
+            // The second final moved the generation on, so this result is stale.
+            _ = await ts.applyCleanup(expectedGeneration: first, rewrittenLive: "First one!")
+        }
+        let second = await ts.apply(.finalized(text: "Second one.", confidence: 0.95, tokenConfidences: []))
+        await ts.resolveLive(generation: second)
+        #expect(await ts.settled.isEmpty)
+
+        release.increment()
+        try await Task.sleep(nanoseconds: 30_000_000)
+        #expect(await ts.settled == "First one. Second one.")
+        #expect(await ts.live.isEmpty)
+    }
+
     @Test("A cleanup that fails settles the raw text it was given")
     func failedCleanupSettles() async throws {
         let ts = stream()
@@ -303,7 +324,7 @@ struct TokenStreamPropertyTests {
             var windowID = 0
 
             for _ in 0..<120 {
-                switch rng.next() % 10 {
+                switch rng.next() % 12 {
                 case 0...2:
                     // Sometimes redraft an OLD window (generator gap from review:
                     // stale same-window drafts after a finalize must not mutate
@@ -328,6 +349,10 @@ struct TokenStreamPropertyTests {
                     await ts.applyCleanup(
                         expectedGeneration: current, rewrittenLive: randomText(&rng)
                     )
+                case 10:
+                    await ts.resolveLive(generation: await ts.generation)
+                case 11:
+                    await ts.resolveLive(generation: Int(rng.next() % 40))
                 default:
                     // Straggler outside session boundaries is exercised in the
                     // session-boundary property below; here keep feeding.

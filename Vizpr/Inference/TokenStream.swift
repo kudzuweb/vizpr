@@ -75,6 +75,10 @@ actor TokenStream {
     /// of "commit cancels everything in flight" — recorded per invariant 11.
     private var cleanupTasks: [Int: Task<Void, Never>] = [:]
     private var nextCleanupID = 0
+    /// The generation of a `resolveLive` that was refused only because a
+    /// cleanup was running. When the last cleanup finishes and that generation
+    /// is still current, nothing else will resolve it, so it settles then.
+    private var blockedResolution: Int?
 
     private var snapshotContinuation: AsyncStream<DisplaySnapshot>.Continuation?
 
@@ -115,6 +119,7 @@ actor TokenStream {
     private func endSession() {
         for task in cleanupTasks.values { task.cancel() }
         cleanupTasks.removeAll()
+        blockedResolution = nil
         sessionActive = false
         resetRegions()
         publish()
@@ -246,6 +251,11 @@ actor TokenStream {
 
     private func deregisterCleanup(_ id: Int) {
         cleanupTasks.removeValue(forKey: id)
+        guard cleanupTasks.isEmpty, let blocked = blockedResolution else { return }
+        blockedResolution = nil
+        guard sessionActive, blocked == generation else { return }
+        settleCompleteSentences()
+        publish()
     }
 
     /// Apply a cleanup rewrite of the live region — only if the live region is
@@ -271,11 +281,16 @@ actor TokenStream {
     /// it, cleanup is off, or it failed): settle the complete sentences of the
     /// text as it stands. Settles nothing when the generation moved on or when
     /// another cleanup is still running, whose result may rewrite an earlier
-    /// span. `finishedCleanup` is the caller's own cleanup, which no longer
+    /// span; that refusal is remembered and retried when the running cleanups
+    /// finish, if the generation is still current. `finishedCleanup` is the caller's own cleanup, which no longer
     /// counts as running.
     func resolveLive(generation expected: Int, finishedCleanup: Int? = nil) {
         if let finishedCleanup { cleanupTasks.removeValue(forKey: finishedCleanup) }
-        guard sessionActive, expected == generation, cleanupTasks.isEmpty else { return }
+        guard sessionActive, expected == generation else { return }
+        guard cleanupTasks.isEmpty else {
+            blockedResolution = expected
+            return
+        }
         settleCompleteSentences()
         publish()
     }
