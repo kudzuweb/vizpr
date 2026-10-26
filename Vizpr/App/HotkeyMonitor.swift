@@ -1,5 +1,6 @@
 import AppKit
 import Darwin
+import os
 
 /// Thin CGEventTap shell around the pure `HotkeyStateMachine` (PLAN.md §6 + §8).
 ///
@@ -8,12 +9,14 @@ import Darwin
 /// disables the tap. All the *behavior* (tap/hold/latch/commit) lives in the pure
 /// machine; everything here is mechanism.
 ///
-/// **Threading.** The tap is installed on the main run loop and every timer fires
-/// on the main run loop, so `machine` and the edge-tracking fields are only ever
-/// touched on the main thread. The C callback cannot be actor-isolated, so the
-/// class is `@unchecked Sendable` with that single-threaded discipline asserted
-/// in debug. The callback computes its disposition *synchronously* — it must,
-/// because returning nil vs. the event is what suppresses or forwards the key.
+/// **Threading.** The tap source and both timers live on a dedicated run loop
+/// thread (`HotkeyRunLoopThread`), so a blocked main thread cannot starve the tap.
+/// `machine`, `edges`, the source and the timers are only ever touched on that
+/// thread; the public entry points hop onto it. The tap port is shared with the
+/// main thread (`isTapHealthy`) behind a lock. The C callback cannot be
+/// actor-isolated, so the class is `@unchecked Sendable` with that discipline
+/// asserted in debug. The callback computes its disposition *synchronously* — it
+/// must, because returning nil vs. the event is what suppresses or forwards the key.
 ///
 /// **Fail-open.** The callback returns `.consume` (nil) only when the machine says
 /// so, and the machine only ever says so for Fn events. No code path here can
@@ -22,34 +25,51 @@ final class HotkeyMonitor: @unchecked Sendable {
     /// Escape virtual keycode.
     private static let escapeKeyCode: Int64 = 53
 
+    private let runLoopThread = HotkeyRunLoopThread()
+
+    // Hotkey-thread state.
     private var machine: HotkeyStateMachine
-
-    /// Live setting (PR 11): applies from the next press — replacing the
-    /// machine preserves its current state so a mid-session change is safe.
-    func setHoldThreshold(_ threshold: Duration) {
-        machine = HotkeyStateMachine(holdThreshold: threshold, state: machine.state)
-    }
-
-    /// Live setting (PR 11): reassign the secondary chord. A fresh tracker
-    /// is unseeded, so it silently adopts the current flag state as its
-    /// baseline (no phantom edges).
-    func setSecondaryMask(_ mask: CGEventFlags) {
-        edges = FlagEdgeTracker(secondaryMask: mask)
-    }
     /// Edge tracking lives in a pure, tested value type (see `FlagEdgeTracker`):
     /// flagsChanged reports the whole flag set, so down/up edges are derived by
     /// comparison, and that comparison has real failure modes worth testing.
     private var edges: FlagEdgeTracker
+    /// The tap currently attached to the run loop (port and source).
+    private var installed: InstalledTap?
+    private var thresholdTimer: CFRunLoopTimer?
+    private var watchdogTimer: CFRunLoopTimer?
 
-    private var machPort: CFMachPort?
-    private var runLoopSource: CFRunLoopSource?
-    private var thresholdTimer: Timer?
-    private var watchdogTimer: Timer?
+    /// State read from more than one thread.
+    private struct Shared: @unchecked Sendable {
+        var port: CFMachPort?
+        var hasObservedEvent = false
+    }
+    private let shared = OSAllocatedUnfairLock(uncheckedState: Shared())
+
+    private var machPort: CFMachPort? { shared.withLockUnchecked { $0.port } }
 
     /// True once the callback has fired at least once. Reserved for an onboarding
     /// "press Fn to confirm" liveness step; not used to infer capability, because
     /// a freshly-granted but idle tap has legitimately observed nothing yet.
-    private(set) var hasObservedEvent = false
+    var hasObservedEvent: Bool { shared.withLockUnchecked { $0.hasObservedEvent } }
+
+    /// Live setting (PR 11): applies from the next press — replacing the
+    /// machine preserves its current state so a mid-session change is safe.
+    func setHoldThreshold(_ threshold: Duration) {
+        runLoopThread.perform { [self] in
+            machine = HotkeyStateMachine(holdThreshold: threshold, state: machine.state)
+        }
+    }
+
+    /// Live setting (PR 11): reassign the secondary chord. Called on every
+    /// settings change, so an unchanged mask is a no-op, and a changed one keeps
+    /// the tracker's held-key state: a key held across the change must still
+    /// produce its up edge.
+    func setSecondaryMask(_ mask: CGEventFlags) {
+        runLoopThread.perform { [self] in
+            guard mask != edges.secondaryMask else { return }
+            edges = edges.replacingSecondaryMask(mask)
+        }
+    }
 
     /// Dictation actions for the rest of the app to consume with `for await`.
     let actions: AsyncStream<DictationAction>
@@ -64,26 +84,28 @@ final class HotkeyMonitor: @unchecked Sendable {
 
     deinit {
         // Backstop against use-after-free: the tap holds an unretained pointer to
-        // self, so it must never outlive the object. The monitor is only ever
-        // owned on the main thread, so deinit runs there. Idempotent with stop().
-        if let port = machPort {
-            CGEvent.tapEnable(tap: port, enable: false)
-            CFMachPortInvalidate(port)
-        }
-        thresholdTimer?.invalidate()
-        watchdogTimer?.invalidate()
+        // self, so it must never outlive the object. Waiting for the teardown also
+        // waits out a callback still running on the hotkey thread. Idempotent
+        // with stop().
+        var leftover = installed ?? InstalledTap()
+        leftover.timers = [thresholdTimer, watchdogTimer].compactMap { $0 }
+        let snapshot = leftover
+        let thread = runLoopThread
+        thread.performAndWait { snapshot.tearDown(on: thread) }
         actionsContinuation.finish()
     }
 
     // MARK: Lifecycle
 
-    /// Install the tap on the main run loop. Returns false if the tap could not be
-    /// created (almost always missing Accessibility) — the caller drives the
-    /// permission flow via `PermissionProbe` and retries.
+    /// Install the tap on the hotkey thread's run loop. Returns false if the tap
+    /// could not be created (almost always missing Accessibility) — the caller
+    /// drives the permission flow via `PermissionProbe` and retries.
     @MainActor
     @discardableResult
     func start() -> Bool {
         guard machPort == nil else { return true }
+        // Created here, on the caller's thread, so the Bool result is immediate;
+        // only the run-loop source is attached on the hotkey thread.
 
         let mask = CGEventMask(1 << CGEventType.flagsChanged.rawValue)
             | CGEventMask(1 << CGEventType.keyDown.rawValue)
@@ -100,36 +122,49 @@ final class HotkeyMonitor: @unchecked Sendable {
             return false
         }
 
-        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, port, 0)
-        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
-        CGEvent.tapEnable(tap: port, enable: true)
-
-        machPort = port
-        runLoopSource = source
-        startWatchdog()
+        shared.withLockUnchecked { $0.port = port }
+        let tap = InstalledTap(port: port, source: CFMachPortCreateRunLoopSource(kCFAllocatorDefault, port, 0))
+        runLoopThread.performAndWait { [self] in
+            installed = tap
+            if let source = tap.source { runLoopThread.add(source: source) }
+            tap.port.map { CGEvent.tapEnable(tap: $0, enable: true) }
+            startWatchdog()
+        }
         return true
     }
 
+    /// Remove the tap and reset all state before returning; the wait is bounded
+    /// so a wedged hotkey thread cannot hang a permission flow or app quit.
+    ///
+    /// The port is cleared here, on the caller's thread, so a `start()` that
+    /// follows a timed-out stop creates a fresh tap instead of seeing the old
+    /// one. The queued teardown removes only the tap that this call stopped, so
+    /// it can never remove that newer tap.
     @MainActor
     func stop() {
-        thresholdTimer?.invalidate(); thresholdTimer = nil
-        watchdogTimer?.invalidate(); watchdogTimer = nil
-        if let source = runLoopSource {
-            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
+        let stoppedTap = shared.withLockUnchecked { state -> ObjectIdentifier? in
+            defer { state.port = nil }
+            return state.port.map(ObjectIdentifier.init)
         }
-        if let port = machPort {
-            CGEvent.tapEnable(tap: port, enable: false)
-            CFMachPortInvalidate(port)
+        runLoopThread.performAndWait { [self] in
+            var teardown = InstalledTap()
+            teardown.timers = [thresholdTimer, watchdogTimer].compactMap { $0 }
+            if let current = installed, current.port.map(ObjectIdentifier.init) == stoppedTap {
+                teardown.port = current.port
+                teardown.source = current.source
+                installed = nil
+            }
+            teardown.tearDown(on: runLoopThread)
+            thresholdTimer = nil
+            watchdogTimer = nil
+            edges.reset()
+            // Discard any in-flight session so a later start() cannot resume a
+            // phantom latched/pressed state and mis-commit on the first press.
+            // tapDisabled has exactly the semantics we want: cancel-from-active,
+            // inert-from-idle, and it routes a .cancel to the pipeline if one is
+            // listening. apply() also tears down the threshold timer via the sync.
+            apply(machine.handle(.tapDisabled(.timeout)))
         }
-        runLoopSource = nil
-        machPort = nil
-        edges.reset()
-        // Discard any in-flight session so a later start() cannot resume a
-        // phantom latched/pressed state and mis-commit on the first press.
-        // tapDisabled has exactly the semantics we want: cancel-from-active,
-        // inert-from-idle, and it routes a .cancel to the pipeline if one is
-        // listening. apply() also tears down the threshold timer via the sync.
-        apply(machine.handle(.tapDisabled(.timeout)))
     }
 
     /// Whether the tap currently reports healthy. The watchdog re-enables a dead
@@ -146,16 +181,26 @@ final class HotkeyMonitor: @unchecked Sendable {
     /// `latched` and ignores this everywhere else. Never a bypass.
     @MainActor
     func injectAutoStop() {
-        apply(machine.handle(.autoStop))
+        runLoopThread.perform { [self] in
+            apply(machine.handle(.autoStop))
+        }
     }
 
-    // MARK: Event handling (called from the tap callback, on the main thread)
+    /// End the session when audio capture dies: the machine cancels from any
+    /// active state, so a dead recording cannot leave the hotkey latched.
+    func injectCaptureFailure() {
+        runLoopThread.perform { [self] in
+            apply(machine.handle(.captureFailed))
+        }
+    }
+
+    // MARK: Event handling (called from the tap callback, on the hotkey thread)
 
     /// Translate one CGEvent into machine input(s) and return its disposition.
     /// `nil` return means "suppress"; a passed-back event means "forward."
     fileprivate func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
-        assertMainThread()
-        hasObservedEvent = true
+        assertOnHotkeyThread()
+        shared.withLockUnchecked { $0.hasObservedEvent = true }
 
         switch type {
         case .tapDisabledByTimeout, .tapDisabledByUserInput:
@@ -190,19 +235,47 @@ final class HotkeyMonitor: @unchecked Sendable {
     }
 
     private func handleFlagsChanged(_ event: CGEvent) -> Unmanaged<CGEvent>? {
-        let now = nowMonotonic()
+        // Edges carry the event's own time: a callback serviced late (main thread
+        // blocked) must still see a quick tap as a quick tap.
+        let handledAt = nowMonotonic()
+        let converted = EventTimestamp.converted(eventNanoseconds: event.timestamp, handledAt: handledAt)
+        let now = converted ?? handledAt
 
         // One packet can toggle both Fn and the secondary combo, so process every
         // edge it produces — never early-return after Fn. Only an Fn edge can ever
-        // set `suppress`, so a non-Fn modifier change is never deleted.
+        // set `suppress`, so a packet without an Fn edge is never deleted. A packet
+        // with an Fn edge is deleted whole, including any secondary edge in it.
         var suppress = false
-        for edge in edges.edges(for: event.flags) {
+        let found = edges.edges(for: event.flags)
+        #if DICT_DEV_LOG
+        logTimestampPathOnce(edges: found, rawStamp: event.timestamp, converted: converted, handledAt: handledAt)
+        #endif
+        for edge in found {
             let decision = machine.handle(input(for: edge, at: now))
             apply(decision)
             if decision.disposition == .consume { suppress = true }
         }
         return suppress ? nil : Unmanaged.passUnretained(event)
     }
+
+    #if DICT_DEV_LOG
+    private var loggedTimestampPath = false
+
+    /// Once per launch, on the first Fn edge: records whether the event stamp was
+    /// converted or fell back to handling time, with the raw numbers, so a wrong
+    /// unit assumption is visible. Numbers only, no typed text.
+    private func logTimestampPathOnce(
+        edges: [FlagEdgeTracker.Edge], rawStamp: UInt64, converted: MonotonicTime?, handledAt: MonotonicTime
+    ) {
+        guard !loggedTimestampPath, edges.contains(where: { $0 == .fnDown || $0 == .fnUp }) else { return }
+        loggedTimestampPath = true
+        VizprTranscriptLogger.note(
+            "hotkey event stamp: \(converted == nil ? "fell back to handling time" : "converted") "
+            + "rawStamp=\(rawStamp) convertedNs=\(converted?.nanoseconds.description ?? "-") "
+            + "uptimeNs=\(handledAt.nanoseconds)"
+        )
+    }
+    #endif
 
     private func input(for edge: FlagEdgeTracker.Edge, at now: MonotonicTime) -> HotkeyInput {
         switch edge {
@@ -240,14 +313,13 @@ final class HotkeyMonitor: @unchecked Sendable {
     private func syncThresholdTimer() {
         if case .pressed = machine.state {
             guard thresholdTimer == nil else { return }
-            let timer = Timer(timeInterval: machine.holdThreshold.seconds, repeats: false) { [weak self] _ in
+            let interval = machine.holdThreshold.seconds
+            thresholdTimer = runLoopThread.addTimer(interval: interval, repeats: false) { [weak self] in
                 guard let self else { return }
                 self.apply(self.machine.handle(.thresholdElapsed(at: self.nowMonotonic())))
             }
-            RunLoop.main.add(timer, forMode: .common)
-            thresholdTimer = timer
         } else {
-            thresholdTimer?.invalidate()
+            thresholdTimer.map { CFRunLoopTimerInvalidate($0) }
             thresholdTimer = nil
         }
     }
@@ -255,7 +327,7 @@ final class HotkeyMonitor: @unchecked Sendable {
     // MARK: Watchdog
 
     private func startWatchdog() {
-        let timer = Timer(timeInterval: 2.0, repeats: true) { [weak self] _ in
+        watchdogTimer = runLoopThread.addTimer(interval: 2.0, repeats: true) { [weak self] in
             guard let self, let port = self.machPort else { return }
             if !CGEvent.tapIsEnabled(tap: port) {
                 #if DICT_DEV_LOG
@@ -267,8 +339,6 @@ final class HotkeyMonitor: @unchecked Sendable {
                 self.apply(self.machine.handle(.tapDisabled(.timeout)))
             }
         }
-        RunLoop.main.add(timer, forMode: .common)
-        watchdogTimer = timer
     }
 
     // MARK: Helpers
@@ -277,10 +347,33 @@ final class HotkeyMonitor: @unchecked Sendable {
         MonotonicTime(nanoseconds: clock_gettime_nsec_np(CLOCK_UPTIME_RAW))
     }
 
-    private func assertMainThread() {
+    private func assertOnHotkeyThread() {
         #if DEBUG
-        precondition(Thread.isMainThread, "HotkeyMonitor must only be touched on the main thread")
+        precondition(runLoopThread.isCurrent, "HotkeyMonitor state must only be touched on the hotkey thread")
         #endif
+    }
+}
+
+/// What `start()` installs, gathered so `stop()` and `deinit` remove it the same
+/// way. CF objects are not `Sendable`; the box is only handed to the hotkey thread.
+private struct InstalledTap: @unchecked Sendable {
+    var port: CFMachPort?
+    var source: CFRunLoopSource?
+    var timers: [CFRunLoopTimer] = []
+
+    init(port: CFMachPort? = nil, source: CFRunLoopSource? = nil) {
+        self.port = port
+        self.source = source
+    }
+
+    /// Must run on the hotkey thread so it is ordered after any callback in flight.
+    func tearDown(on thread: HotkeyRunLoopThread) {
+        timers.forEach { CFRunLoopTimerInvalidate($0) }
+        if let source { thread.remove(source: source) }
+        if let port {
+            CGEvent.tapEnable(tap: port, enable: false)
+            CFMachPortInvalidate(port)
+        }
     }
 }
 
@@ -295,8 +388,8 @@ private extension Duration {
 // MARK: - C callback bridge
 
 /// Top-level `@convention(c)` callback: it cannot capture context, so the monitor
-/// is recovered from the opaque `userInfo` pointer. Runs on the main run loop
-/// (where the source is installed).
+/// is recovered from the opaque `userInfo` pointer. Runs on the hotkey thread's
+/// run loop (where the source is installed).
 private func hotkeyTapCallback(
     proxy: CGEventTapProxy,
     type: CGEventType,

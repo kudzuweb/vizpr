@@ -13,6 +13,28 @@ struct FlagEdgeTrackerTests {
         FlagEdgeTracker(secondaryMask: [.maskControl, .maskAlternate])
     }
 
+    @Test("Replacing the secondary mask while Fn is held still yields the Fn up edge")
+    func maskChangeKeepsHeldFn() {
+        var tracker = tracker()
+        #expect(tracker.edges(for: [.maskSecondaryFn]) == [.fnDown])
+        var replaced = tracker.replacingSecondaryMask([.maskShift, .maskCommand])
+        #expect(replaced.secondaryMask == [.maskShift, .maskCommand])
+        #expect(replaced.edges(for: []) == [.fnUp])
+    }
+
+    @Test("Replacing the mask carries a held secondary combo and a pending baseline")
+    func maskChangeKeepsSecondaryAndSeeding() {
+        var held = tracker()
+        _ = held.edges(for: [.maskControl, .maskAlternate])
+        var replaced = held.replacingSecondaryMask([.maskShift])
+        #expect(replaced.edges(for: []) == [.secondaryUp])
+
+        var blind = tracker()
+        blind.reset()
+        var swapped = blind.replacingSecondaryMask([.maskShift])
+        #expect(swapped.edges(for: [.maskSecondaryFn]).isEmpty)   // first snapshot after reset is still swallowed
+    }
+
     @Test("Fn down then up yields one edge each")
     func fnDownUp() {
         var tracker = tracker()

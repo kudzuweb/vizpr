@@ -42,6 +42,17 @@ struct FlagEdgeTracker {
         self.secondaryMask = secondaryMask
     }
 
+    /// A tracker for a different secondary combo that keeps this one's held-key
+    /// state and seeding, so a key held across the change still yields its up
+    /// edge, and a pending post-`reset()` baseline is still swallowed.
+    func replacingSecondaryMask(_ mask: CGEventFlags) -> FlagEdgeTracker {
+        var replacement = FlagEdgeTracker(secondaryMask: mask)
+        replacement.fnDown = fnDown
+        replacement.secondaryActive = secondaryActive
+        replacement.seeded = seeded
+        return replacement
+    }
+
     /// Fold a new flag snapshot in and return the edges it produced, in a stable
     /// order (Fn first). Updates internal state. Returns an empty array when no
     /// tracked modifier crossed a boundary.

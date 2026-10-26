@@ -42,7 +42,7 @@ enum TapDisableReason: Sendable, Hashable {
 /// tap-vs-hold decision is a pure comparison. `thresholdElapsed` is delivered by
 /// a shell timer to promote a held key into `holding`; it is an *optimization*
 /// for reflecting hold state early — correctness does not depend on it, because
-/// `fnUp`/`secondaryUp` re-check the duration regardless (see `reduce`).
+/// `fnUp`/`secondaryUp` re-check the duration in `pressed` and `holding` alike.
 enum HotkeyInput: Sendable {
     case fnDown(at: MonotonicTime)
     case fnUp(at: MonotonicTime)
@@ -50,6 +50,7 @@ enum HotkeyInput: Sendable {
     case secondaryUp(at: MonotonicTime)
     case escape
     case autoStop                          // VAD silence timeout in a latched session
+    case captureFailed                     // audio capture died: end the session, nothing to commit
     case thresholdElapsed(at: MonotonicTime)
     case tapDisabled(TapDisableReason)
 }
@@ -67,7 +68,7 @@ enum DictationAction: Sendable, Hashable {
 ///
 /// **Fail-open invariant:** `.consume` is emitted *only* for Fn events. Every
 /// other input — secondary modifiers, Escape, and the non-CGEvent signals
-/// (autoStop / thresholdElapsed / tapDisabled) — yields `.passThrough`. There is
+/// (autoStop / captureFailed / thresholdElapsed / tapDisabled) — yields `.passThrough`. There is
 /// no state in which a non-Fn key can be suppressed. This is the property the
 /// randomized test pins down; it is the point-for-point inversion of the Wispr
 /// stale-key bug that swallowed spacebars.
@@ -88,12 +89,12 @@ struct HotkeyDecision: Sendable, Hashable {
 
 // MARK: - State
 
-/// The machine's states. `pressed` holds the press start time and source so the
-/// tap-vs-hold threshold can be evaluated when the key is released.
+/// The machine's states. `pressed` and `holding` hold the press start time and
+/// source so the tap-vs-hold threshold can be evaluated when the key is released.
 enum HotkeyState: Sendable, Hashable {
     case idle
     case pressed(since: MonotonicTime, source: ActivationSource)
-    case holding(source: ActivationSource)        // held past threshold → push-to-talk
+    case holding(since: MonotonicTime, source: ActivationSource)   // promoted by the threshold timer → push-to-talk
     case latched(source: ActivationSource)        // hands-free; next press commits
 }
 
@@ -140,8 +141,8 @@ struct HotkeyStateMachine {
             return reduceIdle(input)
         case let .pressed(since, source):
             return reducePressed(since: since, source: source, input: input, holdThreshold: holdThreshold)
-        case let .holding(source):
-            return reduceHolding(source: source, input: input)
+        case let .holding(since, source):
+            return reduceHolding(since: since, source: source, input: input, holdThreshold: holdThreshold)
         case let .latched(source):
             return reduceLatched(source: source, input: input)
         }
@@ -168,7 +169,7 @@ struct HotkeyStateMachine {
         case .escape:
             // Not dictating: Escape is a normal key — never touch it.
             return (.idle, .ignorePassThrough)
-        case .autoStop, .thresholdElapsed:
+        case .autoStop, .thresholdElapsed, .captureFailed:
             return (.idle, .ignorePassThrough)
         case .tapDisabled:
             // Already idle; the shell re-enables the tap. Nothing to discard.
@@ -195,13 +196,13 @@ struct HotkeyStateMachine {
             // threshold. Guard with the timestamp so a stale/early timer can't
             // mislabel a tap as a hold.
             if at.elapsed(since: since) >= holdThreshold {
-                return (.holding(source: source), .ignorePassThrough)
+                return (.holding(since: since, source: source), .ignorePassThrough)
             }
             return (.pressed(since: since, source: source), .ignorePassThrough)
 
         case .escape:
             return (.idle, HotkeyDecision(action: .cancel, disposition: .passThrough))
-        case .tapDisabled:
+        case .tapDisabled, .captureFailed:
             // Fail-open: discard the in-flight session and reset; shell re-enables.
             return (.idle, HotkeyDecision(action: .cancel, disposition: .passThrough))
 
@@ -216,9 +217,10 @@ struct HotkeyStateMachine {
         }
     }
 
-    /// Resolve a key release in `pressed`: tap (< threshold) latches; hold
-    /// (≥ threshold) commits. Authoritative duration check, independent of any
-    /// `thresholdElapsed` delivery.
+    /// Resolve a key release in `pressed` or `holding`: tap (< threshold) latches;
+    /// hold (≥ threshold) commits. Authoritative duration check, independent of
+    /// any `thresholdElapsed` delivery — a timer that fired late must not turn a
+    /// quick tap into a commit.
     private static func release(
         since: MonotonicTime,
         at: MonotonicTime,
@@ -238,26 +240,28 @@ struct HotkeyStateMachine {
     // MARK: holding (push-to-talk, key still down past threshold)
 
     private static func reduceHolding(
+        since: MonotonicTime,
         source: ActivationSource,
-        input: HotkeyInput
+        input: HotkeyInput,
+        holdThreshold: Duration
     ) -> (HotkeyState, HotkeyDecision) {
         switch input {
-        case .fnUp where source == .fn:
-            return (.idle, HotkeyDecision(action: .commit, disposition: .consume))
-        case .secondaryUp where source == .secondary:
-            return (.idle, HotkeyDecision(action: .commit, disposition: .passThrough))
+        case let .fnUp(at) where source == .fn:
+            return release(since: since, at: at, source: .fn, holdThreshold: holdThreshold, consume: true)
+        case let .secondaryUp(at) where source == .secondary:
+            return release(since: since, at: at, source: .secondary, holdThreshold: holdThreshold, consume: false)
 
         case .escape:
             return (.idle, HotkeyDecision(action: .cancel, disposition: .passThrough))
-        case .tapDisabled:
+        case .tapDisabled, .captureFailed:
             return (.idle, HotkeyDecision(action: .cancel, disposition: .passThrough))
 
         case .fnDown, .fnUp:
-            return (.holding(source: source), .ignoreConsume)
+            return (.holding(since: since, source: source), .ignoreConsume)
         case .secondaryDown, .secondaryUp:
-            return (.holding(source: source), .ignorePassThrough)
+            return (.holding(since: since, source: source), .ignorePassThrough)
         case .thresholdElapsed, .autoStop:
-            return (.holding(source: source), .ignorePassThrough)
+            return (.holding(since: since, source: source), .ignorePassThrough)
         }
     }
 
@@ -280,7 +284,7 @@ struct HotkeyStateMachine {
 
         case .escape:
             return (.idle, HotkeyDecision(action: .cancel, disposition: .passThrough))
-        case .tapDisabled:
+        case .tapDisabled, .captureFailed:
             return (.idle, HotkeyDecision(action: .cancel, disposition: .passThrough))
 
         // Strays (e.g. the up that paired the latching tap arrives late): consume

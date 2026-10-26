@@ -72,9 +72,37 @@ struct HotkeyTransitionTests {
         _ = m.handle(.fnDown(at: t(0)))
         let promote = m.handle(.thresholdElapsed(at: t(200)))
         #expect(promote.action == nil)
-        #expect(m.state == .holding(source: .fn))
+        #expect(m.state == .holding(since: t(0), source: .fn))
         let up = m.handle(.fnUp(at: t(5000)))
         #expect(up.action == .commit)
+        #expect(m.state == .idle)
+    }
+
+    @Test("A tap whose release is handled late still latches, even after a late thresholdElapsed")
+    func lateHandledTapLatches() {
+        for (source, down, up) in [
+            (ActivationSource.fn, HotkeyInput.fnDown(at: t(0)), HotkeyInput.fnUp(at: t(100))),
+            (.secondary, .secondaryDown(at: t(0)), .secondaryUp(at: t(100)))
+        ] {
+            var m = machine()
+            _ = m.handle(down)
+            // Main thread was blocked: the timer is handled at 2000 ms, before the release (stamped 100 ms).
+            _ = m.handle(.thresholdElapsed(at: t(2000)))
+            #expect(m.state == .holding(since: t(0), source: source))
+            let d = m.handle(up)
+            #expect(d.action == nil)
+            #expect(m.state == .latched(source: source))
+        }
+    }
+
+    @Test("A real hold promoted to holding still commits on release")
+    func realHoldCommitsFromHolding() {
+        var m = machine()
+        _ = m.handle(.fnDown(at: t(0)))
+        _ = m.handle(.thresholdElapsed(at: t(200)))
+        let d = m.handle(.fnUp(at: t(600)))
+        #expect(d.action == .commit)
+        #expect(d.disposition == .consume)
         #expect(m.state == .idle)
     }
 
@@ -90,7 +118,7 @@ struct HotkeyTransitionTests {
     func escapeCancelsFromActiveStates() {
         for start: HotkeyState in [
             .pressed(since: t(0), source: .fn),
-            .holding(source: .fn),
+            .holding(since: t(0), source: .fn),
             .latched(source: .fn)
         ] {
             var m = machine(start)
@@ -115,7 +143,7 @@ struct HotkeyTransitionTests {
         let states: [HotkeyState] = [
             .idle,
             .pressed(since: t(0), source: .fn),
-            .holding(source: .secondary),
+            .holding(since: t(0), source: .secondary),
             .latched(source: .fn)
         ]
         for reason in [TapDisableReason.timeout, .userInput] {
@@ -131,6 +159,29 @@ struct HotkeyTransitionTests {
         }
     }
 
+    @Test("captureFailed cancels from every active state and never consumes")
+    func captureFailedCancelsFromActiveStates() {
+        for start: HotkeyState in [
+            .pressed(since: t(0), source: .fn),
+            .holding(since: t(0), source: .secondary),
+            .latched(source: .fn)
+        ] {
+            var m = machine(start)
+            let d = m.handle(.captureFailed)
+            #expect(d.action == .cancel, "captureFailed must cancel \(start)")
+            #expect(d.disposition == .passThrough)
+            #expect(m.state == .idle)
+        }
+    }
+
+    @Test("captureFailed from idle is inert")
+    func captureFailedFromIdleIsInert() {
+        var m = machine()
+        let d = m.handle(.captureFailed)
+        #expect(d == .ignorePassThrough)
+        #expect(m.state == .idle)
+    }
+
     @Test("Auto-stop commits only in a latched session")
     func autoStopCommitsOnlyWhenLatched() {
         var latched = machine(.latched(source: .fn))
@@ -139,7 +190,7 @@ struct HotkeyTransitionTests {
         #expect(d.disposition == .passThrough)
         #expect(latched.state == .idle)
 
-        for start: HotkeyState in [.idle, .pressed(since: t(0), source: .fn), .holding(source: .fn)] {
+        for start: HotkeyState in [.idle, .pressed(since: t(0), source: .fn), .holding(since: t(0), source: .fn)] {
             var m = machine(start)
             #expect(m.handle(.autoStop).action == nil, "autoStop is inert in \(start)")
             #expect(m.state == start)
@@ -198,7 +249,7 @@ struct HotkeyPropertyTests {
     private func randomInput(using rng: inout SplitMix64, clock: inout UInt64) -> HotkeyInput {
         clock &+= UInt64.random(in: 0...500, using: &rng)   // 0–500 ms jitter
         let now = MonotonicTime(nanoseconds: clock * 1_000_000)
-        switch UInt8.random(in: 0...7, using: &rng) {
+        switch UInt8.random(in: 0...8, using: &rng) {
         case 0: return .fnDown(at: now)
         case 1: return .fnUp(at: now)
         case 2: return .secondaryDown(at: now)
@@ -206,6 +257,7 @@ struct HotkeyPropertyTests {
         case 4: return .escape
         case 5: return .autoStop
         case 6: return .thresholdElapsed(at: now)
+        case 7: return .captureFailed
         default: return .tapDisabled(Bool.random(using: &rng) ? .timeout : .userInput)
         }
     }
