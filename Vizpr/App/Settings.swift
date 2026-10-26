@@ -67,6 +67,9 @@ struct VizprSettings: Codable, Equatable, Sendable {
     /// in place at commit. An explicit opt-out of proofread-as-you-speak;
     /// the pipeline underneath is unchanged.
     var invizMode: Bool = false
+    /// Whether the overlay shows the frontmost app, so you can see where the
+    /// text will land. A global behavior, not part of a look.
+    var targetAppDisplay: TargetAppDisplay = .icon
     /// Fall back to the built-in mic when the selected input delivers pure
     /// silence (the AirPods-on-a-phone-call trap; default on).
     var silentInputFallback: Bool = true
@@ -77,6 +80,12 @@ struct VizprSettings: Codable, Equatable, Sendable {
     /// The look the overlay renders. An id that matches nothing resolves to
     /// Glass (see `activeLook`).
     var activeLookID: UUID = OverlayLook.glass.id
+
+    // MARK: Overlay position
+    /// Where the user dragged the overlay, per display. The key is the
+    /// display's UUID (`NSScreen.displayUUID`); an absent key is the default
+    /// lower-center.
+    var overlayAnchors: [String: OverlayAnchor] = [:]
 
     /// The locked settled:mutable opacity ratio (not persisted, not a
     /// setting — the trust contract's floor).
@@ -97,6 +106,7 @@ struct VizprSettings: Codable, Equatable, Sendable {
         s.autoStopSeconds = min(max(s.autoStopSeconds, 2), 60)
         s.settleCapMs = min(max(s.settleCapMs, 0), 1_000)
         s.draftMinTailMs = min(max(s.draftMinTailMs, 500), 4_000)
+        s.overlayAnchors = s.overlayAnchors.mapValues { $0.clamped() }
         // Built-ins are read-only constants, so a stored look may not shadow
         // one, and ids must be unique for selection to be unambiguous.
         var seen = Set(OverlayLook.builtIns.map(\.id))
@@ -172,6 +182,11 @@ final class SettingsStore: ObservableObject {
             $0.looks = []
             $0.activeLookID = OverlayLook.glass.id
         }
+    }
+
+    /// Puts the overlay back at lower-center on every display.
+    func resetOverlayPositions() {
+        update { $0.overlayAnchors = [:] }
     }
 
     func selectLook(_ id: UUID) {

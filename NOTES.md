@@ -396,6 +396,147 @@ becomes active. Migration runs after the merge, from a separate decode of the
 legacy keys, and the store saves once when the file carried any, so migrated
 look ids stay stable and the legacy keys leave the file.
 
+## PR 15 — Sculptable looks (2026-10-21)
+
+### Rendering
+
+`OverlayLook.style` (`LookStyle`, `Vizpr/Overlay/LookStyle.swift`) holds every
+adjustable aspect of a look beyond its surface body, and every field renders on
+every surface. Every default is the no-visible-change value, so `.neutral` is
+today's Glass and `OverlayLook.mergeTemplate` carries it.
+
+| Group | What it does |
+|---|---|
+| `fill` | Frost: Glass gets `colorHex` at opacity `frost` over the material (0 is the old Glass); the new `solid` surface fills at `max(frost, 0.05)`. |
+| `light` | One transparent layer (`LightLayer`, `PaneLight.metal`) over any surface: edge light, bevel, gloss (still highlight, matte 0 to shiny 1), moving sheen, grain. It draws nothing when all are 0 and ticks only for sheen or grain. |
+| `border`, `outerGlow`, `dropShadow` | `PaneEffects`. |
+| `pane` | Reading width and text padding. |
+| `text` | Font family (system font in the look's design when unset or not installed), weight, line spacing, text glow. |
+| `dot` | Recording dot color, size and pulse. |
+
+`SlabStyle` is now only the mesh body. The built-in Slab look carries its old
+light and shadow in `style.light` and `style.dropShadow`.
+
+**Glow and shadow draw only outside the pane.** Each is a blurred copy of the
+pane shape masked to the region outside the pane shape (`blendMode(.destinationOut)`
+in a `compositingGroup`), because a copy left behind see-through glass would
+tint its interior. The overlay panel grows on every side by the largest enabled
+effect extent (`PaneEffects.margin(for:)`), and the pane's frame inside it does
+not move.
+
+**Backdrop.** `style.backdrop` (`BackdropLayer`) is a neutral dimming layer drawn
+below the surface, light and border. The fill is both the glass's color and its
+blocker, so raising its opacity to quiet busy content behind the pane turns the
+glass into tinted plastic. The backdrop blocks without touching the glass: it
+is a uniform `colorHex` at `strength` inside the pane, fading to nothing over
+`feather` points outside it (a blurred, slightly grown copy of the pane shape,
+masked to the outside like glow and shadow). It is off by default, and
+`PaneEffects.margin(for:)` includes its reach when enabled.
+
+**Measurement.** `OverlayLook.paneWidth(fitting:)` and `paneHeight(fitting:)` are
+the one place that measures: width, padding, font, and line spacing (through
+`NSParagraphStyle`) all come from the look, matching how `OverlayView` lays the
+text out. The pill is 220 pt wide at rest and grows with the single-line text
+width (plus padding and 2 pt of slack) up to the look's pane width; only then
+does the text wrap and the pane grow taller. AppKit supplies the line count and
+each line is priced at the height SwiftUI gives it, because `boundingRect`
+alone runs about a point short per line. The height carries 2 pt of slack
+under the last line, so the gap below equals the gap above to within that.
+(The first version of the measurement added a whole extra line "so growth leads
+the text"; with an accurate per-line height that headroom is no longer
+needed.) The text is laid out at the final width and the capsule animates over
+it, so it does not re-wrap mid-growth.
+
+**Offscreen renders.** `NSHostingView.cacheDisplay` does not run Metal shader
+effects, so the light layer is absent from such frames. `ImageRenderer` runs
+them but cannot draw a `ScrollView`.
+### Look editor and fonts
+
+The Appearance pane edits every field of `LookStyle` (`Vizpr/Overlay/LookStyle.swift`,
+held in `OverlayLook.style`) with sliders, toggles and color pickers, one file
+per section in `Vizpr/App/Appearance/`. A live preview pinned above the
+controls renders the real `OverlayView` with the active look over a checkerboard
+while sample text types itself (`PreviewTranscript`); the typing runs in a
+`.task`, so it stops when the tab is left, and closing the Settings window
+releases the window and its views. Slider ranges live in `LookRanges` and a
+test fails when one drifts from its field's `clamped()` bound.
+
+**Fonts.** `FontLibrary` registers every `.ttf`, `.otf` and `.ttc` in
+`Application Support/Vizpr/Fonts` at launch with
+`CTFontManagerRegisterFontsForURL(url, .process, &error)`: Vizpr only, never
+installed system-wide. A file that is already registered returns error 105
+(`alreadyRegistered`), which counts as success. `NSFontManager.availableFontFamilies`
+does not list a newly registered family until a later run-loop turn (the
+CoreText family list does, at once), so `FontLibrary.families` adds the
+families it registered itself. A look stores a family name in
+`style.text.fontFamily`; nil is the system font in the look's `fontDesign`.
+
+## Draggable overlay (Mauria, 2026-10-21)
+
+**Focus invariant.** The overlay panel never takes keyboard focus and never
+activates Vizpr: `PreviewPanel` is `.nonactivatingPanel` and `canBecomeKey` and
+`canBecomeMain` return false. Click-through was dropped on purpose so the pane
+can be dragged, so a click on the pane now lands on the pane and not on the app
+behind it. The transparent stage around the pane takes clicks too.
+
+**Dragging.** `DragHostingView` (`Vizpr/Overlay/DragHostingView.swift`) answers
+every hit inside the panel and calls `PreviewPanel.drag(with:)`, which runs
+`performDrag(with:)` and reports the new frame through `onDragEnd`.
+
+**Placement (§13).** The pane is anchored by its bottom-center, stored as
+fractions (`OverlayAnchor`, 0...1) of the display's visible frame, so a position
+survives a resolution change. A nil anchor is the old lower-center
+(0.5, 0.25). The pane grows upward from the anchor; its maximum height is the
+smaller of half the screen and the distance from the anchor to the top of the
+screen minus `OverlayLayout.topInset`, and its horizontal position is held
+inside the screen. The effects margin wraps the pane and does not move it.
+`OverlayLayout.anchor(forPaneFrame:)` is the inverse and pulls a frame dragged
+partly off-screen back on.
+
+**Persistence.** `VizprSettings.overlayAnchors` maps a display's UUID
+(`NSScreen.displayUUID`, from `CGDisplayCreateUUIDFromDisplayID`) to its anchor.
+The target screen is still chosen as before (the display holding the focused
+window); that display's anchor positions the pane. Dropping the pane on another
+display saves the anchor for that display. The inviz pill sits in the same
+stage, so it follows the same anchor. The menu item "Reset Overlay Position"
+clears every anchor.
+
+## Target app indicator (Mauria, 2026-10-22)
+
+The overlay shows the frontmost app's icon, and its name when asked, so it is
+clear where the text will land (twice, dictation went to a window with no text
+field). `VizprSettings.targetAppDisplay` is `off`, `icon` (the default) or
+`iconAndName`, a global behavior outside the looks.
+
+**Tracking.** `TargetApp` (`Vizpr/Overlay/TargetApp.swift`) observes
+`NSWorkspace.didActivateApplicationNotification` from `OverlayController.show`
+until `dismiss`, so focus moving mid-dictation moves the icon, because that is
+where the commit now injects. Vizpr itself never replaces the target: its
+Settings window in front keeps the last other app.
+
+**Placement.** On the resting pill and the expanded pane the icon (24 pt)
+is tucked into the top-left corner: it hangs 5 pt outside the pill's left and
+top edges (`TargetAppMetrics.cornerOverhang`), whatever the corner radius, so
+the 19 pt inside the pill sit within a point of the pane's default 18 pt
+horizontal padding and the icon never covers the first line of text. It overlays the pill outside the
+clip, so it changes neither the pill's size nor the text column.
+`OverlayLook.panelMargin` is the larger of the glow/shadow reach and the
+icon's overhang, and the panel, the view and
+`dragEnded` all use it. With `iconAndName` the resting pill shows the name
+(11 pt, the look's mutable style) inside the pill, starting just past the icon;
+the expanded pane shows the icon only, because there is no room beside wrapped
+text. The recording dot stays at the bottom left. The inviz pill (84 x 36) is
+too small for the icon, so it keeps the badge outside its left edge (20 pt
+icon, 6 pt gap, name when asked). Opacity is 0.85. Sizes live in
+`TargetAppMetrics`.
+
+**Margin.** Only inviz mode reserves `sideInset` on both sides of the pane for
+the badge beside the pill, so the badge is not clipped and the pill stays
+centered where it was; resting and expanded panels have no side inset.
+`dragEnded` subtracts the same inset when it reads the pane's frame, so the
+pane, not the badge, is what the anchor positions. Toggling inviz re-places
+the panel.
+
 ## Audio capture off the main thread, and the silent-mic check (2026-10-23)
 
 A cold `AVAudioEngine.start()` blocked the main thread for about 2 s, which also
@@ -629,6 +770,20 @@ belong with the Settings work rather than the hotkey PR:
 - Post-commit stragglers: the engine's flush emits a last draft/final after
   commit; TokenStream's generation checks must drop these (they arrive after
   the snapshot).
+
+## Test runs no longer write the dev log (2026-10-25)
+
+The test host is the Debug app, so suites with fake engines (AudioPipelineTests,
+FluidAudioASRTests) appended their traffic to `~/Documents/dictation-dev/debug.log`
+and `transcripts.jsonl`. Under tests, `VizprDevLogDirectory` now points both
+writers at `vizpr-tests-<pid>` in the temporary directory, and the existing
+"dev transcript log target:" line says where. Production paths are unchanged.
+
+`VizprTranscriptLogger.note` is also called from several threads, and each call
+opened, seeked and wrote the file unserialized: two callers at the same instant
+sought to the same end offset and one line overwrote the other (a `window:` line
+and an `asr final` line never both landed). A lock now wraps the open-write-close;
+the call stays synchronous so a caller's next line follows its own previous one.
 
 ## Tail integrity at commit (2026-10-25)
 

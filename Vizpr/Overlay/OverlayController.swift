@@ -8,8 +8,15 @@ import SwiftUI
 @MainActor
 final class OverlayController {
     private let panel = PreviewPanel()
-    private var hosting: NSHostingView<OverlayView>?
-    private var layout: OverlayLayout?
+    private var hosting: DragHostingView<OverlayView>?
+    /// The screen the pane sits on: its visible frame and stable display id.
+    private var placement: (visibleFrame: CGRect, displayID: String?)?
+    private var anchors: [String: OverlayAnchor] = [:]
+    /// Called with the display id and the new anchor when a drag ends.
+    var onAnchorChange: ((String, OverlayAnchor) -> Void)?
+    private var layout: OverlayLayout? {
+        placement.map { OverlayLayout(screen: $0.visibleFrame, anchor: $0.displayID.flatMap { anchors[$0] }) }
+    }
     private var recording = false
     /// Once the capsule caps, stop measuring: the O(session-length)
     /// boundingRect result is clamped anyway (review finding).
@@ -18,12 +25,39 @@ final class OverlayController {
     private var lastSnapshot = DisplaySnapshot.empty
 
     private var inviz = false
+    private var targetAppDisplay = TargetAppDisplay.off
+    private let targetApp = TargetApp()
+
+    init() {
+        panel.onDragEnd = { [weak self] frame in self?.dragEnded(panelFrame: frame) }
+    }
+
+    /// Live setting: the saved positions per display. Takes effect on the
+    /// next placement (`setLook` runs with every settings change and places
+    /// the panel again).
+    func setAnchors(_ newAnchors: [String: OverlayAnchor]) {
+        anchors = newAnchors
+    }
 
     /// Live setting (PR 11): inviz mode swaps the transcript for the
     /// indicator; applies to the next render.
     func setInviz(_ enabled: Bool) {
         inviz = enabled
-        if panel.isVisible { render(lastSnapshot) }
+        if panel.isVisible {
+            // Only the inviz pill needs side room for its indicator.
+            positionPanel()
+            render(lastSnapshot)
+        }
+    }
+
+    /// Live setting: how much of the frontmost app the overlay shows. The
+    /// panel's side room (inviz only) depends on it.
+    func setTargetAppDisplay(_ display: TargetAppDisplay) {
+        targetAppDisplay = display
+        if panel.isVisible {
+            positionPanel()
+            render(lastSnapshot)
+        }
     }
 
     /// Live setting (PR 11): re-renders immediately so the picker previews.
@@ -31,7 +65,55 @@ final class OverlayController {
         look = newLook
         // Font size and design change the measured height.
         hitCap = false
-        if panel.isVisible { render(lastSnapshot) }
+        if panel.isVisible {
+            // Glow, shadow and width change how much room the panel needs.
+            positionPanel()
+            render(lastSnapshot)
+        }
+    }
+
+    /// The panel spans the pane's fixed bottom edge to the cap, plus the look's
+    /// effect margin on every side; only the SwiftUI capsule inside animates.
+    private func positionPanel() {
+        guard let layout else { return }
+        panel.setFrame(
+            layout.frame(
+                contentHeight: layout.maxHeight,
+                paneWidth: look.style.pane.width,
+                margin: look.panelMargin,
+                sideInset: TargetAppMetrics.sideInset(for: targetAppDisplay, inviz: inviz)
+            ),
+            display: true
+        )
+    }
+
+    /// A drag moved the panel: the pane's bottom-center, on whichever screen
+    /// it now sits, becomes that display's anchor. The pane then grows from
+    /// that point.
+    private func dragEnded(panelFrame: CGRect) {
+        let margin = look.panelMargin
+        let sideInset = TargetAppMetrics.sideInset(for: targetAppDisplay, inviz: inviz)
+        let paneFrame = CGRect(
+            x: panelFrame.minX + margin + sideInset,
+            y: panelFrame.minY + margin,
+            width: panelFrame.width - 2 * (margin + sideInset),
+            height: OverlayLayout.restingSize.height
+        )
+        let screens = NSScreen.screens
+        let landed = screens.first { $0.frame.contains(CGPoint(x: paneFrame.midX, y: paneFrame.midY)) }
+        guard let screen = landed ?? screens.first(where: { $0.visibleFrame == placement?.visibleFrame }) else {
+            return
+        }
+        let displayID = screen.displayUUID
+        placement = (screen.visibleFrame, displayID)
+        guard let displayID, let layout else { positionPanel(); return }
+        let anchor = layout.anchor(forPaneFrame: paneFrame)
+        anchors[displayID] = anchor
+        // The cap depends on the anchor, so the height is measured again.
+        hitCap = false
+        positionPanel()
+        render(lastSnapshot)
+        onAnchorChange?(displayID, anchor)
     }
 
     private var reduceMotion: Bool {
@@ -52,15 +134,15 @@ final class OverlayController {
         let screen = screens.first { $0.frame == targetFrame }
             ?? NSScreen.main ?? screens.first
         guard let screen else { return }
-        let layout = OverlayLayout(screen: screen.visibleFrame)
-        self.layout = layout
+        placement = (screen.visibleFrame, screen.displayUUID)
         recording = true
         hitCap = false
+        targetApp.start()
         panel.alphaValue = 1
         // The panel is a FIXED transparent stage spanning bottom edge to cap;
         // only the SwiftUI capsule inside animates (field catch: animating
         // the window frame lagged the text and clipped it mid-growth).
-        panel.setFrame(layout.frame(contentHeight: layout.maxHeight), display: true)
+        positionPanel()
         render(.empty)
         panel.orderFrontRegardless()
     }
@@ -76,6 +158,7 @@ final class OverlayController {
     /// instant.
     func dismiss() {
         recording = false
+        targetApp.stop()
         guard panel.isVisible else { return }
         if reduceMotion {
             panel.orderOut(nil)
@@ -97,44 +180,42 @@ final class OverlayController {
 
     private func render(_ snapshot: DisplaySnapshot) {
         lastSnapshot = snapshot
+        let size = capsuleSize(for: snapshot)
         let view = OverlayView(
             snapshot: snapshot,
             recording: recording,
-            capsuleHeight: capsuleHeight(for: snapshot),
+            capsuleHeight: size.height,
+            capsuleWidth: size.width,
             animated: !reduceMotion,
             look: look,
-            inviz: inviz
+            inviz: inviz,
+            targetApp: targetApp,
+            targetAppDisplay: targetAppDisplay
         )
         if let hosting {
             hosting.rootView = view
         } else {
-            let fresh = NSHostingView(rootView: view)
+            let fresh = DragHostingView(rootView: view)
             hosting = fresh
             panel.contentView = fresh
         }
     }
 
-    /// Measured text height at the reading width, clamped to layout bounds.
+    /// Measured pane size: the width grows with the text up to the look's pane
+    /// width, then the height grows by wrapping, clamped to layout bounds.
     /// Measures with the look's own font (`measuringFont`, the twin of the
     /// view's): measuring with any other font undersizes the capsule and
     /// clips text (field catch).
-    private func capsuleHeight(for snapshot: DisplaySnapshot) -> CGFloat {
-        guard let layout else { return OverlayLayout.restingSize.height }
-        if hitCap { return layout.maxHeight }
+    private func capsuleSize(for snapshot: DisplaySnapshot) -> CGSize {
+        let resting = OverlayLayout.restingSize
+        guard let layout else { return resting }
         let text = snapshot.displayed
-        guard !text.isEmpty else { return OverlayLayout.restingSize.height }
-        let width = OverlayLayout.readingWidth - 36
-        let font = look.measuringFont
-        let bounds = (text as NSString).boundingRect(
-            with: NSSize(width: width, height: .greatestFiniteMagnitude),
-            options: [.usesLineFragmentOrigin, .usesFontLeading],
-            attributes: [.font: font]
-        )
-        // Extra line of headroom: growth leads the text instead of trailing
-        // it, so a wrapping word never renders against the clipped edge.
-        let measured = ceil(bounds.height) + 24 + ceil(font.ascender - font.descender)
-        let clamped = min(max(measured, OverlayLayout.restingSize.height), layout.maxHeight)
+        guard !text.isEmpty else { return resting }
+        let width = look.paneWidth(fitting: text)
+        if hitCap { return CGSize(width: width, height: layout.maxHeight) }
+        let measured = look.paneHeight(fitting: text)
+        let clamped = min(max(measured, resting.height), layout.maxHeight)
         if clamped >= layout.maxHeight { hitCap = true }
-        return clamped
+        return CGSize(width: width, height: clamped)
     }
 }
