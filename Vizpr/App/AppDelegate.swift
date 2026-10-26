@@ -525,8 +525,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     let sessionEpoch = self?.settleGate.beginSession() ?? 0
                     #if DICT_DEV_LOG
                     self?.lastSessionAudio.begin(at: Date(), epoch: sessionEpoch)
-                    #endif
-                    #if DICT_DEV_LOG
                     await self?.beginDictationRecord(startedAt: startedAt)
                     #endif
                     // Capture starts FIRST (PR 13): the AX field read is
@@ -609,6 +607,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         // catch: the first cut leaked it into debug.log).
                         VizprTranscriptLogger.note("COMMIT skippedSecureInput: [redacted]")
                         await self?.abandonDictationRecord()
+                        self?.lastSessionAudio.discard()
                     } else {
                         VizprTranscriptLogger.note(
                             "COMMIT \(String(describing: outcome)): \(committed)"
@@ -678,18 +677,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let raw = lastSessionAudio.raw
         let gated = lastSessionAudio.gated
         let directory = VizprDevLogDirectory.audioURL
-        Task.detached {
+        Task.detached(priority: .utility) {
             do {
                 let urls = try LastSessionAudio.write(
                     raw: raw, gated: gated, startedAt: startedAt, to: directory
                 )
                 let rate = MicrophoneCapture.sampleRate
+                VizprTranscriptLogger.note(String(
+                    format: "saved last session audio: %@ (%.2f s), %@ (%.2f s)",
+                    urls.raw.path, Double(raw.count) / rate,
+                    urls.gated.path, Double(gated.count) / rate
+                ))
                 await MainActor.run {
-                    VizprTranscriptLogger.note(String(
-                        format: "saved last session audio: %@ (%.2f s), %@ (%.2f s)",
-                        urls.raw.path, Double(raw.count) / rate,
-                        urls.gated.path, Double(gated.count) / rate
-                    ))
                     NSWorkspace.shared.activateFileViewerSelecting([urls.raw, urls.gated])
                 }
             } catch {
@@ -759,7 +758,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(cycleItem("Reset Overlay Position", #selector(resetOverlayPosition)))
         #if DICT_DEV_LOG
         let saveAudio = cycleItem("Save Last Session's Audio…", #selector(saveLastSessionAudio))
-        saveAudio.isEnabled = lastSessionAudio.isComplete
         menu.addItem(saveAudio)
         #endif
 
@@ -785,6 +783,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+
+#if DICT_DEV_LOG
+extension AppDelegate: NSMenuItemValidation {
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        menuItem.action != #selector(saveLastSessionAudio) || lastSessionAudio.isComplete
+    }
+}
+#endif
 
 extension AppDelegate: NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {

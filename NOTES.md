@@ -1067,8 +1067,10 @@ and durations. Under tests the folder is the per-run temporary one.
 Reading a lost ending: if the words are in the raw file but not the gated one,
 the gate dropped them; if they are in both, the decoder lost them, and the
 gated file is the exact input to re-run it on. Only the last session is kept,
-and nothing is saved until the menu item is used. The whole feature is
-`DICT_DEV_LOG` only; the WAV encoder (`WAVFile`) is plain code with a byte-level test.
+and nothing is saved until the menu item is used. A session committed at a
+password field has its audio discarded at commit, so it cannot be saved. The
+whole feature is `DICT_DEV_LOG` only, including the WAV encoder (`WAVFile`) and
+its byte-level test.
 
 ## Environment prerequisites discovered
 

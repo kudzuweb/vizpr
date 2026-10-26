@@ -29,6 +29,16 @@ final class LastSessionAudio {
         self.epoch = epoch
     }
 
+    /// Drops everything kept. Clearing the epoch makes the session's late
+    /// appends and its drain's `end` no-ops, so it cannot be marked complete again.
+    func discard() {
+        raw = []
+        gated = []
+        startedAt = nil
+        isComplete = false
+        epoch = nil
+    }
+
     func appendRaw(_ samples: [Float], epoch: Int) {
         guard epoch == self.epoch else { return }
         append(samples, to: &raw)

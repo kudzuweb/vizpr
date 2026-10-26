@@ -1,3 +1,4 @@
+#if DICT_DEV_LOG
 import Foundation
 import Testing
 @testable import Vizpr
@@ -29,3 +30,4 @@ struct WAVFileTests {
         #expect(Array(data.dropFirst(44)) == [0x00, 0x00, 0xFF, 0x7F, 0x01, 0x80])
     }
 }
+#endif

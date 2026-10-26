@@ -1,3 +1,4 @@
+#if DICT_DEV_LOG
 import Foundation
 
 /// Encodes mono float samples as a 16-bit PCM WAV file. Written by hand so it
@@ -5,7 +6,7 @@ import Foundation
 enum WAVFile {
     private static let headerByteCount = 44
 
-    /// Samples are clamped to -1...1 before conversion.
+    /// Samples are clamped to -1...1 before conversion; NaN is written as 0.
     static func data(samples: [Float], sampleRate: Int) -> Data {
         let channelCount: UInt16 = 1
         let bitsPerSample: UInt16 = 16
@@ -27,7 +28,7 @@ enum WAVFile {
         data.append(contentsOf: Array("data".utf8))
         data.append(littleEndian: dataByteCount)
         for sample in samples {
-            let clamped = min(max(sample, -1), 1)
+            let clamped = sample.isNaN ? 0 : min(max(sample, -1), 1)
             data.append(littleEndian: Int16((clamped * Float(Int16.max)).rounded()))
         }
         return data
@@ -39,3 +40,4 @@ private extension Data {
         Swift.withUnsafeBytes(of: value.littleEndian) { append(contentsOf: $0) }
     }
 }
+#endif
