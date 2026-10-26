@@ -645,6 +645,9 @@ who starts speaking immediately; she waited ~0.4 s):
 | commit → inject | ~170 ms observed (settle window worked) | already good |
 | engine swap (Models pane) | pipeline rebuild + warm | rare; acceptable |
 
+*(2026-10-25: draftMinTailMs is no longer a user lever; it is a constant in
+`Tuning.swift`. See "Tuning values and single defaults".)*
+
 Also: before PR 13 the dev JSONL carried no timings (the "feedstock" claim
 in Future Directions was wrong). PR 13 adds session timing marks to the
 dictation record (DICT_DEV_LOG builds only), so every dogfood measures
@@ -867,6 +870,8 @@ Decisions:
   of 350 overrides the new 500 default. The worst case, a running draft decode
   plus the commit decode, is about 360 ms at p90, so she should set the Commit
   settle cap slider to 500 in Settings.
+  *(2026-10-25, later: the setting and its slider are gone; the cap is
+  `Tuning.settleCapMs`. See "Tuning values and single defaults".)*
   Each commit writes `settle: drained|capped after N ms` and
   `commit tail: decoded N ms over M samples` (or `commit tail: empty N ms over
   M samples` when the decode returned no text) to the dev log, which show how
@@ -1020,6 +1025,8 @@ stand. The decisions, by step:
   1,024 ms, p90 1,032 ms; three sentences (41 words) p50 1,348 ms, p90
   1,370 ms. Text therefore turns white about 0.7 to 1.4 s after a window's
   cleanup starts.
+  *(2026-10-25, later: an old file now also drops the key on its next load.
+  See "Tuning values and single defaults".)*
 
 - **The dictation record measures settling.** `t_first_settled_ms` is the
   time from the startDictation action to the first snapshot whose settled text
@@ -1054,6 +1061,39 @@ Known limits:
 - A pause pending when the input ends is not run as a window; the commit
   decode covers it. A pause less than 0.5 s past a forced window's cut is
   cleared with it; a pause further past survives and closes the next window.
+
+## Tuning values and single defaults (2026-10-25)
+
+The two development levers, the commit settle cap and the draft minimum tail,
+are no longer settings. They are `Tuning.settleCapMs` (500) and
+`Tuning.draftMinTailMs` (1500) in `Vizpr/App/Tuning.swift`, each with the rule
+it comes from. Change one there and every consumer follows: `AppDelegate`
+reads the cap at each commit, and `FluidAudioASR` derives its first-draft
+sample count from the draft minimum. Their two Behavior sliders are gone. An
+old `settings.json` that still carries `settleCapMs`, `draftMinTailMs` or
+`settleSentences` loads normally and sheds those keys on that load
+(`VizprSettings.removedKeys`).
+
+The rule from here on: a tuning value lives in `Tuning.swift`, a user choice
+lives in `VizprSettings`, and every default is written once. The hold
+threshold, the secondary chord and the auto-stop timeout have their default
+only in the `VizprSettings` field; `HotkeyStateMachine`, `HotkeyMonitor` and
+`AudioPipeline` take them as required arguments, and `AppDelegate` builds the
+monitor and the pipeline from the loaded store. `WindowTracker`'s
+`minTailSamples` is required too. The hold-threshold and auto-stop clamp
+ranges are `VizprSettings.holdThresholdRangeMs` and `autoStopRangeSeconds`,
+used by `clamped()` and by the sliders.
+
+## Plain display names for settings (2026-10-25)
+
+Every remaining control in the Behavior and Models panes now says what it does
+in a full phrase, for example "Hold the hotkey this long for push-to-talk" with
+the caption "A shorter tap keeps listening until you press again." The hold
+threshold's wording says "the hotkey" because it governs the secondary chord
+as well as Fn, and "press again" because any next press of either key commits.
+The auto-stop wording says "hands-free mode" because auto-stop is ignored while
+a key is held. The names are proposals to rename later; the keys and the saved
+file are unchanged.
 
 ## Environment prerequisites discovered
 
