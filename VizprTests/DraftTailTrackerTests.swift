@@ -5,11 +5,12 @@ import Testing
 struct DraftTailTrackerTests {
 
     private func tracker(
-        cadence: Int = 1000, leftContext: Int = 2000, cap: Int = 10_000, minTail: Int = 1
+        cadence: Int = 1000, leftContext: Int = 2000, cap: Int = 10_000,
+        commitCap: Int? = nil, minTail: Int = 1
     ) -> DraftTailTracker {
         DraftTailTracker(
             cadenceFloorSamples: cadence, leftContextSamples: leftContext,
-            maxDecodeSamples: cap, minTailSamples: minTail
+            maxDecodeSamples: cap, maxCommitSamples: commitCap ?? cap, minTailSamples: minTail
         )
     }
 
@@ -97,5 +98,40 @@ struct DraftTailTrackerTests {
         #expect(t.reclaimableSamples == 1000)   // 3000 - 2000 context
         t.append(sampleCount: 20_000)           // total 25000; cap floor = 15000
         #expect(t.reclaimableSamples == 15_000)
+    }
+
+    @Test("The commit range spans the confirmed boundary to the total")
+    func commitRangeSpansTail() {
+        var t = tracker(commitCap: 50_000)
+        t.append(sampleCount: 9000)
+        #expect(t.commitRange() == 0 ..< 9000)
+        t.confirm(through: 4000)
+        #expect(t.commitRange() == 4000 ..< 9000)
+    }
+
+    @Test("The commit range is nil when nothing is unconfirmed")
+    func commitRangeNilWhenConfirmed() {
+        var t = tracker()
+        #expect(t.commitRange() == nil)
+        t.append(sampleCount: 3000)
+        t.confirm(through: 3000)
+        #expect(t.commitRange() == nil)
+    }
+
+    @Test("The commit cap trims from the front at 240,000 while the draft cap stays at 192,000")
+    func commitCapWiderThanDraftCap() {
+        var t = DraftTailTracker(minTailSamples: 1)
+        t.append(sampleCount: 300_000)
+        #expect(t.commitRange() == 60_000 ..< 300_000)
+        #expect(t.takeDecodeRequest()?.range == 108_000 ..< 300_000)
+    }
+
+    @Test("Reclaimable samples keep the commit cap's worth of audio")
+    func reclaimableKeepsCommitCap() {
+        var t = DraftTailTracker(minTailSamples: 1)
+        t.append(sampleCount: 300_000)
+        #expect(t.reclaimableSamples == 60_000)
+        t.confirm(through: 100_000)
+        #expect(t.reclaimableSamples == 68_000)   // boundary 100,000 - 32,000 context
     }
 }
