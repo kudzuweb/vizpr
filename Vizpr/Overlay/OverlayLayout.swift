@@ -9,7 +9,7 @@ struct OverlayLayout: Sendable, Equatable {
     /// Visible frame of the display holding the active app.
     let screen: CGRect
 
-    /// Fixed reading width (§13: grow in height, not width).
+    /// Default reading width (§13: grow in height, not width); a look sets its own in `PaneShape.width`.
     static let readingWidth: CGFloat = 560
     /// Resting capsule shown on activation before text arrives.
     static let restingSize = CGSize(width: 220, height: 44)
@@ -19,17 +19,23 @@ struct OverlayLayout: Sendable, Equatable {
     /// Cap: top edge stops 25% inset from the top → max height 50% of screen.
     var maxHeight: CGFloat { screen.height * 0.50 }
 
-    /// Panel frame for a given measured content height. The bottom edge never
-    /// moves; only the top edge rises (newest words stay at the bottom).
-    func frame(contentHeight: CGFloat) -> CGRect {
+    /// Panel frame for a given measured content height. The pane's bottom edge
+    /// never moves; only the top edge rises (newest words stay at the bottom).
+    /// `margin` is extra room on every side for effects that draw beyond the
+    /// pane (glow, shadow): the panel grows around the pane, so the pane's
+    /// frame inside it is the same with or without a margin.
+    func frame(
+        contentHeight: CGFloat,
+        paneWidth: CGFloat = Self.readingWidth,
+        margin: CGFloat = 0
+    ) -> CGRect {
         let height = min(max(contentHeight, Self.restingSize.height), maxHeight)
-        let width = contentHeight <= Self.restingSize.height
-            ? Self.restingSize.width : Self.readingWidth
+        let width = contentHeight <= Self.restingSize.height ? Self.restingSize.width : paneWidth
         return CGRect(
-            x: screen.midX - width / 2,
-            y: bottomEdgeY,
-            width: width,
-            height: height
+            x: screen.midX - width / 2 - margin,
+            y: bottomEdgeY - margin,
+            width: width + 2 * margin,
+            height: height + 2 * margin
         )
     }
 

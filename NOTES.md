@@ -340,6 +340,71 @@ becomes active. Migration runs after the merge, from a separate decode of the
 legacy keys, and the store saves once when the file carried any, so migrated
 look ids stay stable and the legacy keys leave the file.
 
+## PR 15 — Sculptable looks (2026-10-21)
+
+### Rendering
+
+`OverlayLook.style` (`LookStyle`, `Vizpr/Overlay/LookStyle.swift`) holds every
+adjustable aspect of a look beyond its surface body, and every field renders on
+every surface. Every default is the no-visible-change value, so `.neutral` is
+today's Glass and `OverlayLook.mergeTemplate` carries it.
+
+| Group | What it does |
+|---|---|
+| `fill` | Frost: Glass gets `colorHex` at opacity `frost` over the material (0 is the old Glass); the new `solid` surface fills at `max(frost, 0.05)`. |
+| `light` | One transparent layer (`LightLayer`, `PaneLight.metal`) over any surface: edge light, bevel, gloss (still highlight, matte 0 to shiny 1), moving sheen, grain. It draws nothing when all are 0 and ticks only for sheen or grain. |
+| `border`, `outerGlow`, `dropShadow` | `PaneEffects`. |
+| `pane` | Reading width and text padding. |
+| `text` | Font family (system font in the look's design when unset or not installed), weight, line spacing, text glow. |
+| `dot` | Recording dot color, size and pulse. |
+
+`SlabStyle` is now only the mesh body. The built-in Slab look carries its old
+light and shadow in `style.light` and `style.dropShadow`.
+
+**Glow and shadow draw only outside the pane.** Each is a blurred copy of the
+pane shape masked to the region outside the pane shape (`blendMode(.destinationOut)`
+in a `compositingGroup`), because a copy left behind see-through glass would
+tint its interior. The overlay panel grows on every side by the largest enabled
+effect extent (`PaneEffects.margin(for:)`), and the pane's frame inside it does
+not move.
+
+**Backdrop.** `style.backdrop` (`BackdropLayer`) is a neutral dimming layer drawn
+below the surface, light and border. The fill is both the glass's color and its
+blocker, so raising its opacity to quiet busy content behind the pane turns the
+glass into tinted plastic. The backdrop blocks without touching the glass: it
+is a uniform `colorHex` at `strength` inside the pane, fading to nothing over
+`feather` points outside it (a blurred, slightly grown copy of the pane shape,
+masked to the outside like glow and shadow). It is off by default, and
+`PaneEffects.margin(for:)` includes its reach when enabled.
+
+**Measurement.** `OverlayLook.paneHeight(fitting:)` is the one place that
+measures: width, padding, font, and line spacing (through `NSParagraphStyle`)
+all come from the look, matching how `OverlayView` lays the text out.
+
+**Offscreen renders.** `NSHostingView.cacheDisplay` does not run Metal shader
+effects, so the light layer is absent from such frames. `ImageRenderer` runs
+them but cannot draw a `ScrollView`.
+### Look editor and fonts
+
+The Appearance pane edits every field of `LookStyle` (`Vizpr/Overlay/LookStyle.swift`,
+held in `OverlayLook.style`) with sliders, toggles and color pickers, one file
+per section in `Vizpr/App/Appearance/`. A live preview pinned above the
+controls renders the real `OverlayView` with the active look over a checkerboard
+while sample text types itself (`PreviewTranscript`); the typing runs in a
+`.task`, so it stops when the tab is left, and closing the Settings window
+releases the window and its views. Slider ranges live in `LookRanges` and a
+test fails when one drifts from its field's `clamped()` bound.
+
+**Fonts.** `FontLibrary` registers every `.ttf`, `.otf` and `.ttc` in
+`Application Support/Vizpr/Fonts` at launch with
+`CTFontManagerRegisterFontsForURL(url, .process, &error)`: Vizpr only, never
+installed system-wide. A file that is already registered returns error 105
+(`alreadyRegistered`), which counts as success. `NSFontManager.availableFontFamilies`
+does not list a newly registered family until a later run-loop turn (the
+CoreText family list does, at once), so `FontLibrary.families` adds the
+families it registered itself. A look stores a family name in
+`style.text.fontFamily`; nil is the system font in the look's `fontDesign`.
+
 ## Future directions (Mauria, 2026-07-05 — recorded, not scheduled)
 
 1. **Verbatim mode:** "I should be able to talk casually and have it show up

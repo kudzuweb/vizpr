@@ -65,7 +65,11 @@ struct OverlayView: View {
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity)
+        .padding(effectsMargin)
     }
+
+    /// Room the panel leaves around the pane for glow and shadow.
+    private var effectsMargin: CGFloat { PaneEffects.margin(for: look.style) }
 
     @ViewBuilder private var transcript: some View {
         let resting = snapshot == .empty
@@ -85,9 +89,11 @@ struct OverlayView: View {
                         + Text(snapshot.mutableSuffix).foregroundStyle(look.mutableStyle)
                     )
                     .font(look.font)
+                    .lineSpacing(look.style.text.lineSpacing)
+                    .textGlow(look.style.text)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 18)
-                    .padding(.vertical, 12)
+                    .padding(.horizontal, look.style.pane.paddingHorizontal)
+                    .padding(.vertical, look.style.pane.paddingVertical)
                 }
                 .scrollIndicators(.hidden)
                 // Tail-follow must re-pin on BOTH initial layout and every
@@ -100,20 +106,57 @@ struct OverlayView: View {
                 .clipShape(capsuleShape)
 
                 if recording {
-                    Circle()
-                        .fill(look.tintColor)
-                        .frame(width: 7, height: 7)
+                    RecordingDot(style: look.style.dot, tint: look.tintColor, animated: animated)
                         .padding(10)
                         .accessibilityLabel("Recording")
                 }
             }
             .frame(
-                width: resting ? OverlayLayout.restingSize.width : OverlayLayout.readingWidth,
+                width: resting ? OverlayLayout.restingSize.width : look.style.pane.width,
                 height: capsuleHeight
             )
             .animation(animated ? .easeOut(duration: 0.15) : nil, value: capsuleHeight)
             .animation(animated ? .easeOut(duration: 0.15) : nil, value: resting)
         }
         .frame(maxWidth: .infinity)
+        .padding(effectsMargin)
+    }
+}
+
+/// The recording indicator: the look's dot color (the tint when unset) and
+/// size, with an optional gentle opacity pulse that Reduce Motion turns off.
+struct RecordingDot: View {
+    let style: DotStyle
+    let tint: Color
+    let animated: Bool
+
+    private static let pulseSeconds = 1.6
+    private static let dimmestOpacity = 0.35
+
+    var body: some View {
+        TimelineView(.animation(paused: !(style.pulse && animated))) { timeline in
+            Circle()
+                .fill(style.colorHex.flatMap { Color(hex: $0) } ?? tint)
+                .frame(width: style.size, height: style.size)
+                .opacity(style.pulse && animated ? Self.opacity(at: timeline.date) : 1)
+        }
+    }
+
+    /// Eases between full opacity and `dimmestOpacity` once per `pulseSeconds`.
+    static func opacity(at date: Date) -> Double {
+        let phase = date.timeIntervalSinceReferenceDate / pulseSeconds * 2 * Double.pi
+        let wave = (1 + cos(phase)) / 2
+        return dimmestOpacity + (1 - dimmestOpacity) * wave
+    }
+}
+
+private extension View {
+    /// Soft glow around the transcript text, when the look enables it.
+    @ViewBuilder func textGlow(_ text: TextStyle) -> some View {
+        if text.glowEnabled {
+            shadow(color: Color(hex: text.glowColorHex) ?? .white, radius: text.glowRadius)
+        } else {
+            self
+        }
     }
 }
