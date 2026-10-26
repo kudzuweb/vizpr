@@ -74,6 +74,12 @@ struct VizprSettings: Codable, Equatable, Sendable {
     /// Glass (see `activeLook`).
     var activeLookID: UUID = OverlayLook.glass.id
 
+    // MARK: Overlay position
+    /// Where the user dragged the overlay, per display. The key is the
+    /// display's UUID (`NSScreen.displayUUID`); an absent key is the default
+    /// lower-center.
+    var overlayAnchors: [String: OverlayAnchor] = [:]
+
     /// The locked settled:mutable opacity ratio (not persisted, not a
     /// setting — the trust contract's floor).
     static let mutableOpacityRatio = 0.55
@@ -94,6 +100,7 @@ struct VizprSettings: Codable, Equatable, Sendable {
         s.autoStopSeconds = min(max(s.autoStopSeconds, 2), 60)
         s.settleCapMs = min(max(s.settleCapMs, 0), 1_000)
         s.draftMinTailMs = min(max(s.draftMinTailMs, 500), 4_000)
+        s.overlayAnchors = s.overlayAnchors.mapValues { $0.clamped() }
         // Built-ins are read-only constants, so a stored look may not shadow
         // one, and ids must be unique for selection to be unambiguous.
         var seen = Set(OverlayLook.builtIns.map(\.id))
@@ -169,6 +176,11 @@ final class SettingsStore: ObservableObject {
             $0.looks = []
             $0.activeLookID = OverlayLook.glass.id
         }
+    }
+
+    /// Puts the overlay back at lower-center on every display.
+    func resetOverlayPositions() {
+        update { $0.overlayAnchors = [:] }
     }
 
     func selectLook(_ id: UUID) {

@@ -8,8 +8,15 @@ import SwiftUI
 @MainActor
 final class OverlayController {
     private let panel = PreviewPanel()
-    private var hosting: NSHostingView<OverlayView>?
-    private var layout: OverlayLayout?
+    private var hosting: DragHostingView<OverlayView>?
+    /// The screen the pane sits on: its visible frame and stable display id.
+    private var placement: (visibleFrame: CGRect, displayID: String?)?
+    private var anchors: [String: OverlayAnchor] = [:]
+    /// Called with the display id and the new anchor when a drag ends.
+    var onAnchorChange: ((String, OverlayAnchor) -> Void)?
+    private var layout: OverlayLayout? {
+        placement.map { OverlayLayout(screen: $0.visibleFrame, anchor: $0.displayID.flatMap { anchors[$0] }) }
+    }
     private var recording = false
     /// Once the capsule caps, stop measuring: the O(session-length)
     /// boundingRect result is clamped anyway (review finding).
@@ -18,6 +25,17 @@ final class OverlayController {
     private var lastSnapshot = DisplaySnapshot.empty
 
     private var inviz = false
+
+    init() {
+        panel.onDragEnd = { [weak self] frame in self?.dragEnded(panelFrame: frame) }
+    }
+
+    /// Live setting: the saved positions per display. Takes effect on the
+    /// next placement (`setLook` runs with every settings change and places
+    /// the panel again).
+    func setAnchors(_ newAnchors: [String: OverlayAnchor]) {
+        anchors = newAnchors
+    }
 
     /// Live setting (PR 11): inviz mode swaps the transcript for the
     /// indicator; applies to the next render.
@@ -52,6 +70,34 @@ final class OverlayController {
         )
     }
 
+    /// A drag moved the panel: the pane's bottom-center, on whichever screen
+    /// it now sits, becomes that display's anchor. The pane then grows from
+    /// that point.
+    private func dragEnded(panelFrame: CGRect) {
+        let margin = PaneEffects.margin(for: look.style)
+        let paneFrame = CGRect(
+            x: panelFrame.minX + margin,
+            y: panelFrame.minY + margin,
+            width: panelFrame.width - 2 * margin,
+            height: OverlayLayout.restingSize.height
+        )
+        let screens = NSScreen.screens
+        let landed = screens.first { $0.frame.contains(CGPoint(x: paneFrame.midX, y: paneFrame.midY)) }
+        guard let screen = landed ?? screens.first(where: { $0.visibleFrame == placement?.visibleFrame }) else {
+            return
+        }
+        let displayID = screen.displayUUID
+        placement = (screen.visibleFrame, displayID)
+        guard let displayID, let layout else { positionPanel(); return }
+        let anchor = layout.anchor(forPaneFrame: paneFrame)
+        anchors[displayID] = anchor
+        // The cap depends on the anchor, so the height is measured again.
+        hitCap = false
+        positionPanel()
+        render(lastSnapshot)
+        onAnchorChange?(displayID, anchor)
+    }
+
     private var reduceMotion: Bool {
         NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
     }
@@ -70,8 +116,7 @@ final class OverlayController {
         let screen = screens.first { $0.frame == targetFrame }
             ?? NSScreen.main ?? screens.first
         guard let screen else { return }
-        let layout = OverlayLayout(screen: screen.visibleFrame)
-        self.layout = layout
+        placement = (screen.visibleFrame, screen.displayUUID)
         recording = true
         hitCap = false
         panel.alphaValue = 1
@@ -126,7 +171,7 @@ final class OverlayController {
         if let hosting {
             hosting.rootView = view
         } else {
-            let fresh = NSHostingView(rootView: view)
+            let fresh = DragHostingView(rootView: view)
             hosting = fresh
             panel.contentView = fresh
         }
