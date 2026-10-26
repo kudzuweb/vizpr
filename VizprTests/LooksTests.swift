@@ -87,6 +87,27 @@ struct LooksTests {
         #expect(settings.secondaryModifiers == VizprSettings.default.secondaryModifiers)
     }
 
+    @Test("A file without targetAppDisplay loads with the icon shown; a saved choice survives")
+    func missingTargetAppDisplay() throws {
+        #expect(try decode(#"{"invizMode": true}"#).targetAppDisplay == .icon)
+        #expect(try decode(#"{"targetAppDisplay": "iconAndName"}"#).targetAppDisplay == .iconAndName)
+        #expect(try decode(#"{"targetAppDisplay": "off"}"#).targetAppDisplay == .off)
+    }
+
+    @Test("A file without overlayAnchors loads with an empty map")
+    func missingAnchors() throws {
+        #expect(try decode(#"{"invizMode": true}"#).overlayAnchors.isEmpty)
+        let saved = try decode(#"{"overlayAnchors": {"display-a": {"x": 0.2, "y": 0.7}}}"#)
+        #expect(saved.overlayAnchors == ["display-a": OverlayAnchor(x: 0.2, y: 0.7)])
+    }
+
+    @Test("Out-of-range anchors are clamped into 0...1")
+    func anchorsClamp() throws {
+        let settings = try decode(#"{"overlayAnchors": {"a": {"x": -3, "y": 9}, "b": {"x": 0.4, "y": 0.5}}}"#)
+        #expect(settings.overlayAnchors["a"] == OverlayAnchor(x: 0, y: 1))
+        #expect(settings.overlayAnchors["b"] == OverlayAnchor(x: 0.4, y: 0.5))
+    }
+
     @Test("A saved look missing a field gets that field's default and keeps the rest")
     func lookMissingField() throws {
         let settings = try decode("""
@@ -111,7 +132,7 @@ struct LooksTests {
         look.tintStrength = 0.4
         look.textBaseHex = "ABCDEF"
         look.colorsLinked = true
-        look.slab.grain = 0.1
+        look.slab.meshLoopSeconds = 12
         look.fontDesign = .serif
         look.fontSize = 20
         look.wordAppearance = .fade
@@ -139,10 +160,10 @@ struct LooksTests {
     func partialSlab() throws {
         let settings = try decode("""
         {"looks": [{"id": "5A1B6A52-6F42-4B7E-8D5C-2C0B5C1D9E01", "name": "Mine",
-                    "surface": "slab", "slab": {"grain": 0.1}}]}
+                    "surface": "slab", "slab": {"meshLoopSeconds": 12}}]}
         """)
         let slab = try #require(settings.looks.first).slab
-        #expect(slab.grain == 0.1)
+        #expect(slab.meshLoopSeconds == 12)
         #expect(slab.meshDrift == SlabStyle.default.meshDrift)
         #expect(slab.meshColorsHex == SlabStyle.defaultMeshColors)
     }
@@ -155,7 +176,7 @@ struct LooksTests {
         custom.name = "Mine"
         custom.fontDesign = .serif
         custom.cornerRadius = 12
-        custom.slab.grain = 0.1
+        custom.slab.meshLoopSeconds = 12
         settings.looks = [custom]
         settings.activeLookID = custom.id
         settings.autoStopSeconds = 9
@@ -240,7 +261,9 @@ struct LooksTests {
         settings.cleanupModelID = "cleanup-x"
         settings.restoreClipboard = false
         settings.invizMode = true
+        settings.targetAppDisplay = .iconAndName
         settings.silentInputFallback = false
+        settings.overlayAnchors = ["display-a": OverlayAnchor(x: 0.3, y: 0.6)]
         var look = OverlayLook.slab
         look.id = UUID()
         look.name = "Everything"

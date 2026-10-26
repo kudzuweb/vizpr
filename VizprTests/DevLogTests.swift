@@ -256,5 +256,34 @@ struct DevLogTests {
         #expect(timings.commitMs == nil)
         #expect(timings.draftCount == 0)
     }
+
+    @Test("Under the test host the dev log directory is a temporary one, never ~/Documents")
+    func testHostLogsToTemporaryDirectory() {
+        let path = VizprDevLogDirectory.url.standardizedFileURL.path
+        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].path
+
+        #expect(AppDelegate.isHostedByTests)
+        #expect(!path.hasPrefix(documents))
+        #expect(path.hasPrefix(FileManager.default.temporaryDirectory.standardizedFileURL.path))
+    }
+
+    @Test("Concurrent appends all reach the file")
+    func concurrentAppendsKeepEveryLine() async throws {
+        let url = tempLogURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        await withTaskGroup(of: Void.self) { group in
+            for task in 0..<4 {
+                group.addTask {
+                    for i in 0..<50 {
+                        VizprTranscriptLogger.append(Data("task \(task) line \(i)\n".utf8), to: url)
+                    }
+                }
+            }
+        }
+
+        let lines = try String(contentsOf: url, encoding: .utf8).split(separator: "\n")
+        #expect(lines.count == 200)
+    }
 }
 #endif

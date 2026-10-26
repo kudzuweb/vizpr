@@ -2,7 +2,7 @@
 import Foundation
 
 /// Append-only JSONL writer for the dev transcript log (§14): one JSON object
-/// per line at `~/Documents/dictation-dev/transcripts.jsonl`. An actor so
+/// per line at `transcripts.jsonl` in `VizprDevLogDirectory`. An actor so
 /// concurrent records (cleanup outcomes race dictation commits) serialize into
 /// whole lines — interleaved partial writes would corrupt the JSONL contract.
 ///
@@ -16,9 +16,7 @@ actor VizprDevLogWriter {
 
     /// - Parameter fileURL: override for tests; defaults to the §14 path.
     init(fileURL: URL? = nil) {
-        let url = fileURL ?? URL(fileURLWithPath:
-            ("~/Documents/dictation-dev/transcripts.jsonl" as NSString).expandingTildeInPath
-        )
+        let url = fileURL ?? VizprDevLogDirectory.transcriptsURL
         try? FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(), withIntermediateDirectories: true
         )

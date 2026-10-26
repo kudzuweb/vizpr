@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// The opaque "slab" pane surface (PR 14): an animated mesh gradient body
-/// lit by the `paneSlab` Metal shader. Drawn at the display's full frame rate
-/// while animating; there is deliberately no throttle.
+/// The opaque "slab" pane surface (PR 14): an animated mesh gradient body.
+/// Its light and shadow come from the look's `LookStyle`, like any surface.
+/// Drawn at the display's full frame rate while animating; there is
+/// deliberately no throttle.
 struct SlabSurface: View {
     let style: SlabStyle
     let cornerRadius: CGFloat
@@ -50,27 +51,14 @@ struct SlabLayer: View {
     let time: Double
 
     var body: some View {
-        GeometryReader { proxy in
-            MeshGradient(
-                width: 3,
-                height: 3,
-                points: SlabSurface.meshPoints(
-                    time: time, drift: style.meshDrift, loopSeconds: style.meshLoopSeconds
-                ),
-                colors: style.meshColorsHex.map { Color(hex: $0) ?? .black }
-            )
-            .colorEffect(ShaderLibrary.paneSlab(
-                .float2(proxy.size),
-                .float(Float(time)),
-                .float(Float(style.sheenStrength)),
-                .float(Float(style.sheenSweepSeconds)),
-                .float(Float(style.edgeGlow)),
-                .float(Float(style.bevel)),
-                .float(Float(style.grain)),
-                .float(Float(cornerRadius))
-            ))
-            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            .shadow(color: .black.opacity(style.shadow), radius: 8, y: 3)
-        }
+        MeshGradient(
+            width: 3,
+            height: 3,
+            points: SlabSurface.meshPoints(
+                time: time, drift: style.meshDrift, loopSeconds: style.meshLoopSeconds
+            ),
+            colors: style.meshColorsHex.map { Color(hex: $0) ?? .black }
+        )
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
     }
 }
