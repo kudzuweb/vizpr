@@ -11,6 +11,7 @@ import FluidAudio
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private let hotkeyMonitor: HotkeyMonitor
+    private let triggerRecorder: HotkeyTriggerRecorder
     private let permissionProbe = PermissionProbe()
     private var actionsTask: Task<Void, Never>?
     private var audioPipeline: AudioPipeline?
@@ -71,6 +72,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             trigger: store.settings.trigger
         )
         hotkeyMonitor = monitor
+        triggerRecorder = HotkeyTriggerRecorder(store: store) { monitor.setSuspended($0) }
         super.init()
     }
 
@@ -631,7 +633,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func openSettings() {
         settingsWindow.show(
-            settings: settingsStore, vocabulary: vocabularyModel, models: modelsModel
+            settings: settingsStore, vocabulary: vocabularyModel, models: modelsModel,
+            triggerRecorder: triggerRecorder
         )
     }
 
