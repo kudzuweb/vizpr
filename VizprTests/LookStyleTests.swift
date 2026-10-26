@@ -17,11 +17,11 @@ struct LookStyleTests {
 
     @Test("A saved look without a style key loads with the neutral style")
     func missingStyleKeyLoadsNeutral() throws {
-        let json = """
-        {"looks": [{"id": "5A1B6A52-6F42-4B7E-8D5C-2C0B5C1D9E01", "name": "Old", "surface": "glass"}]}
-        """
-        let settings = try VizprSettings.load(from: Data(json.utf8))
-        #expect(try #require(settings.looks.first).style == .neutral)
+        let folder = try LookFixtures.folder()
+        try LookFixtures.put("""
+        {"id": "5A1B6A52-6F42-4B7E-8D5C-2C0B5C1D9E01", "name": "Old", "surface": "glass"}
+        """, "old.json", in: folder)
+        #expect(try #require(LookFiles.load(from: folder).looks.first).style == .neutral)
     }
 
     @Test("The neutral style has no light, border, glow or shadow to draw")
@@ -34,11 +34,12 @@ struct LookStyleTests {
 
     @Test("A saved look without a backdrop key renders no backdrop")
     func missingBackdropKeyDrawsNothing() throws {
-        let json = """
-        {"looks": [{"id": "5A1B6A52-6F42-4B7E-8D5C-2C0B5C1D9E01", "name": "Old", "surface": "solid",
-                    "style": {"fill": {"frost": 0.16, "colorHex": "2A1F3D"}}}]}
-        """
-        let style = try #require(try VizprSettings.load(from: Data(json.utf8)).looks.first).style
+        let folder = try LookFixtures.folder()
+        try LookFixtures.put("""
+        {"id": "5A1B6A52-6F42-4B7E-8D5C-2C0B5C1D9E01", "name": "Old", "surface": "solid",
+         "style": {"fill": {"frost": 0.16, "colorHex": "2A1F3D"}}}
+        """, "old.json", in: folder)
+        let style = try #require(LookFiles.load(from: folder).looks.first).style
         #expect(style.fill.frost == 0.16, "the saved style loaded")
         #expect(style.backdrop == BackdropStyle())
         #expect(!style.backdrop.enabled)
