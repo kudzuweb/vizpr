@@ -74,12 +74,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // app can only load models that shipped in its bundle (invariant 1).
         DownloadUtils.enforceOffline = true
 
+        // Before the overlay can render: a look may name a font from the Fonts folder.
+        FontLibrary.registerAll()
+
         // LSUIElement already implies accessory; set it explicitly so the policy
         // is unambiguous regardless of how the process was launched.
         NSApp.setActivationPolicy(.accessory)
         setUpStatusItem()
         modelsModel.startWatching()
         setUpAudioPipeline()
+        overlay.onAnchorChange = { [weak self] displayID, anchor in
+            self?.settingsStore.update { $0.overlayAnchors[displayID] = anchor }
+        }
         applySettings(settingsStore.settings)
         settingsStore.onChange { [weak self] settings in
             self?.applySettings(settings)
@@ -283,8 +289,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         audioPipeline?.setAutoStopTimeout(.seconds(settings.autoStopSeconds))
         audioPipeline?.silentInputFallback = settings.silentInputFallback
         textInjector.setRestoreEnabled(settings.restoreClipboard)
+        overlay.setAnchors(settings.overlayAnchors)
         overlay.setLook(settings.activeLook)
         overlay.setInviz(settings.invizMode)
+        overlay.setTargetAppDisplay(settings.targetAppDisplay)
         Task { [tokenStream, smartCleanup, asrEngine] in
             await tokenStream.setSettleSentences(settings.settleSentences)
             await smartCleanup?.setRuntime(
@@ -624,6 +632,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshMenu()
     }
 
+    @objc private func resetOverlayPosition() {
+        settingsStore.resetOverlayPositions()
+    }
+
     @objc private func cycleVocabulary() {
         let name = vocabularyModel.cycle()
         #if DICT_DEV_LOG
@@ -707,6 +719,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(cycleItem(
             "Look: \(settingsStore.settings.activeLook.name)", #selector(cycleLook)
         ))
+        menu.addItem(cycleItem("Reset Overlay Position", #selector(resetOverlayPosition)))
 
         let settings = NSMenuItem(
             title: "Settings…", action: #selector(openSettings), keyEquivalent: ","
