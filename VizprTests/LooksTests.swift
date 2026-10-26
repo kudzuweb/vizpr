@@ -56,6 +56,8 @@ struct LooksTests {
         #expect(settings.restoreClipboard == false)
         #expect(settings.invizMode == true)
         #expect(settings.silentInputFallback == false)
+        // A file from before the field existed still says "primaryTrigger": "fn".
+        #expect(settings.trigger == .fn)
 
         #expect(settings.looks.map(\.name) == ["My colors", "Sunset", "00AAFF"])
         #expect(settings.looks.allSatisfy { $0.surface == .glass })
@@ -248,6 +250,7 @@ struct LooksTests {
         settings.hotkeyEnabled = false
         settings.holdThresholdMs = 410
         settings.secondaryModifiers = ["command", "shift", "option"]
+        settings.trigger = HotkeyTrigger(keyCode: 105, modifiers: ["control"])   // F13
         settings.autoStopSeconds = 17
         settings.cleanupEnabled = false
         settings.codeModeOverride = true
@@ -273,9 +276,7 @@ struct LooksTests {
 
         // Fails when a new field is added to VizprSettings but not set above.
         let defaults = Mirror(reflecting: VizprSettings.default).children
-        // primaryTrigger only accepts "fn" today, so it cannot leave its default.
-        for (field, base) in zip(Mirror(reflecting: settings).children, defaults)
-        where field.label != "primaryTrigger" {
+        for (field, base) in zip(Mirror(reflecting: settings).children, defaults) {
             #expect(String(describing: field.value) != String(describing: base.value),
                     "\(field.label ?? "?") is still at its default")
         }
@@ -392,6 +393,7 @@ struct SettingsStoreLoadingTests {
         let lookID = "5A1B6A52-6F42-4B7E-8D5C-2C0B5C1D9E01"
         let url = try tempFile("""
         {"settleCapMs": 500, "settleSentences": 4, "autoStopSeconds": 3,
+         "primaryTrigger": "fn",
          "looks": [{"id": "\(lookID)", "name": "Mine", "cornerRadius": 12}]}
         """)
         let first = SettingsStore(fileURL: url).settings
@@ -402,11 +404,59 @@ struct SettingsStoreLoadingTests {
         #expect(object["settleCapMs"] == nil)
         #expect(object["draftMinTailMs"] == nil)
         #expect(object["settleSentences"] == nil)
+        #expect(object["primaryTrigger"] == nil)
         #expect(object["autoStopSeconds"] as? Int == 3)
         let looks = try #require(object["looks"] as? [[String: Any]])
         #expect(looks.map { $0["id"] as? String } == [lookID])
         #expect(first.autoStopSeconds == 3)
         #expect(SettingsStore(fileURL: url).settings == first)
+    }
+
+    @Test("A saved trigger loads and survives a save and reload")
+    func triggerRoundTripsThroughTheFile() throws {
+        let url = try tempFile(#"{"trigger": {"keyCode": 61, "modifiers": []}, "autoStopSeconds": 9}"#)
+        let store = SettingsStore(fileURL: url)
+        #expect(store.settings.trigger == HotkeyTrigger(keyCode: 61, modifiers: []))
+        store.update { $0.trigger = HotkeyTrigger(keyCode: 2, modifiers: ["shift", "command"]) }
+        let reloaded = SettingsStore(fileURL: url).settings
+        #expect(reloaded.trigger == HotkeyTrigger(keyCode: 2, modifiers: ["command", "shift"]))
+        #expect(reloaded.autoStopSeconds == 9)
+    }
+
+    @Test("A malformed trigger becomes Fn and never costs the rest of the file")
+    func malformedTriggerFallsBackToFn() throws {
+        for trigger in [
+            #""fn""#,
+            #"{"keyCode": "61", "modifiers": []}"#,
+            #"{"keyCode": 70000, "modifiers": []}"#,
+            #"{"keyCode": -1, "modifiers": []}"#,
+            #"{"keyCode": 61, "modifiers": "option"}"#,
+            #"{"keyCode": 300, "modifiers": []}"#,
+            #"{"keyCode": 57, "modifiers": []}"#,
+            #"{"keyCode": 53, "modifiers": []}"#,
+            #"{"keyCode": 61, "modifiers": ["hyper"]}"#,
+            #"{"keyCode": 61, "modifiers": ["option"]}"#,
+            #"{"keyCode": 63, "modifiers": ["shift"]}"#,
+            #"{"keyCode": 2, "modifiers": ["option", "control", "shift"]}"#
+        ] {
+            let json = #"{"holdThresholdMs": 410, "trigger": \#(trigger)}"#
+            let settings = try VizprSettings.load(from: Data(json.utf8))
+            #expect(settings.trigger == .fn, "trigger \(trigger) should fall back to Fn")
+            #expect(settings.holdThresholdMs == 410, "trigger \(trigger) must not cost the rest of the file")
+        }
+    }
+
+    @Test("A trigger's modifiers are sorted and deduplicated, and a chord edit cannot orphan it")
+    func triggerClampingIsStable() {
+        var settings = VizprSettings()
+        settings.trigger = HotkeyTrigger(keyCode: 2, modifiers: ["shift", "command", "shift"])
+        #expect(settings.clamped().trigger == HotkeyTrigger(keyCode: 2, modifiers: ["command", "shift"]))
+        // The default chord is control + option: a trigger holding both is refused.
+        settings.trigger = HotkeyTrigger(keyCode: 2, modifiers: ["option", "control"])
+        #expect(settings.clamped().trigger == .fn)
+        // Right Option as a bare trigger coexists with Option in the chord.
+        settings.trigger = HotkeyTrigger(keyCode: 61, modifiers: [])
+        #expect(settings.clamped().trigger == settings.trigger)
     }
 
     @Test("A readable file is not rewritten or backed up on load")

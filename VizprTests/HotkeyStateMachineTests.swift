@@ -19,25 +19,25 @@ private func machine(_ state: HotkeyState = .idle) -> HotkeyStateMachine {
 @Suite("HotkeyStateMachine transitions")
 struct HotkeyTransitionTests {
 
-    @Test("Fn down from idle starts dictation and consumes the event")
-    func fnDownStarts() {
+    @Test("Primary down from idle starts dictation and consumes the event")
+    func primaryDownStarts() {
         var m = machine()
-        let d = m.handle(.fnDown(at: t(0)))
+        let d = m.handle(.primaryDown(at: t(0)))
         #expect(d.action == .startDictation)
         #expect(d.disposition == .consume)
-        #expect(m.state == .pressed(since: t(0), source: .fn))
+        #expect(m.state == .pressed(since: t(0), source: .primary))
     }
 
     @Test("Tap (release before threshold) latches; next press commits")
     func tapLatchesThenNextPressCommits() {
         var m = machine()
-        _ = m.handle(.fnDown(at: t(0)))
-        let up = m.handle(.fnUp(at: t(150)))           // 150ms < 200ms → tap
+        _ = m.handle(.primaryDown(at: t(0)))
+        let up = m.handle(.primaryUp(at: t(150)))           // 150ms < 200ms → tap
         #expect(up.action == nil)                       // keep dictating, no commit yet
         #expect(up.disposition == .consume)
-        #expect(m.state == .latched(source: .fn))
+        #expect(m.state == .latched(source: .primary))
 
-        let next = m.handle(.fnDown(at: t(2000)))       // next press commits
+        let next = m.handle(.primaryDown(at: t(2000)))       // next press commits
         #expect(next.action == .commit)
         #expect(next.disposition == .consume)
         #expect(m.state == .idle)
@@ -46,8 +46,8 @@ struct HotkeyTransitionTests {
     @Test("Hold (release at/after threshold) commits on release")
     func holdCommitsOnRelease() {
         var m = machine()
-        _ = m.handle(.fnDown(at: t(0)))
-        let up = m.handle(.fnUp(at: t(300)))           // 300ms ≥ 200ms → hold
+        _ = m.handle(.primaryDown(at: t(0)))
+        let up = m.handle(.primaryUp(at: t(300)))           // 300ms ≥ 200ms → hold
         #expect(up.action == .commit)
         #expect(up.disposition == .consume)
         #expect(m.state == .idle)
@@ -56,24 +56,24 @@ struct HotkeyTransitionTests {
     @Test("Threshold boundary: exactly at threshold is a hold")
     func thresholdBoundaryIsHold() {
         var tap = machine()
-        _ = tap.handle(.fnDown(at: t(0)))
-        #expect(tap.handle(.fnUp(at: t(199))).action == nil)          // 199 < 200 → tap/latch
-        #expect(tap.state == .latched(source: .fn))
+        _ = tap.handle(.primaryDown(at: t(0)))
+        #expect(tap.handle(.primaryUp(at: t(199))).action == nil)          // 199 < 200 → tap/latch
+        #expect(tap.state == .latched(source: .primary))
 
         var hold = machine()
-        _ = hold.handle(.fnDown(at: t(0)))
-        #expect(hold.handle(.fnUp(at: t(200))).action == .commit)     // 200 ≥ 200 → hold
+        _ = hold.handle(.primaryDown(at: t(0)))
+        #expect(hold.handle(.primaryUp(at: t(200))).action == .commit)     // 200 ≥ 200 → hold
         #expect(hold.state == .idle)
     }
 
     @Test("thresholdElapsed promotes pressed → holding; release then commits")
     func thresholdElapsedPromotesToHolding() {
         var m = machine()
-        _ = m.handle(.fnDown(at: t(0)))
+        _ = m.handle(.primaryDown(at: t(0)))
         let promote = m.handle(.thresholdElapsed(at: t(200)))
         #expect(promote.action == nil)
-        #expect(m.state == .holding(since: t(0), source: .fn))
-        let up = m.handle(.fnUp(at: t(5000)))
+        #expect(m.state == .holding(since: t(0), source: .primary))
+        let up = m.handle(.primaryUp(at: t(5000)))
         #expect(up.action == .commit)
         #expect(m.state == .idle)
     }
@@ -81,7 +81,7 @@ struct HotkeyTransitionTests {
     @Test("A tap whose release is handled late still latches, even after a late thresholdElapsed")
     func lateHandledTapLatches() {
         for (source, down, up) in [
-            (ActivationSource.fn, HotkeyInput.fnDown(at: t(0)), HotkeyInput.fnUp(at: t(100))),
+            (ActivationSource.primary, HotkeyInput.primaryDown(at: t(0)), HotkeyInput.primaryUp(at: t(100))),
             (.secondary, .secondaryDown(at: t(0)), .secondaryUp(at: t(100)))
         ] {
             var m = machine()
@@ -98,9 +98,9 @@ struct HotkeyTransitionTests {
     @Test("A real hold promoted to holding still commits on release")
     func realHoldCommitsFromHolding() {
         var m = machine()
-        _ = m.handle(.fnDown(at: t(0)))
+        _ = m.handle(.primaryDown(at: t(0)))
         _ = m.handle(.thresholdElapsed(at: t(200)))
-        let d = m.handle(.fnUp(at: t(600)))
+        let d = m.handle(.primaryUp(at: t(600)))
         #expect(d.action == .commit)
         #expect(d.disposition == .consume)
         #expect(m.state == .idle)
@@ -109,17 +109,17 @@ struct HotkeyTransitionTests {
     @Test("Early thresholdElapsed is ignored (cannot mislabel a tap as a hold)")
     func earlyThresholdElapsedIgnored() {
         var m = machine()
-        _ = m.handle(.fnDown(at: t(0)))
+        _ = m.handle(.primaryDown(at: t(0)))
         _ = m.handle(.thresholdElapsed(at: t(50)))     // 50ms < threshold → no promotion
-        #expect(m.state == .pressed(since: t(0), source: .fn))
+        #expect(m.state == .pressed(since: t(0), source: .primary))
     }
 
     @Test("Escape discards from every active state and never consumes")
     func escapeCancelsFromActiveStates() {
         for start: HotkeyState in [
-            .pressed(since: t(0), source: .fn),
-            .holding(since: t(0), source: .fn),
-            .latched(source: .fn)
+            .pressed(since: t(0), source: .primary),
+            .holding(since: t(0), source: .primary),
+            .latched(source: .primary)
         ] {
             var m = machine(start)
             let d = m.handle(.escape)
@@ -142,9 +142,9 @@ struct HotkeyTransitionTests {
     func tapDisabledFailsOpenFromEveryState() {
         let states: [HotkeyState] = [
             .idle,
-            .pressed(since: t(0), source: .fn),
+            .pressed(since: t(0), source: .primary),
             .holding(since: t(0), source: .secondary),
-            .latched(source: .fn)
+            .latched(source: .primary)
         ]
         for reason in [TapDisableReason.timeout, .userInput] {
             for start in states {
@@ -162,9 +162,9 @@ struct HotkeyTransitionTests {
     @Test("captureFailed cancels from every active state and never consumes")
     func captureFailedCancelsFromActiveStates() {
         for start: HotkeyState in [
-            .pressed(since: t(0), source: .fn),
+            .pressed(since: t(0), source: .primary),
             .holding(since: t(0), source: .secondary),
-            .latched(source: .fn)
+            .latched(source: .primary)
         ] {
             var m = machine(start)
             let d = m.handle(.captureFailed)
@@ -184,20 +184,46 @@ struct HotkeyTransitionTests {
 
     @Test("Auto-stop commits only in a latched session")
     func autoStopCommitsOnlyWhenLatched() {
-        var latched = machine(.latched(source: .fn))
+        var latched = machine(.latched(source: .primary))
         let d = latched.handle(.autoStop)
         #expect(d.action == .commit)
         #expect(d.disposition == .passThrough)
         #expect(latched.state == .idle)
 
-        for start: HotkeyState in [.idle, .pressed(since: t(0), source: .fn), .holding(since: t(0), source: .fn)] {
+        for start: HotkeyState in [.idle, .pressed(since: t(0), source: .primary), .holding(since: t(0), source: .primary)] {
             var m = machine(start)
             #expect(m.handle(.autoStop).action == nil, "autoStop is inert in \(start)")
             #expect(m.state == start)
         }
     }
 
-    @Test("Secondary combo mirrors Fn but never consumes")
+    @Test("An autorepeat of the primary key is swallowed in every state and changes nothing")
+    func primaryRepeatIsInertEverywhere() {
+        for start: HotkeyState in [
+            .idle,
+            .pressed(since: t(0), source: .primary),
+            .holding(since: t(0), source: .primary),
+            .latched(source: .primary),
+            .latched(source: .secondary)
+        ] {
+            var m = machine(start)
+            let d = m.handle(.primaryRepeat)
+            #expect(d == .ignoreConsume, "repeat in \(start) must only be swallowed")
+            #expect(m.state == start)
+        }
+    }
+
+    @Test("A held key repeating after the commit press does not start a new session")
+    func repeatAfterCommitDoesNotRestart() {
+        var m = machine(.latched(source: .primary))
+        #expect(m.handle(.primaryDown(at: t(2000))).action == .commit)
+        #expect(m.state == .idle)
+        let repeatDecision = m.handle(.primaryRepeat)
+        #expect(repeatDecision.action == nil)
+        #expect(m.state == .idle)
+    }
+
+    @Test("Secondary combo mirrors the primary but never consumes")
     func secondaryComboPassesThrough() {
         var m = machine()
         let down = m.handle(.secondaryDown(at: t(0)))
@@ -227,20 +253,6 @@ struct HotkeyTransitionTests {
 
 // MARK: - Property tests (randomized sequences)
 
-/// Deterministic SplitMix64 — a tiny seeded PRNG so property tests are
-/// reproducible and need no third-party dependency (invariant 3).
-private struct SplitMix64: RandomNumberGenerator {
-    private var state: UInt64
-    init(seed: UInt64) { state = seed }
-    mutating func next() -> UInt64 {
-        state &+= 0x9E37_79B9_7F4A_7C15
-        var z = state
-        z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
-        z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
-        return z ^ (z >> 31)
-    }
-}
-
 @Suite("HotkeyStateMachine invariants")
 struct HotkeyPropertyTests {
 
@@ -249,33 +261,35 @@ struct HotkeyPropertyTests {
     private func randomInput(using rng: inout SplitMix64, clock: inout UInt64) -> HotkeyInput {
         clock &+= UInt64.random(in: 0...500, using: &rng)   // 0–500 ms jitter
         let now = MonotonicTime(nanoseconds: clock * 1_000_000)
-        switch UInt8.random(in: 0...8, using: &rng) {
-        case 0: return .fnDown(at: now)
-        case 1: return .fnUp(at: now)
+        switch UInt8.random(in: 0...9, using: &rng) {
+        case 0: return .primaryDown(at: now)
+        case 1: return .primaryUp(at: now)
         case 2: return .secondaryDown(at: now)
         case 3: return .secondaryUp(at: now)
         case 4: return .escape
         case 5: return .autoStop
         case 6: return .thresholdElapsed(at: now)
         case 7: return .captureFailed
+        case 8: return .primaryRepeat
         default: return .tapDisabled(Bool.random(using: &rng) ? .timeout : .userInput)
         }
     }
 
-    private func isFnEvent(_ input: HotkeyInput) -> Bool {
+    private func isPrimaryInput(_ input: HotkeyInput) -> Bool {
         switch input {
-        case .fnDown, .fnUp: return true
+        case .primaryDown, .primaryUp, .primaryRepeat: return true
         default: return false
         }
     }
 
     /// THE load-bearing invariant (PLAN.md §8a): no event sequence ever leaves the
-    /// machine in a state that suppresses non-Fn input. Pinned as: a `.consume`
-    /// disposition is emitted **if and only if** the input is an Fn event — in
-    /// every state, after every history. This makes a swallowed-keystroke bug
-    /// (the Wispr failure) impossible by construction.
-    @Test("Fail-open: consume happens iff the input is an Fn event")
-    func failOpenConsumeOnlyForFn() {
+    /// machine in a state that suppresses non-primary input. Pinned as: a
+    /// `.consume` disposition is emitted **if and only if** the input is a
+    /// primary-trigger input (down, up or repeat) — in every state, after every
+    /// history. Which physical events become primary inputs is pinned separately,
+    /// over the tracker and machine together, in `HotkeyEventRouterTests`.
+    @Test("Fail-open: consume happens iff the input is a primary-trigger input")
+    func failOpenConsumeOnlyForPrimaryInputs() {
         for seed in UInt64(1)...500 {
             var rng = SplitMix64(seed: seed)
             var clock: UInt64 = 0
@@ -284,18 +298,18 @@ struct HotkeyPropertyTests {
                 let input = randomInput(using: &rng, clock: &clock)
                 let decision = m.handle(input)
                 if decision.disposition == .consume {
-                    #expect(isFnEvent(input), "non-Fn input \(input) was consumed (seed \(seed))")
+                    #expect(isPrimaryInput(input), "non-primary input \(input) was consumed (seed \(seed))")
                 }
-                if isFnEvent(input) {
-                    #expect(decision.disposition == .consume, "Fn input \(input) passed through (seed \(seed))")
+                if isPrimaryInput(input) {
+                    #expect(decision.disposition == .consume, "primary input \(input) passed through (seed \(seed))")
                 }
             }
         }
     }
 
-    /// After any history, a non-Fn event is never suppressed — the machine can
-    /// never get "stuck" eating real keystrokes.
-    @Test("No reachable state suppresses a following non-Fn key")
+    /// After any history, a non-primary event is never suppressed — the machine
+    /// can never get "stuck" eating real keystrokes.
+    @Test("No reachable state suppresses a following non-primary input")
     func noStuckSuppression() {
         let probes: [HotkeyInput] = [.escape, .secondaryDown(at: t(0)), .secondaryUp(at: t(0)), .autoStop]
         for seed in UInt64(1)...300 {
@@ -303,7 +317,7 @@ struct HotkeyPropertyTests {
             var clock: UInt64 = 0
             var m = machine()
             for _ in 0..<120 { _ = m.handle(randomInput(using: &rng, clock: &clock)) }
-            // Whatever state we landed in, every non-Fn probe must pass through.
+            // Whatever state we landed in, every non-primary probe must pass through.
             for probe in probes {
                 var copy = m
                 #expect(copy.handle(probe).disposition == .passThrough,

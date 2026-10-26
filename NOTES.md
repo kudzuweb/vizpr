@@ -707,35 +707,110 @@ annotated with provenance), so anything NEW fails. The download paths are
 runtime-disarmed (`DownloadUtils.enforceOffline = true` at launch, checked as
 a precondition in `FluidAudioASR.prepare` before any model API).
 
-## Trigger reassignment (Mauria, 2026-07-07 — designed-in, deliberate follow-up)
+## Trigger reassignment (shipped 2026-10-26)
 
-"I guess you should be able to reassign the trigger too. I like Fn but maybe
-other people want other button. especially vim guys."
+Mauria asked on 2026-07-07 for the trigger to be reassignable ("maybe other
+people want other button. especially vim guys"). Her ruling on 2026-10-25
+superseded the earlier staging (modifier triggers first, keycode triggers
+last): Fn stays the default, the user can choose another key or a combination,
+and a collision with another app's shortcut is the user's problem. The
+engineering demands stand: the state machine is parameterized over the
+trigger, and the fail-open property tests were regenerated around it.
 
-Deliberately NOT shipped in the PR 11 hotkey slice. The fail-open invariant
-("consume a keystroke ONLY if it's our trigger") is written specifically
-around Fn's flagsChanged behavior — Fn arrives as a modifier-flag transition,
-not a keyDown, so the current HotkeyStateMachine never has to decide whether
-to swallow a character-producing key. Reassignment to an arbitrary key (or a
-modifier chord as primary) means parameterizing that state machine, and the
-property tests that pin fail-open (`HotkeyStateMachineTests`) must be
-regenerated around the parameterized trigger, not just extended. **Do NOT
-rush this one** — a wrong trigger match eats user keystrokes system-wide.
+**A trigger** is `HotkeyTrigger` (`HotkeyTrigger.swift`): one physical key as a
+Carbon virtual keycode, plus the modifier families (`control`, `option`,
+`shift`, `command`) that must be held when it goes down. Fn is keycode 63 with
+no modifiers. A key in `HotkeyTrigger.modifierKeys` (Left/Right Command,
+Shift, Option, Control) or Fn is a modifier-key trigger, tracked on
+`flagsChanged`; any other keycode is a regular-key trigger, tracked on
+`keyDown` and `keyUp`. Settings stores it as `trigger`
+(`{"keyCode": 105, "modifiers": ["control"]}`). The old `primaryTrigger`
+string is dropped from a file on its next load (`VizprSettings.removedKeys`).
+A malformed `trigger` decodes as Fn instead of failing the file, which would
+cost every other setting. `clamped()` resets to Fn a trigger that cannot
+work: a keycode outside 0...127, Caps Lock (it toggles), Esc (it cancels
+dictation), an unknown modifier, Fn with modifiers, a sided modifier key
+listing its own family, or modifiers that contain every modifier of the
+secondary chord (pressing those starts the chord session first, so the
+trigger could never fire).
 
-Plan when it lands:
-1. Parameterize `HotkeyStateMachine` over a trigger descriptor (flag-based
-   like Fn, chord-based like the secondary, or plain-keycode).
-2. Modifier-mask triggers first (Right-Option, Right-Command, Globe) — same
-   flagsChanged shape as Fn, smallest step, covers most "other button" asks.
-3. Plain-keycode triggers (the vim ask) last: these require keyDown
-   consumption and a new class of fail-open property tests (never swallow a
-   key that ISN'T the trigger; always swallow one that IS; secure-input and
-   tap-timeout behavior re-proven).
+**The invariant**, restated: the machine consumes only primary-trigger inputs
+(down, up, repeat), and the only physical events that become primary inputs
+are the trigger key's own, identified by keycode and, for sided modifiers, by
+that key's device bit in the event flags. Nothing else is ever consumed.
+The secondary chord is unchanged: at least two family modifiers, never
+consumed.
 
-Already provisioned NOW so the settings format is stable:
-`VizprSettings.primaryTrigger: String = "fn"` — reserved field, decode-clamps
-to "fn" until the machine is parameterized. The Behavior pane displays the
-binding read-only with a "Trigger reassignment is coming." caption.
+**Matching** (`FlagEdgeTracker`):
+
+- *Exact modifiers.* The held families, masked to the four families, must
+  equal the trigger's modifiers. Every other flag bit is ignored, so ⌘D does
+  not fire on ⌘⇧D. For a modifier-key trigger the held set excludes the
+  trigger key's own family. Fn ignores held modifiers, as it always has.
+- *Sided modifiers by device bit.* Right Option is down exactly when
+  `NX_DEVICERALTKEYMASK` (0x40) is set in the flags of a `flagsChanged`
+  carrying keycode 61. A sibling key keeping the family flag set cannot turn
+  a release into a press. Right Option as a trigger therefore coexists with
+  Left Option in the chord.
+- *Fn by flag.* Fn keeps the field-tested snapshot comparison of the Fn flag,
+  including the silent re-seed on the first `flagsChanged` after a reset,
+  whatever keycode the packet carries. An Fn held at a re-seed is treated as
+  the trigger's own press unless the tracker saw it pass through earlier.
+- *Autorepeat.* Only a non-repeat `keyDown` can take a key. A repeat of the
+  taken key is `primaryRepeat`, which the machine swallows in every state
+  without changing it. A repeat of a key that was not taken is never an edge,
+  so a typed key that gains the trigger's modifiers while repeating is not
+  eaten, and a held trigger repeating after its commit press starts nothing.
+- *Taken keys.* The tracker emits an up edge only for a key it took. A trigger
+  change while the key is held keeps the taken key, so its up is still
+  consumed; the new trigger applies from the next press.
+- *Reset.* A reset clears a taken modifier key (its release is
+  self-correcting, since the event carries the full flag state) and keeps a
+  taken regular key, so its repeats and its `keyUp` are still consumed after
+  a blind window.
+- *Timestamps.* `flagsChanged`, `keyDown` and `keyUp` all go through one
+  handler that converts the event's own timestamp, so a late-serviced
+  callback cannot turn a quick tap into a hold.
+
+**Where the decision lives.** `HotkeyEventRouter.route` is the pure per-event
+function: tracker edges fed to the machine, with the event deleted when any
+edge was consumed. `HotkeyMonitor` only builds the event value and calls it.
+`HotkeyMonitor.setSuspended` makes the callback pass every event unchanged
+and cancels any session; the recorder uses it.
+
+**Recorder** (`HotkeyTriggerRecorder`, Behavior pane). Clicking the trigger
+button suspends the monitor and listens through a local `NSEvent` monitor for
+`keyDown` and `flagsChanged`; the monitor returns nil for the events it
+captures, so ⌘W does not act on the window. A `keyDown` of a non-modifier key
+captures it with the held families. Modifier-only presses capture the last
+modifier key that went down, with the other held families, when all
+modifiers are released. Fn is tracked by keycode 63. Recording ends on a
+capture, Esc, the window closing or losing key, and the app going inactive.
+Each refusal shows a one-line reason: Fn held with another key, Esc in any
+combination, Caps Lock, a keycode outside 0...127, a combination equal to the
+chord. The pane disables a chord toggle whose change would make the trigger
+contain the whole chord.
+
+**Tests.** `HotkeyStateMachineTests` runs over primary inputs including the
+repeat. `FlagEdgeTrackerTests` carries the Fn cases through the new event
+API and pins the sequences above. `HotkeyEventRouterTests` runs the router
+over random streams of physical presses on sided modifiers, Fn and regular
+keys with resets, trigger changes and chord changes, and asserts that only
+the trigger's or the taken key's events are consumed, that no press has a
+consumed event after a passed down, and that a consumed down gets a consumed
+up.
+
+**Known limits.**
+
+- Events during secure input bypass the tap entirely, so a press that spans
+  secure input can reach the app as repeats and an up with no down. This
+  cannot be avoided.
+- A taken regular key survives a reset. If its release and a second press
+  both fall inside one blind window, the second press's release is consumed
+  although the app saw its down. The alternative, clearing the key on reset,
+  lets a held key's repeats reach the app without a down.
+- A sided modifier trigger needs a keyboard that reports device bits.
+  Debug builds log when a `flagsChanged` for the trigger key carries none.
 
 ## Carried forward to PR 11 (Settings)
 
@@ -1066,7 +1141,7 @@ reads the cap at each commit, and `FluidAudioASR` derives its first-draft
 sample count from the draft minimum. Their two Behavior sliders are gone. An
 old `settings.json` that still carries `settleCapMs`, `draftMinTailMs` or
 `settleSentences` loads normally and sheds those keys on that load
-(`VizprSettings.removedKeys`).
+(`VizprSettings.removedKeys`, which also lists the retired `primaryTrigger`).
 
 The rule from here on: a tuning value lives in `Tuning.swift`, a user choice
 lives in `VizprSettings`, and every default is written once. The hold
