@@ -1,4 +1,5 @@
 #if DICT_DEV_LOG
+import AppKit
 import Foundation
 
 /// Keeps the last dictation session's audio in memory so a lost ending can be
@@ -65,6 +66,33 @@ final class LastSessionAudio {
         guard !truncationNoted else { return }
         truncationNoted = true
         VizprTranscriptLogger.note("last-session audio: a buffer reached its 15 minute cap, later audio is not kept")
+    }
+
+    /// Saves the finished session to the dev-log `audio/` folder off the main
+    /// actor, reveals the files in Finder and logs their paths and durations.
+    func saveToDevLog() {
+        guard isComplete, let startedAt else { return }
+        let raw = raw
+        let gated = gated
+        let directory = VizprDevLogDirectory.audioURL
+        Task.detached(priority: .utility) {
+            do {
+                let urls = try LastSessionAudio.write(
+                    raw: raw, gated: gated, startedAt: startedAt, to: directory
+                )
+                let rate = MicrophoneCapture.sampleRate
+                VizprTranscriptLogger.note(String(
+                    format: "saved last session audio: %@ (%.2f s), %@ (%.2f s)",
+                    urls.raw.path, Double(raw.count) / rate,
+                    urls.gated.path, Double(gated.count) / rate
+                ))
+                await MainActor.run {
+                    NSWorkspace.shared.activateFileViewerSelecting([urls.raw, urls.gated])
+                }
+            } catch {
+                VizprTranscriptLogger.note("saving last session audio failed: \(error)")
+            }
+        }
     }
 
     /// Writes both buffers as WAV files into `directory`, named from the

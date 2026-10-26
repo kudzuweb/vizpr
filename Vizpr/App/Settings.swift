@@ -33,17 +33,6 @@ struct VizprSettings: Codable, Equatable, Sendable {
     // MARK: Session behavior
     /// Auto-stop after this much silence, seconds.
     var autoStopSeconds: Int = 6
-    /// Tail-settle cap at commit, milliseconds (§15 amendment). The commit waits
-    /// for one decode of the unconfirmed tail (up to 15 s of audio), and a cap
-    /// below the decode time commits the last draft and drops the decode.
-    /// Rule: 2 x p90(15 s decode) + 100 ms, rounded up to 50 ms, clamped to
-    /// 350...1000 — the factor of 2 covers a draft decode still running when
-    /// the input ends plus the commit decode queued behind it. Measured
-    /// 2026-10-25 on the bundled model: p90 of 180.6 ms over 10 runs gives 500.
-    var settleCapMs: Int = 500
-    /// Draft track minimum tail before the first decode, milliseconds —
-    /// Mauria's "first draft faster?" lever; lower = earlier + junkier.
-    var draftMinTailMs: Int = 1500
 
     // MARK: Cleanup
     var cleanupEnabled: Bool = true
@@ -75,7 +64,10 @@ struct VizprSettings: Codable, Equatable, Sendable {
     var silentInputFallback: Bool = true
 
     // MARK: Appearance (PR 14 looks)
-    /// The user's own looks, at most `maxLooks`. The built-ins are not stored.
+    /// The user's own looks, at most `maxLooks`, in file-name order. They live
+    /// as files in the Looks folder (`LookFiles`), so this property is left out
+    /// of `CodingKeys` and never reaches `settings.json`. The built-ins are not
+    /// stored.
     var looks: [OverlayLook] = []
     /// The look the overlay renders. An id that matches nothing resolves to
     /// Glass (see `activeLook`).
@@ -94,18 +86,38 @@ struct VizprSettings: Codable, Equatable, Sendable {
 
     static let `default` = VizprSettings()
 
+    /// Every stored property except `looks`, which is kept in files.
+    private enum CodingKeys: String, CodingKey {
+        case hotkeyEnabled, holdThresholdMs, secondaryModifiers, primaryTrigger
+        case autoStopSeconds, cleanupEnabled, codeModeOverride
+        case asrModelID, cleanupModelID, restoreClipboard
+        case invizMode, targetAppDisplay, silentInputFallback
+        case activeLookID, overlayAnchors
+    }
+
+    /// The settings that `settings.json` holds.
+    var withoutLooks: VizprSettings {
+        var copy = self
+        copy.looks = []
+        return copy
+    }
+
+    /// Valid ranges, shared by `clamped()` and the Behavior pane's sliders.
+    static let holdThresholdRangeMs = 100...1_000
+    static let autoStopRangeSeconds = 2...60
+
     /// Clamp every numeric into its safe range (decode-time guard).
     func clamped() -> VizprSettings {
         var s = self
-        s.holdThresholdMs = min(max(s.holdThresholdMs, 100), 1_000)
+        s.holdThresholdMs = min(max(s.holdThresholdMs, Self.holdThresholdRangeMs.lowerBound),
+                               Self.holdThresholdRangeMs.upperBound)
         s.secondaryModifiers = s.secondaryModifiers.filter { Self.validModifiers.contains($0) }
-        if s.secondaryModifiers.count < 2 { s.secondaryModifiers = ["control", "option"] }
+        if s.secondaryModifiers.count < 2 { s.secondaryModifiers = Self.default.secondaryModifiers }
         if s.primaryTrigger != "fn" { s.primaryTrigger = "fn" }   // only Fn yet
         if s.asrModelID?.isEmpty == true { s.asrModelID = nil }
         if s.cleanupModelID?.isEmpty == true { s.cleanupModelID = nil }
-        s.autoStopSeconds = min(max(s.autoStopSeconds, 2), 60)
-        s.settleCapMs = min(max(s.settleCapMs, 0), 1_000)
-        s.draftMinTailMs = min(max(s.draftMinTailMs, 500), 4_000)
+        s.autoStopSeconds = min(max(s.autoStopSeconds, Self.autoStopRangeSeconds.lowerBound),
+                                Self.autoStopRangeSeconds.upperBound)
         s.overlayAnchors = s.overlayAnchors.mapValues { $0.clamped() }
         // Built-ins are read-only constants, so a stored look may not shadow
         // one, and ids must be unique for selection to be unambiguous.
@@ -130,27 +142,115 @@ struct VizprSettings: Codable, Equatable, Sendable {
 }
 
 /// Load/save + live change notification. Settings live next to the vocab
-/// store in Application Support.
+/// store in Application Support; the user's looks live as files in the Looks
+/// folder (`LookFiles`).
+///
+/// Every look edit goes through `update`, which is the one place that writes
+/// and deletes look files; it never renames one. No editor calls `LookFiles`
+/// itself.
 @MainActor
 final class SettingsStore: ObservableObject {
     private let fileURL: URL
+    private let looksFolder: URL
+    private let discardLookFile: (URL) throws -> Void
     @Published private(set) var settings: VizprSettings
+    /// Look files that were not loaded or not saved, from the latest load or
+    /// save. Set by the launch load too, so a broken file shows without a
+    /// manual reload.
+    @Published private(set) var lookFileFailures: [LookFiles.Failure] = []
+    /// Set while looks could not be moved out of `settings.json`, which keeps
+    /// them until the move succeeds.
+    @Published private(set) var lookMigrationProblem: String?
     /// Observers invoked on every successful save (live application).
     private var observers: [(VizprSettings) -> Void] = []
+    /// The file each loaded look came from. Only these files are ever deleted.
+    private var lookURLs: [UUID: URL] = [:]
+    /// Entries of `settings.json` that are written back verbatim by every save
+    /// until their looks are verified in the Looks folder: the raw `looks`
+    /// array, or the pre-looks color keys.
+    private var carriedEntries: [String: Any] = [:]
+    /// Looks that are still only in `settings.json`; shown in the list so a
+    /// failed migration changes nothing for the user.
+    private var unmigratedLooks: [OverlayLook] = []
 
-    init(fileURL: URL? = nil) {
+    /// - Parameters:
+    ///   - looksFolder: where look files live; tests pass a temp folder.
+    ///   - discardLookFile: removes a look file; the default moves it to the
+    ///     Trash so a deletion can be undone.
+    init(
+        fileURL: URL? = nil,
+        looksFolder: URL? = nil,
+        discardLookFile: @escaping (URL) throws -> Void = LookFiles.delete(at:)
+    ) {
         let url = fileURL ?? StorageRoot.url.appendingPathComponent("settings.json")
         self.fileURL = url
+        self.looksFolder = looksFolder ?? LookFiles.folder
+        self.discardLookFile = discardLookFile
         settings = .default
-        guard let data = try? Data(contentsOf: url) else { return }
-        do {
-            settings = try VizprSettings.load(from: data)
-            // Rewrite once so migrated looks keep their ids and the legacy
-            // keys leave the file.
-            if VizprSettings.hasLegacyKeys(data) { persist() }
-        } catch {
-            keepUnreadableFile(at: url)
+
+        // 1. Parse and decode settings.json.
+        var rewriteNeeded = false
+        var pending: [[String: Any]] = []
+        var backup: (url: URL, data: Data)?
+        if let data = try? Data(contentsOf: url) {
+            do {
+                var loaded = try VizprSettings.load(from: data)
+                let legacyLooks = loaded.looks
+                loaded.looks = []
+                settings = loaded
+                rewriteNeeded = VizprSettings.hasStaleKeys(data)
+                (pending, backup) = collectPendingLooks(
+                    data: data, url: url, legacyLooks: legacyLooks
+                )
+            } catch {
+                keepUnreadableFile(at: url)
+            }
         }
+
+        // 2-3. Move pending looks into the folder. Nothing is persisted yet,
+        // so a failure leaves settings.json exactly as it was read.
+        var migrated = false
+        if !pending.isEmpty {
+            let outcome = LookMigration.run(pending, backingUp: backup, into: self.looksFolder)
+            if outcome.completed {
+                carriedEntries = [:]
+                migrated = true
+            } else {
+                lookMigrationProblem = outcome.problem
+                LookFiles.logLine("migration stopped, looks stay in settings.json: \(outcome.problem ?? "")")
+                unmigratedLooks = pending.compactMap { try? LookFiles.decode($0) }
+            }
+        }
+
+        // 4. Set the looks from the folder, then the single rewrite that
+        // drops the migrated entries and any stale keys.
+        applyLookFolder()
+        if migrated || rewriteNeeded { persist() }
+    }
+
+    /// The looks `settings.json` still holds that must move to the folder,
+    /// and the entries to carry until they have. A `looks` value of the wrong
+    /// shape is carried too and never dropped.
+    private func collectPendingLooks(
+        data: Data, url: URL, legacyLooks: [OverlayLook]
+    ) -> ([[String: Any]], (url: URL, data: Data)?) {
+        let object = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+        if let raw = object["looks"] {
+            if let elements = raw as? [[String: Any]] {
+                guard !elements.isEmpty else { return ([], nil) }
+                carriedEntries = ["looks": raw]
+                return (elements, (url, data))
+            }
+            if (raw as? [Any])?.isEmpty != true {
+                carriedEntries = ["looks": raw]
+                lookMigrationProblem = "the looks entry in settings.json is not a list of looks, so it was left as it is"
+            }
+            return ([], nil)
+        }
+        guard !legacyLooks.isEmpty else { return ([], nil) }
+        carriedEntries = VizprSettings.legacyEntries(in: object)
+        let elements = legacyLooks.compactMap { try? LookFiles.encodedObject(of: $0) }
+        return (elements, nil)
     }
 
     /// A settings file that fails to decode is copied to `settings.json.bad`
@@ -165,6 +265,71 @@ final class SettingsStore: ObservableObject {
     func onChange(_ observer: @escaping (VizprSettings) -> Void) {
         observers.append(observer)
     }
+
+    // MARK: Look files
+
+    /// Replaces the looks with what the Looks folder holds now, then tells the
+    /// observers if anything changed. Does not write any file.
+    func reloadLooks() {
+        let before = settings
+        applyLookFolder()
+        guard settings != before else { return }
+        for observer in observers { observer(settings) }
+    }
+
+    /// Creates the Looks folder if needed so it can be opened in Finder.
+    func looksFolderForOpening() -> URL {
+        try? FileManager.default.createDirectory(at: looksFolder, withIntermediateDirectories: true)
+        return looksFolder
+    }
+
+    private func applyLookFolder() {
+        let report = LookFiles.load(from: looksFolder)
+        lookURLs = report.urls
+        lookFileFailures = report.failures
+        var next = settings
+        next.looks = report.looks + unmigratedLooks.filter { look in !report.looks.contains { $0.id == look.id } }
+        settings = next.clamped()
+    }
+
+    /// Writes each added or changed look, deletes each removed one, and returns
+    /// `new` in file-name order, so the list matches what a reload would give.
+    private func syncLookFiles(from old: [OverlayLook], to new: [OverlayLook]) -> [OverlayLook] {
+        let oldByID = Dictionary(old.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let newIDs = Set(new.map(\.id))
+        for removed in old where !newIDs.contains(removed.id) {
+            guard let url = lookURLs[removed.id] else { continue }
+            do {
+                try discardLookFile(url)
+                lookURLs[removed.id] = nil
+            } catch {
+                recordLookFileFailure(url, .notDeleted, "could not be deleted: \(error.localizedDescription)")
+            }
+        }
+        for look in new where oldByID[look.id] != look {
+            do {
+                lookURLs[look.id] = try LookFiles.write(look, in: looksFolder, at: lookURLs[look.id])
+            } catch {
+                recordLookFileFailure(lookURLs[look.id] ?? looksFolder, .notSaved, "could not be saved: \(error.localizedDescription)")
+            }
+        }
+        return new.enumerated().sorted { left, right in
+            switch (lookURLs[left.element.id], lookURLs[right.element.id]) {
+            case let (a?, b?): a == b ? left.offset < right.offset : LookFiles.sortsBefore(a, b)
+            case (_?, nil): true
+            case (nil, _?): false
+            case (nil, nil): left.offset < right.offset
+            }
+        }.map(\.element)
+    }
+
+    private func recordLookFileFailure(_ url: URL, _ kind: LookFiles.Failure.Kind, _ reason: String) {
+        LookFiles.logLine("\(url.lastPathComponent) \(reason)")
+        let failure = LookFiles.Failure(url: url, kind: kind, reason: reason)
+        if !lookFileFailures.contains(failure) { lookFileFailures.append(failure) }
+    }
+
+    // MARK: Changes
 
     /// Reset every setting to its default. The user's looks SURVIVE a reset
     /// (Mauria: deleting them is a separate, deliberate act); the active look
@@ -239,8 +404,11 @@ final class SettingsStore: ObservableObject {
         mutate(&next)
         next = next.clamped()
         guard next != settings else { return }
+        next.looks = syncLookFiles(from: settings.looks, to: next.looks)
+        // A look-only change leaves settings.json alone.
+        let settingsFileChanged = next.withoutLooks != settings.withoutLooks
         settings = next
-        persist()
+        if settingsFileChanged { persist() }
         for observer in observers { observer(next) }
     }
 
@@ -249,13 +417,23 @@ final class SettingsStore: ObservableObject {
             try FileManager.default.createDirectory(
                 at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true
             )
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            try encoder.encode(settings).write(to: fileURL, options: .atomic)
+            try encodedSettings().write(to: fileURL, options: .atomic)
         } catch {
             // Settings failing to persist must never take dictation down;
             // the in-memory value still applied.
         }
+    }
+
+    /// The settings as JSON, with the carried entries written back as they
+    /// were read.
+    private func encodedSettings() throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(settings)
+        guard !carriedEntries.isEmpty else { return data }
+        var object = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
+        object.merge(carriedEntries) { _, carried in carried }
+        return try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
     }
 }
 
@@ -263,10 +441,13 @@ final class SettingsStore: ObservableObject {
 
 extension VizprSettings {
     /// Parses a saved settings file: the JSON is merged over the encoded
-    /// defaults (see `SettingsMerge`), decoded, clamped, and then any
-    /// pre-looks color keys are migrated to looks. Throws when the file is not
-    /// a JSON object or a value has the wrong type.
-    static func load(from data: Data, lookTemplate: OverlayLook = .mergeTemplate) throws -> VizprSettings {
+    /// defaults (see `SettingsMerge`), decoded and clamped. A file written
+    /// before looks existed (no `looks` key, at least one pre-looks color key)
+    /// also has its colors migrated: the result's `looks` then holds the looks
+    /// they became, which the caller writes as look files. Any other `looks`
+    /// entry in the file is not decoded here (see `LookMigration`). Throws when
+    /// the file is not a JSON object or a value has the wrong type.
+    static func load(from data: Data) throws -> VizprSettings {
         guard let saved = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw DecodingError.dataCorrupted(
                 .init(codingPath: [], debugDescription: "Settings file is not a JSON object")
@@ -274,30 +455,33 @@ extension VizprSettings {
         }
         let merged = SettingsMerge.merged(
             saved: saved,
-            over: try jsonObject(of: VizprSettings.default),
-            elementDefaults: ["looks": try jsonObject(of: lookTemplate)]
+            over: try LookFiles.encodedObject(of: VizprSettings.default),
+            elementDefaults: [:]
         )
         var settings = try JSONDecoder().decode(
             VizprSettings.self, from: JSONSerialization.data(withJSONObject: merged)
         )
-        // A file written before looks existed has no `looks` key.
-        if saved["looks"] == nil {
+        if saved["looks"] == nil, !legacyEntries(in: saved).isEmpty {
             let legacy = try JSONDecoder().decode(LegacyAppearance.self, from: data)
             settings.migrate(legacy, keepsActiveLook: saved["activeLookID"] != nil)
         }
         return settings.clamped()
     }
 
-    private static func jsonObject(of value: some Encodable) throws -> [String: Any] {
-        let data = try JSONEncoder().encode(value)
-        return try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
+    /// The pre-looks color entries of a parsed settings file, as saved.
+    static func legacyEntries(in object: [String: Any]) -> [String: Any] {
+        object.filter { LegacyAppearance.keys.contains($0.key) }
     }
 
+    /// Keys that were settings once and no longer are. The decoder ignores
+    /// them; listing them here makes the next load drop them from the file.
+    private static let removedKeys = ["settleCapMs", "draftMinTailMs", "settleSentences"]
+
     /// True when `data` is a settings object still carrying pre-looks color
-    /// keys, so the store knows to save the migrated form.
-    static func hasLegacyKeys(_ data: Data) -> Bool {
+    /// keys or removed keys, so the store knows to save the current form.
+    static func hasStaleKeys(_ data: Data) -> Bool {
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
-        return LegacyAppearance.keys.contains { object[$0] != nil }
+        return (LegacyAppearance.keys + removedKeys).contains { object[$0] != nil }
     }
 
     /// The pre-looks appearance keys, as they were saved.

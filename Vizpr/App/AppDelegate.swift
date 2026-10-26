@@ -10,7 +10,7 @@ import FluidAudio
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
-    private let hotkeyMonitor = HotkeyMonitor()
+    private let hotkeyMonitor: HotkeyMonitor
     private let permissionProbe = PermissionProbe()
     private var actionsTask: Task<Void, Never>?
     private var audioPipeline: AudioPipeline?
@@ -27,7 +27,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let overlay = OverlayController()
     private let settleGate = SettleGate()
     private let fieldReader = FieldContextReader()
-    private let settingsStore = SettingsStore()
+    private let settingsStore: SettingsStore
     /// Hierarchical vocabulary (PR 11): global + named buckets + app
     /// assignments; resolved per session against the focused bundle id.
     private let vocabularyModel = VocabularyModel()
@@ -61,6 +61,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// deallocating the delegate (and the hotkey tap with it) mid-flight in
     /// Release builds. A static keeps ownership unambiguous.
     private static var retainedDelegate: AppDelegate?
+
+    /// The store loads first so the hotkey monitor starts with the saved hold
+    /// threshold and chord, not a second copy of their defaults.
+    override init() {
+        let store = SettingsStore()
+        settingsStore = store
+        hotkeyMonitor = HotkeyMonitor(
+            holdThreshold: .milliseconds(store.settings.holdThresholdMs),
+            secondaryMask: Self.modifierMask(store.settings.secondaryModifiers)
+        )
+        super.init()
+    }
 
     static func main() {
         let app = NSApplication.shared
@@ -190,6 +202,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         audioPipeline = AudioPipeline.makeDefault(
             engine: engine,
+            autoStopTimeout: .seconds(settings.autoStopSeconds),
             onTokenEvent: onTokenEvent,
             onSessionDrained: onSessionDrained,
             onAutoStop: { [hotkeyMonitor] in hotkeyMonitor.injectAutoStop() }
@@ -300,12 +313,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         overlay.setLook(settings.activeLook)
         overlay.setInviz(settings.invizMode)
         overlay.setTargetAppDisplay(settings.targetAppDisplay)
-        Task { [smartCleanup, asrEngine] in
+        Task { [smartCleanup] in
             await smartCleanup?.setRuntime(
                 enabled: settings.cleanupEnabled,
                 codeModeOverride: settings.codeModeOverride
             )
-            await asrEngine?.setDraftMinTail(milliseconds: settings.draftMinTailMs)
         }
     }
 
@@ -557,7 +569,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     // snapshotting, bounded so a hung engine can't hold the
                     // commit hostage. WYSIWYG holds: displayed==injected,
                     // "at stop" is now "at stop + settle".
-                    let cap = self?.settingsStore.settings.settleCapMs ?? 350
+                    let cap = Tuning.settleCapMs
                     #if DICT_DEV_LOG
                     let settleStart = ContinuousClock.now
                     let settle = await self?.settleGate.awaitDrain(cap: .milliseconds(cap))
@@ -673,28 +685,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     #if DICT_DEV_LOG
     @objc private func saveLastSessionAudio() {
-        guard lastSessionAudio.isComplete, let startedAt = lastSessionAudio.startedAt else { return }
-        let raw = lastSessionAudio.raw
-        let gated = lastSessionAudio.gated
-        let directory = VizprDevLogDirectory.audioURL
-        Task.detached(priority: .utility) {
-            do {
-                let urls = try LastSessionAudio.write(
-                    raw: raw, gated: gated, startedAt: startedAt, to: directory
-                )
-                let rate = MicrophoneCapture.sampleRate
-                VizprTranscriptLogger.note(String(
-                    format: "saved last session audio: %@ (%.2f s), %@ (%.2f s)",
-                    urls.raw.path, Double(raw.count) / rate,
-                    urls.gated.path, Double(gated.count) / rate
-                ))
-                await MainActor.run {
-                    NSWorkspace.shared.activateFileViewerSelecting([urls.raw, urls.gated])
-                }
-            } catch {
-                VizprTranscriptLogger.note("saving last session audio failed: \(error)")
-            }
-        }
+        lastSessionAudio.saveToDevLog()
     }
     #endif
 

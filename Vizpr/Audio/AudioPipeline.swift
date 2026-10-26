@@ -63,7 +63,7 @@ final class AudioPipeline {
         source: any CaptureSource,
         detector: SpeechDetector,
         engine: (any TranscriptionEngine)? = nil,
-        autoStopTimeout: Duration = .seconds(6),
+        autoStopTimeout: Duration,
         onTokenEvent: (@Sendable (TokenEvent) async -> Void)? = nil,
         onSessionDrained: (@Sendable (Int) async -> Void)? = nil,
         onAutoStop: @escaping () -> Void
@@ -82,6 +82,7 @@ final class AudioPipeline {
     /// broken build, invariant: fail loudly at startup).
     static func makeDefault(
         engine: (any TranscriptionEngine)?,
+        autoStopTimeout: Duration,
         onTokenEvent: (@Sendable (TokenEvent) async -> Void)? = nil,
         onSessionDrained: (@Sendable (Int) async -> Void)? = nil,
         onAutoStop: @escaping () -> Void
@@ -91,6 +92,7 @@ final class AudioPipeline {
             source: MicrophoneCapture(),
             detector: SpeechDetector(model: model),
             engine: engine,
+            autoStopTimeout: autoStopTimeout,
             onTokenEvent: onTokenEvent,
             onSessionDrained: onSessionDrained,
             onAutoStop: onAutoStop
