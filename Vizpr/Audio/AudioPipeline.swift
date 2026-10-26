@@ -56,6 +56,8 @@ final class AudioPipeline {
     /// Reports the session's total captured sample count when the capture loop
     /// ends, for the dictation record's `audio_ms`.
     var onDevCapturedSamples: (@Sendable (Int) -> Void)?
+    /// Receives the raw and gated audio of each session (last-session audio save).
+    var lastSessionAudio: LastSessionAudio?
     #endif
 
     private var sessionTask: Task<Void, Never>?
@@ -64,7 +66,7 @@ final class AudioPipeline {
         source: any CaptureSource,
         detector: SpeechDetector,
         engine: (any TranscriptionEngine)? = nil,
-        autoStopTimeout: Duration = .seconds(6),
+        autoStopTimeout: Duration,
         onTokenEvent: (@Sendable (TokenEvent) async -> Void)? = nil,
         onSessionDrained: (@Sendable (Int) async -> Void)? = nil,
         onAutoStop: @escaping () -> Void
@@ -83,6 +85,7 @@ final class AudioPipeline {
     /// broken build, invariant: fail loudly at startup).
     static func makeDefault(
         engine: (any TranscriptionEngine)?,
+        autoStopTimeout: Duration,
         onTokenEvent: (@Sendable (TokenEvent) async -> Void)? = nil,
         onSessionDrained: (@Sendable (Int) async -> Void)? = nil,
         onAutoStop: @escaping () -> Void
@@ -92,6 +95,7 @@ final class AudioPipeline {
             source: MicrophoneCapture(),
             detector: SpeechDetector(model: model),
             engine: engine,
+            autoStopTimeout: autoStopTimeout,
             onTokenEvent: onTokenEvent,
             onSessionDrained: onSessionDrained,
             onAutoStop: onAutoStop
@@ -107,6 +111,7 @@ final class AudioPipeline {
         // Captured by value here (a capture list cannot sit inside #if).
         let onDevTimingMark = self.onDevTimingMark
         let onDevCapturedSamples = self.onDevCapturedSamples
+        let lastSessionAudio = self.lastSessionAudio
         #endif
         sessionTask = Task { @MainActor [source, detector, engine, autoStopTimeout, onAutoStop, onTokenEvent, onSessionDrained] in
             let epoch = sessionEpoch
@@ -138,6 +143,7 @@ final class AudioPipeline {
                     sessionChunks += 1
                     capturedSamples += samples.count
                     if sessionChunks == 1 { onDevTimingMark?(.captureStarted, .now) }
+                    lastSessionAudio?.appendRaw(samples, epoch: epoch)
                     #endif
                     // Dead-air failover (field case: a phone call owned the
                     // AirPods; the route delivered zeros) -> swap to the
@@ -157,6 +163,9 @@ final class AudioPipeline {
                     for batch in gate.feed(
                         samples, speechActive: speechActive, chunkProbability: updates.last?.probability
                     ) {
+                        #if DICT_DEV_LOG
+                        lastSessionAudio?.appendGated(batch, epoch: epoch)
+                        #endif
                         fanOut.audio?.yield(.samples(batch))
                     }
                     for update in updates {
@@ -204,6 +213,9 @@ final class AudioPipeline {
             // session task was cancelled by stop() — cancellation only breaks
             // the capture loop above; the tail decode must still complete.
             for batch in gate.end() {
+                #if DICT_DEV_LOG
+                lastSessionAudio?.appendGated(batch, epoch: epoch)
+                #endif
                 fanOut.audio?.yield(.samples(batch))
             }
             fanOut.audio?.finish()

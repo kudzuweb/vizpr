@@ -10,7 +10,7 @@ import FluidAudio
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
-    private let hotkeyMonitor = HotkeyMonitor()
+    private let hotkeyMonitor: HotkeyMonitor
     private let permissionProbe = PermissionProbe()
     private var actionsTask: Task<Void, Never>?
     private var audioPipeline: AudioPipeline?
@@ -27,7 +27,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let overlay = OverlayController()
     private let settleGate = SettleGate()
     private let fieldReader = FieldContextReader()
-    private let settingsStore = SettingsStore()
+    private let settingsStore: SettingsStore
     /// Hierarchical vocabulary (PR 11): global + named buckets + app
     /// assignments; resolved per session against the focused bundle id.
     private let vocabularyModel = VocabularyModel()
@@ -55,6 +55,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Log session id per settle-gate epoch, so a drain closes only its own
     /// session's `[s:<id>]` prefix.
     private var devSessionIDs: [Int: String] = [:]
+    /// Audio of the last session, saved from the status menu.
+    let lastSessionAudio = LastSessionAudio()
     #endif
 
     /// NSApplication holds its delegate weakly, and a local would be releasable
@@ -62,6 +64,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// deallocating the delegate (and the hotkey tap with it) mid-flight in
     /// Release builds. A static keeps ownership unambiguous.
     private static var retainedDelegate: AppDelegate?
+
+    /// The store loads first so the hotkey monitor starts with the saved hold
+    /// threshold and chord, not a second copy of their defaults.
+    override init() {
+        let store = SettingsStore()
+        settingsStore = store
+        hotkeyMonitor = HotkeyMonitor(
+            holdThreshold: .milliseconds(store.settings.holdThresholdMs),
+            secondaryMask: Self.modifierMask(store.settings.secondaryModifiers)
+        )
+        super.init()
+    }
 
     static func main() {
         let app = NSApplication.shared
@@ -143,7 +157,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let vocabulary = vocabularyModel.library.resolved(bundleID: nil)
         #if DICT_DEV_LOG
         let tracker = dictationTracker
-        let onOutcome = Self.devCleanupOutcomeSink(tracker: tracker)
+        let onOutcome = tracker.cleanupOutcomeSink()
         #else
         let onOutcome: (@Sendable (CleanupOutcome) async -> Void)? = nil
         #endif
@@ -193,12 +207,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         audioPipeline = AudioPipeline.makeDefault(
             engine: engine,
+            autoStopTimeout: .seconds(settings.autoStopSeconds),
             onTokenEvent: onTokenEvent,
             onSessionDrained: onSessionDrained,
             onAutoStop: { [hotkeyMonitor] in hotkeyMonitor.injectAutoStop() }
         )
         #if DICT_DEV_LOG
-        installDevTimingHooks(tracker: tracker)
+        tracker.installTimingHooks(on: audioPipeline)
+        audioPipeline?.lastSessionAudio = lastSessionAudio
         #endif
         guard audioPipeline != nil else {
             failLoudly(
@@ -300,12 +316,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         overlay.setLook(settings.activeLook)
         overlay.setInviz(settings.invizMode)
         overlay.setTargetAppDisplay(settings.targetAppDisplay)
-        Task { [smartCleanup, asrEngine] in
+        Task { [smartCleanup] in
             await smartCleanup?.setRuntime(
                 enabled: settings.cleanupEnabled,
                 codeModeOverride: settings.codeModeOverride
             )
-            await asrEngine?.setDraftMinTail(milliseconds: settings.draftMinTailMs)
         }
     }
 
@@ -345,6 +360,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func sessionDrained(epoch: Int) async {
         settleGate.noteDrained(epoch: epoch)
         #if DICT_DEV_LOG
+        lastSessionAudio.end(epoch: epoch)
         await handleSessionDrained()
         if let id = devSessionIDs.removeValue(forKey: epoch) {
             VizprTranscriptLogger.endSession(id)
@@ -354,31 +370,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     #if DICT_DEV_LOG
     // MARK: Dictation-record handshake (§14)
-
-    /// The cleanup outcome seam: places the outcome in its session, then
-    /// writes the cleanup record.
-    private static func devCleanupOutcomeSink(
-        tracker: DevDictationTracker
-    ) -> @Sendable (CleanupOutcome) async -> Void {
-        { outcome in
-            let resolvedAt = ContinuousClock.now
-            let timing = await tracker.noteCleanupResolved(
-                enqueuedAt: outcome.enqueuedAt, startedAt: outcome.startedAt,
-                firstTokenAt: outcome.firstTokenAt, resolvedAt: resolvedAt,
-                disposition: outcome.disposition
-            )
-            await VizprDevLogWriter.shared.append(DevCleanupRecord(outcome, timing: timing))
-        }
-    }
-
-    private func installDevTimingHooks(tracker: DevDictationTracker) {
-        audioPipeline?.onDevTimingMark = { mark, instant in
-            Task { await tracker.mark(mark, at: instant) }
-        }
-        audioPipeline?.onDevCapturedSamples = { count in
-            Task { await tracker.noteCapturedSamples(count) }
-        }
-    }
 
     private func beginDictationRecord(
         startedAt: ContinuousClock.Instant, sessionID: String?
@@ -561,6 +552,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     let sessionEpoch = self?.settleGate.beginSession() ?? 0
                     #if DICT_DEV_LOG
                     if let devSessionID { self?.devSessionIDs[sessionEpoch] = devSessionID }
+                    self?.lastSessionAudio.begin(at: Date(), epoch: sessionEpoch)
                     await self?.beginDictationRecord(startedAt: startedAt, sessionID: devSessionID)
                     #endif
                     // Capture starts FIRST (PR 13): the AX field read is
@@ -593,7 +585,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     // snapshotting, bounded so a hung engine can't hold the
                     // commit hostage. WYSIWYG holds: displayed==injected,
                     // "at stop" is now "at stop + settle".
-                    let cap = self?.settingsStore.settings.settleCapMs ?? 350
+                    let cap = Tuning.settleCapMs
                     #if DICT_DEV_LOG
                     let settleStart = ContinuousClock.now
                     let settle = await self?.settleGate.awaitDrain(cap: .milliseconds(cap))
@@ -641,6 +633,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         // catch: the first cut leaked it into debug.log).
                         VizprTranscriptLogger.note("COMMIT skippedSecureInput: [redacted]")
                         await self?.abandonDictationRecord()
+                        self?.lastSessionAudio.discard()
                     } else {
                         VizprTranscriptLogger.note(
                             "COMMIT \(String(describing: outcome)): \(committed)"
@@ -762,6 +755,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             "Look: \(settingsStore.settings.activeLook.name)", #selector(cycleLook)
         ))
         menu.addItem(cycleItem("Reset Overlay Position", #selector(resetOverlayPosition)))
+        #if DICT_DEV_LOG
+        let saveAudio = cycleItem("Save Last Session's Audio…", #selector(saveLastSessionAudio))
+        menu.addItem(saveAudio)
+        #endif
 
         let settings = NSMenuItem(
             title: "Settings…", action: #selector(openSettings), keyEquivalent: ","
@@ -784,7 +781,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem?.menu = menu
     }
 }
-
 
 extension AppDelegate: NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {

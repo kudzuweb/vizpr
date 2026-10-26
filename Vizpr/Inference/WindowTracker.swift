@@ -71,7 +71,7 @@ struct WindowTracker {
         minWindowSamples: Int = 8_000,
         maxDecodeSamples: Int = 192_000,
         maxCommitSamples: Int = ASRConstants.maxModelSamples,
-        minTailSamples: Int = 24_000
+        minTailSamples: Int
     ) {
         self.cadenceFloorSamples = cadenceFloorSamples
         self.leftContextSamples = leftContextSamples

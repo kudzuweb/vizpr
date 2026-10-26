@@ -188,4 +188,31 @@ actor DevDictationTracker {
         )
     }
 }
+extension DevDictationTracker {
+    /// The cleanup outcome seam: places the outcome in its session, then
+    /// writes the cleanup record.
+    nonisolated func cleanupOutcomeSink() -> @Sendable (CleanupOutcome) async -> Void {
+        { outcome in
+            let resolvedAt = ContinuousClock.now
+            let timing = await self.noteCleanupResolved(
+                enqueuedAt: outcome.enqueuedAt, startedAt: outcome.startedAt,
+                firstTokenAt: outcome.firstTokenAt, resolvedAt: resolvedAt,
+                disposition: outcome.disposition
+            )
+            await VizprDevLogWriter.shared.append(DevCleanupRecord(outcome, timing: timing))
+        }
+    }
+
+    /// Routes the pipeline's timing marks and captured-sample count here.
+    @MainActor
+    func installTimingHooks(on pipeline: AudioPipeline?) {
+        pipeline?.onDevTimingMark = { mark, instant in
+            Task { await self.mark(mark, at: instant) }
+        }
+        pipeline?.onDevCapturedSamples = { count in
+            Task { await self.noteCapturedSamples(count) }
+        }
+    }
+}
+
 #endif

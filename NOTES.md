@@ -348,7 +348,10 @@ No live transcript preview: a small theme-tinted "talking is happening"
 pill mid-screen; text appears finalized in place at commit. An EXPLICIT
 opt-out of proofread-as-you-speak (§ WYSIWYG's premise) — the pipeline
 (settle window, commit snapshot, seams, cleanup) is unchanged; only the
-rendering differs. Shares the active look's tint (PR 14).
+rendering differs. The pill is an 84 by 36 point `PaneSurface` of the active
+look, so it takes the look's surface, corner radius, backdrop, light, border,
+glow and shadow, with three dots in the look's tint (PR 14, PR 15). It ignores
+the look's text, pane and dot fields.
 
 ## PR 14 — Looks replace color settings (2026-10-21)
 
@@ -362,12 +365,13 @@ change: the settled:mutable ratio stays locked in
 
 - Two built-ins, Glass (exactly the old defaults) and Slab (dark, with its own
   text color because system label colors turn black in light mode), are
-  constants with fixed ids. They are never persisted and are read-only; a user
-  duplicates one to edit it.
-- `VizprSettings.looks` holds the user's looks (max 12). `activeLookID` picks
-  the one rendered; an id that matches nothing resolves to Glass. Reset keeps
-  the user's looks and returns the active look to Glass. The menu bar item
-  "Look: <name>" cycles built-ins then user looks.
+  constants with fixed ids. They are read-only; a user duplicates one to edit
+  it. Since 2026-10-26 each also ships as a JSON file (see "Looks as files").
+- The user's looks (max 12) are `VizprSettings.looks`, which since 2026-10-26 is
+  loaded from the Looks folder and not from `settings.json` (see "Looks as
+  files"). `activeLookID` picks the one rendered; an id that matches nothing
+  resolves to Glass. Reset keeps the user's looks and returns the active look
+  to Glass. The menu bar item "Look: <name>" cycles built-ins then user looks.
 - Tint also colors the recording dot and the inviz pill on every surface.
 
 **Loading merges the saved JSON over the defaults (bug fix).** `VizprSettings`
@@ -394,7 +398,63 @@ name). If the legacy top-level colors differ from the old defaults (`A16FDF`,
 0.13, no text base, unlinked), they become a glass look "My colors", which
 becomes active. Migration runs after the merge, from a separate decode of the
 legacy keys, and the store saves once when the file carried any, so migrated
-look ids stay stable and the legacy keys leave the file.
+look ids stay stable and the legacy keys leave the file. Since 2026-10-26 the
+looks this produces are written as look files instead; see "Looks as files".
+
+## Looks as files (2026-10-26)
+
+Each custom look is one JSON file in `~/Library/Application Support/Vizpr/Looks/`,
+beside the `Fonts` folder and outside the repo. The folder is the single
+constant `LookFiles.folder`. `OverlayLook.glass` and `.slab` stay compiled
+constants and the source of truth; `glass.json` and `slab.json` sit beside
+`LookFiles.swift`, and a test decodes each and checks it equals its constant.
+
+- **Format.** A file is one `OverlayLook` as the encoder writes it (pretty,
+  sorted keys), and a partial file is allowed: it is merged over
+  `OverlayLook.mergeTemplate` exactly as a saved look was, so a field the file
+  lacks takes its no-visible-change value. `id` and `name` are required and are
+  checked on the raw JSON before the merge, because after it a missing id would
+  read as Glass's and a missing name as empty.
+- **Failure rule.** A file that does not decode, lacks `id` or `name`, uses a
+  built-in's id or repeats another file's id is skipped and reported with its
+  reason; every other file still loads. A bad look file never touches
+  `settings.json` or `settings.json.bad`. Files past the first 12 in name order
+  are reported as over the limit and never deleted by the app.
+- **File names.** A new look is saved as `<slug of name>.json` (lowercase,
+  hyphens, at most 40 characters; `-2`, `-3` on a collision; `look-<8 hex of id>`
+  when nothing is left of the name). A file is never renamed: renaming a look
+  changes its `name` field only, and the `id` inside identifies it.
+- **Order.** Looks are listed and cycled in file-name order (compared without
+  the `.json`, so `night.json` precedes `night-copy.json`), not creation order,
+  so renaming a look never moves its row. This replaces the creation order that
+  the PR 14 list used.
+- **Store.** `VizprSettings.looks` is left out of `CodingKeys` and is never
+  encoded. `SettingsStore.update` is the one place that writes, deletes (to the
+  Trash) and orders look files, comparing old and new looks by id. A change that
+  touches only looks does not rewrite `settings.json`. The folder is loaded
+  inside `SettingsStore.init`, because the store is built before launch finishes.
+  The Appearance pane has Open Looks Folder and Reload Looks, and shows
+  unreadable and over-the-limit files from the launch load, and separately the
+  looks that could not be saved (gone after a relaunch) and the files that
+  could not be moved to the Trash. A Looks path that exists but cannot be
+  listed is one unreadable failure; hidden files are skipped.
+- **Migration out of `settings.json`.** A non-empty `looks` array, or the looks
+  the pre-looks color migration produces, is written as files. First
+  `settings.json` is copied to `settings.json.<yyyy-MM-dd-HHmmss>-before-look-files`
+  (never overwriting; skipped when an earlier copy has the same bytes). An
+  element that cannot be decoded is written to the folder as it is, so the
+  loader reports it and nothing is lost. An element whose id matches a file with
+  equal content is already migrated and is skipped; with different content (or
+  with a built-in's id) it is written under a fresh id as "<name> (from
+  settings)". Then the folder is reloaded and every element is checked, and only
+  then is the array dropped by one save. Until that succeeds, every save writes
+  the original array (or legacy keys) back verbatim, so nothing can drop it; a
+  failure shows in the pane and the looks stay visible from `settings.json`.
+- **Older builds.** A build from before this change that reads the new
+  `settings.json` sees no `looks` key, treats the file as pre-looks, finds no
+  legacy keys and creates nothing, so it shows no custom looks and does not
+  rewrite the file. If it saves a looks array later, the new build migrates that
+  array again by the rules above.
 
 ## PR 15 — Sculptable looks (2026-10-21)
 
@@ -645,6 +705,9 @@ who starts speaking immediately; she waited ~0.4 s):
 | commit → inject | ~170 ms observed (settle window worked) | already good |
 | engine swap (Models pane) | pipeline rebuild + warm | rare; acceptable |
 
+*(2026-10-25: draftMinTailMs is no longer a user lever; it is a constant in
+`Tuning.swift`. See "Tuning values and single defaults".)*
+
 Also: before PR 13 the dev JSONL carried no timings (the "feedstock" claim
 in Future Directions was wrong). PR 13 adds session timing marks to the
 dictation record (DICT_DEV_LOG builds only), so every dogfood measures
@@ -867,6 +930,8 @@ Decisions:
   of 350 overrides the new 500 default. The worst case, a running draft decode
   plus the commit decode, is about 360 ms at p90, so she should set the Commit
   settle cap slider to 500 in Settings.
+  *(2026-10-25, later: the setting and its slider are gone; the cap is
+  `Tuning.settleCapMs`. See "Tuning values and single defaults".)*
   Each commit writes `settle: drained|capped after N ms` and
   `commit tail: decoded N ms over M samples` (or `commit tail: empty N ms over
   M samples` when the decode returned no text) to the dev log, which show how
@@ -1020,6 +1085,8 @@ stand. The decisions, by step:
   1,024 ms, p90 1,032 ms; three sentences (41 words) p50 1,348 ms, p90
   1,370 ms. Text therefore turns white about 0.7 to 1.4 s after a window's
   cleanup starts.
+  *(2026-10-25, later: an old file now also drops the key on its next load.
+  See "Tuning values and single defaults".)*
 
 - **The dictation record measures settling.** `t_first_settled_ms` is the
   time from the startDictation action to the first snapshot whose settled text
@@ -1055,6 +1122,57 @@ Known limits:
   decode covers it. A pause less than 0.5 s past a forced window's cut is
   cleared with it; a pause further past survives and closes the next window.
 
+## Tuning values and single defaults (2026-10-25)
+
+The two development levers, the commit settle cap and the draft minimum tail,
+are no longer settings. They are `Tuning.settleCapMs` (500) and
+`Tuning.draftMinTailMs` (1500) in `Vizpr/App/Tuning.swift`, each with the rule
+it comes from. Change one there and every consumer follows: `AppDelegate`
+reads the cap at each commit, and `FluidAudioASR` derives its first-draft
+sample count from the draft minimum. Their two Behavior sliders are gone. An
+old `settings.json` that still carries `settleCapMs`, `draftMinTailMs` or
+`settleSentences` loads normally and sheds those keys on that load
+(`VizprSettings.removedKeys`).
+
+The rule from here on: a tuning value lives in `Tuning.swift`, a user choice
+lives in `VizprSettings`, and every default is written once. The hold
+threshold, the secondary chord and the auto-stop timeout have their default
+only in the `VizprSettings` field; `HotkeyStateMachine`, `HotkeyMonitor` and
+`AudioPipeline` take them as required arguments, and `AppDelegate` builds the
+monitor and the pipeline from the loaded store. `WindowTracker`'s
+`minTailSamples` is required too. The hold-threshold and auto-stop clamp
+ranges are `VizprSettings.holdThresholdRangeMs` and `autoStopRangeSeconds`,
+used by `clamped()` and by the sliders.
+
+## Plain display names for settings (2026-10-25)
+
+Every remaining control in the Behavior and Models panes now says what it does
+in a full phrase, for example "Hold the hotkey this long for push-to-talk" with
+the caption "A shorter tap keeps listening until you press again." The hold
+threshold's wording says "the hotkey" because it governs the secondary chord
+as well as Fn, and "press again" because any next press of either key commits.
+The auto-stop wording says "hands-free mode" because auto-stop is ignored while
+a key is held. The names are proposals to rename later; the keys and the saved
+file are unchanged.
+
+## Save the last session's audio (2026-10-25)
+
+Debug builds keep the last dictation session's audio in memory
+(`LastSessionAudio`, capped at 15 minutes per buffer) as two streams: `raw`,
+everything the microphone delivered, and `gated`, exactly what the speech gate
+let through to the engine. The status menu item "Save Last Session's Audio…" is
+enabled once that session has drained, and writes `<yyyyMMdd-HHmmss>-raw.wav`
+and `<yyyyMMdd-HHmmss>-gated.wav` (session start time; 16-bit mono, 16 kHz) to
+`audio/` inside the dev-log folder, reveals them in Finder, and logs both paths
+and durations. Under tests the folder is the per-run temporary one.
+
+Reading a lost ending: if the words are in the raw file but not the gated one,
+the gate dropped them; if they are in both, the decoder lost them, and the
+gated file is the exact input to re-run it on. Only the last session is kept,
+and nothing is saved until the menu item is used. A session committed at a
+password field has its audio discarded at commit, so it cannot be saved. The
+whole feature is `DICT_DEV_LOG` only, including the WAV encoder (`WAVFile`) and
+its byte-level test.
 ## Dev-log marks for the latency measurement (2026-10-26)
 
 Debug builds only, all under `DICT_DEV_LOG`. These are the marks the 2026-10-25

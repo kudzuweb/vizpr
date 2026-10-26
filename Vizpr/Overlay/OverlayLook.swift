@@ -2,8 +2,9 @@ import AppKit
 import SwiftUI
 
 /// One complete overlay appearance (PR 14): surface kind, shape, colors, font
-/// and slab parameters under a name. Settings holds the user's looks; the two
-/// built-ins are constants and are never persisted.
+/// and slab parameters under a name. The user's looks are files in the Looks
+/// folder (see `LookFiles`); the two built-ins are compiled constants that are
+/// also shipped as JSON files.
 ///
 /// The settled:mutable text ratio is NOT part of a look. It is the trust
 /// contract (VizprSettings.mutableOpacityRatio): a look recolors it, never
