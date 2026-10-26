@@ -11,6 +11,7 @@ import FluidAudio
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private let hotkeyMonitor: HotkeyMonitor
+    private let triggerRecorder: HotkeyTriggerRecorder
     private let permissionProbe = PermissionProbe()
     private var actionsTask: Task<Void, Never>?
     private var audioPipeline: AudioPipeline?
@@ -67,10 +68,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     override init() {
         let store = SettingsStore()
         settingsStore = store
-        hotkeyMonitor = HotkeyMonitor(
+        let monitor = HotkeyMonitor(
             holdThreshold: .milliseconds(store.settings.holdThresholdMs),
-            secondaryMask: Self.modifierMask(store.settings.secondaryModifiers)
+            secondaryMask: HotkeyTrigger.mask(forFamilies: store.settings.secondaryModifiers),
+            trigger: store.settings.trigger
         )
+        hotkeyMonitor = monitor
+        triggerRecorder = HotkeyTriggerRecorder(store: store) { monitor.setSuspended($0) }
         super.init()
     }
 
@@ -300,7 +304,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             rebuildPipeline()
         }
         hotkeyMonitor.setHoldThreshold(.milliseconds(settings.holdThresholdMs))
-        hotkeyMonitor.setSecondaryMask(Self.modifierMask(settings.secondaryModifiers))
+        hotkeyMonitor.setSecondaryMask(HotkeyTrigger.mask(forFamilies: settings.secondaryModifiers))
+        hotkeyMonitor.setTrigger(settings.trigger)
         if settings.hotkeyEnabled {
             if permissionProbe.evaluate() == .ready { _ = hotkeyMonitor.start() }
         } else {
@@ -336,20 +341,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             "pipeline rebuilt: asr=\(settingsStore.settings.asrModelID ?? "bundled") "
                 + "cleanup=\(settingsStore.settings.cleanupModelID ?? "bundled")")
         #endif
-    }
-
-    static func modifierMask(_ names: [String]) -> CGEventFlags {
-        var mask: CGEventFlags = []
-        for name in names {
-            switch name {
-            case "control": mask.insert(.maskControl)
-            case "option": mask.insert(.maskAlternate)
-            case "shift": mask.insert(.maskShift)
-            case "command": mask.insert(.maskCommand)
-            default: break
-            }
-        }
-        return mask
     }
 
     /// Session drain (AudioPipeline hook): releases the settle window, then
@@ -644,7 +635,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func openSettings() {
         settingsWindow.show(
-            settings: settingsStore, vocabulary: vocabularyModel, models: modelsModel
+            settings: settingsStore, vocabulary: vocabularyModel, models: modelsModel,
+            triggerRecorder: triggerRecorder
         )
     }
 

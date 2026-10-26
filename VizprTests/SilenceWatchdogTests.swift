@@ -93,7 +93,7 @@ struct SilenceWatchdogTests {
     func autoStopIntegratesWithMachine() {
         // The full path: watchdog fires → .autoStop into the machine. Latched
         // commits; push-to-talk (holding) ignores it — §6's single commit path.
-        var machine = HotkeyStateMachine(holdThreshold: .milliseconds(200), state: .latched(source: .fn))
+        var machine = HotkeyStateMachine(holdThreshold: .milliseconds(200), state: .latched(source: .primary))
         var dog = watchdog(seconds: 1)
         var committed = false
         for _ in 0..<10 {
@@ -104,8 +104,8 @@ struct SilenceWatchdogTests {
         #expect(committed)
         #expect(machine.state == .idle)
 
-        var holdingMachine = HotkeyStateMachine(holdThreshold: .milliseconds(200), state: .holding(since: MonotonicTime(nanoseconds: 0), source: .fn))
+        var holdingMachine = HotkeyStateMachine(holdThreshold: .milliseconds(200), state: .holding(since: MonotonicTime(nanoseconds: 0), source: .primary))
         #expect(holdingMachine.handle(.autoStop).action == nil)
-        #expect(holdingMachine.state == .holding(since: MonotonicTime(nanoseconds: 0), source: .fn))
+        #expect(holdingMachine.state == .holding(since: MonotonicTime(nanoseconds: 0), source: .primary))
     }
 }

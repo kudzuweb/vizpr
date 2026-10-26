@@ -8,13 +8,18 @@ final class SettingsWindowController {
     private var window: NSWindow?
     private var closeObserver: NSObjectProtocol?
 
-    func show(settings: SettingsStore, vocabulary: VocabularyModel, models: ModelsModel) {
+    func show(
+        settings: SettingsStore, vocabulary: VocabularyModel, models: ModelsModel,
+        triggerRecorder: HotkeyTriggerRecorder
+    ) {
         if let window {
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             return
         }
-        let view = SettingsRootView(store: settings, vocab: vocabulary, models: models)
+        let view = SettingsRootView(
+            store: settings, vocab: vocabulary, models: models, triggerRecorder: triggerRecorder
+        )
         let hosting = NSHostingController(rootView: view)
         let window = NSWindow(contentViewController: hosting)
         window.title = "Vizpr Settings"
@@ -45,11 +50,12 @@ struct SettingsRootView: View {
     @ObservedObject var store: SettingsStore
     @ObservedObject var vocab: VocabularyModel
     @ObservedObject var models: ModelsModel
+    @ObservedObject var triggerRecorder: HotkeyTriggerRecorder
     @State private var confirmReset = false
 
     var body: some View {
         TabView {
-            BehaviorPane(store: store)
+            BehaviorPane(store: store, recorder: triggerRecorder)
                 .tabItem { Label("Behavior", systemImage: "slider.horizontal.3") }
             AppearancePane(store: store)
                 .tabItem { Label("Appearance", systemImage: "paintpalette") }
@@ -101,15 +107,26 @@ private func bind<T: Sendable>(
 
 struct BehaviorPane: View {
     @ObservedObject var store: SettingsStore
+    @ObservedObject var recorder: HotkeyTriggerRecorder
 
     var body: some View {
         Form {
             Section("Hotkeys") {
                 Toggle("Enable dictation hotkey", isOn: bind(store, \.hotkeyEnabled))
                 LabeledContent("Start / stop") {
-                    Text("Fn starts dictation: hold to talk, or tap to keep listening until you press again.")
-                        .foregroundStyle(.secondary)
+                    HStack(spacing: 10) {
+                        Button(recorder.isRecording
+                               ? "Press a key or a combination"
+                               : store.settings.trigger.displayName) { recorder.toggle() }
+                        if !recorder.isRecording, store.settings.trigger != .fn {
+                            Button("Reset to Fn") { store.update { $0.trigger = .fn } }
+                        }
+                    }
                 }
+                Text(recorder.message
+                     ?? "Hold to talk, tap to keep listening until the next tap. "
+                     + "Vizpr takes this key from other apps while it runs.")
+                    .font(.caption).foregroundStyle(.secondary)
                 LabeledContent("Cancel") {
                     Text("⎋ Esc").foregroundStyle(.secondary)
                 }
@@ -121,7 +138,7 @@ struct BehaviorPane: View {
                         modifierToggle("⌘", "command")
                     }
                 }
-                Text("The chord needs at least two modifiers. Trigger reassignment is coming.")
+                Text(chordCaption)
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Dictation") {
@@ -151,6 +168,24 @@ struct BehaviorPane: View {
             }
         }
         .formStyle(.grouped)
+        .onDisappear { recorder.stop() }
+    }
+
+    private static let chordCaption = "The chord needs at least two modifiers."
+
+    /// Dropping a modifier from the chord can make the trigger hold the whole
+    /// chord, which the recorder refuses; the toggle is disabled instead of the
+    /// trigger being reset behind the user's back.
+    private func removalConflicts(with name: String) -> Bool {
+        store.settings.trigger.containsChord(store.settings.secondaryModifiers.filter { $0 != name })
+    }
+
+    private var chordCaption: String {
+        let blocked = store.settings.secondaryModifiers.contains { removalConflicts(with: $0) }
+            && store.settings.secondaryModifiers.count > 2
+        return blocked
+            ? Self.chordCaption + " A modifier stays on while it would make the trigger the same as the chord."
+            : Self.chordCaption
     }
 
     private func modifierToggle(_ symbol: String, _ name: String) -> some View {
@@ -169,6 +204,7 @@ struct BehaviorPane: View {
             }
         ))
         .toggleStyle(.button)
+        .disabled(store.settings.secondaryModifiers.contains(name) && removalConflicts(with: name))
     }
 
     private func sliderRow(_ title: String, _ value: Binding<Int>,
