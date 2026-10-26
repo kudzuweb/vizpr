@@ -145,8 +145,8 @@ struct VizprSettings: Codable, Equatable, Sendable {
 /// store in Application Support; the user's looks live as files in the Looks
 /// folder (`LookFiles`).
 ///
-/// Every look edit goes through `update`, which is the one place that writes,
-/// renames-never and deletes look files, so no editor calls `LookFiles`
+/// Every look edit goes through `update`, which is the one place that writes
+/// and deletes look files; it never renames one. No editor calls `LookFiles`
 /// itself.
 @MainActor
 final class SettingsStore: ObservableObject {
@@ -218,8 +218,7 @@ final class SettingsStore: ObservableObject {
             } else {
                 lookMigrationProblem = outcome.problem
                 LookFiles.logLine("migration stopped, looks stay in settings.json: \(outcome.problem ?? "")")
-                let template = (try? LookFiles.encodedObject(of: OverlayLook.mergeTemplate)) ?? [:]
-                unmigratedLooks = pending.compactMap { LookMigration.decode($0, over: template) }
+                unmigratedLooks = pending.compactMap { try? LookFiles.decode($0) }
             }
         }
 
@@ -304,14 +303,14 @@ final class SettingsStore: ObservableObject {
                 try discardLookFile(url)
                 lookURLs[removed.id] = nil
             } catch {
-                recordLookFileFailure(url, "could not be deleted: \(error.localizedDescription)")
+                recordLookFileFailure(url, .notDeleted, "could not be deleted: \(error.localizedDescription)")
             }
         }
         for look in new where oldByID[look.id] != look {
             do {
                 lookURLs[look.id] = try LookFiles.write(look, in: looksFolder, at: lookURLs[look.id])
             } catch {
-                recordLookFileFailure(lookURLs[look.id] ?? looksFolder, "could not be saved: \(error.localizedDescription)")
+                recordLookFileFailure(lookURLs[look.id] ?? looksFolder, .notSaved, "could not be saved: \(error.localizedDescription)")
             }
         }
         return new.enumerated().sorted { left, right in
@@ -324,9 +323,9 @@ final class SettingsStore: ObservableObject {
         }.map(\.element)
     }
 
-    private func recordLookFileFailure(_ url: URL, _ reason: String) {
+    private func recordLookFileFailure(_ url: URL, _ kind: LookFiles.Failure.Kind, _ reason: String) {
         LookFiles.logLine("\(url.lastPathComponent) \(reason)")
-        let failure = LookFiles.Failure(url: url, reason: reason)
+        let failure = LookFiles.Failure(url: url, kind: kind, reason: reason)
         if !lookFileFailures.contains(failure) { lookFileFailures.append(failure) }
     }
 
@@ -456,7 +455,7 @@ extension VizprSettings {
         }
         let merged = SettingsMerge.merged(
             saved: saved,
-            over: try jsonObject(of: VizprSettings.default),
+            over: try LookFiles.encodedObject(of: VizprSettings.default),
             elementDefaults: [:]
         )
         var settings = try JSONDecoder().decode(
@@ -472,11 +471,6 @@ extension VizprSettings {
     /// The pre-looks color entries of a parsed settings file, as saved.
     static func legacyEntries(in object: [String: Any]) -> [String: Any] {
         object.filter { LegacyAppearance.keys.contains($0.key) }
-    }
-
-    private static func jsonObject(of value: some Encodable) throws -> [String: Any] {
-        let data = try JSONEncoder().encode(value)
-        return try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
     }
 
     /// Keys that were settings once and no longer are. The decoder ignores

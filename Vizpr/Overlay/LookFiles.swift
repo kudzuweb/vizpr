@@ -9,9 +9,21 @@ import Foundation
 enum LookFiles {
     /// A file that was not loaded, and why.
     struct Failure: Equatable, Sendable {
+        enum Kind: Sendable {
+            /// A file or the folder could not be read or decoded.
+            case unreadable
+            /// A readable file past the cap on looks.
+            case overLimit
+            /// An edit that did not reach disk, so the look is gone after a relaunch.
+            case notSaved
+            /// A removed look whose file could not be moved to the Trash.
+            case notDeleted
+        }
+
         let url: URL
+        let kind: Kind
+        /// The detail text, for the dev log and the tooltip.
         let reason: String
-        var isOverLimit: Bool { reason == LookFiles.overLimitReason }
     }
 
     /// What a load found: the looks in file-name order (at most `limit`),
@@ -22,7 +34,6 @@ enum LookFiles {
         var failures: [Failure] = []
     }
 
-    static let overLimitReason = "not loaded, over the limit"
     static let fileExtension = "json"
     static let maxSlugLength = 40
 
@@ -31,7 +42,32 @@ enum LookFiles {
         StorageRoot.url.appendingPathComponent("Looks", isDirectory: true)
     }
 
+    /// The merge template as parsed JSON, built once. Never mutated, which is
+    /// why the compiler's concurrency check can be switched off for it.
+    nonisolated(unsafe) static let templateObject = encodedTemplate(.mergeTemplate)
+
+    private static func encodedTemplate(_ template: OverlayLook) -> [String: Any] {
+        do {
+            return try encodedObject(of: template)
+        } catch {
+            preconditionFailure("OverlayLook always encodes: \(error)")
+        }
+    }
+
     // MARK: Loading
+
+    /// The `.json` files in `folder`, hidden files left out. A folder that
+    /// does not exist is empty; any other error is thrown.
+    static func jsonFiles(in folder: URL) throws -> [URL] {
+        let files: [URL]
+        do {
+            files = try FileManager.default.contentsOfDirectory(
+                at: folder, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile {
+            return []
+        }
+        return files.filter { $0.pathExtension.lowercased() == fileExtension }
+    }
 
     /// Loads every `.json` file in `folder`, in file-name order. A file that
     /// cannot be used is skipped and reported; it never stops the others.
@@ -40,32 +76,36 @@ enum LookFiles {
         template: OverlayLook = .mergeTemplate,
         limit: Int = VizprSettings.maxLooks
     ) -> Report {
-        let files = ((try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? [])
-            .filter { $0.pathExtension.lowercased() == fileExtension }
-            .sorted(by: sortsBefore)
-        let templateObject = (try? encodedObject(of: template)) ?? [:]
-
         var report = Report()
+        let files: [URL]
+        do {
+            files = try jsonFiles(in: folder).sorted(by: sortsBefore)
+        } catch {
+            fail(&report, folder, .unreadable, "could not be listed: \(error.localizedDescription)")
+            return report
+        }
+        let templateObject = template == .mergeTemplate ? Self.templateObject : encodedTemplate(template)
+
         var owners: [UUID: URL] = [:]
         for file in files {
             let look: OverlayLook
             do {
                 look = try read(file, over: templateObject)
             } catch {
-                fail(&report, file, error.localizedDescription)
+                fail(&report, file, .unreadable, error.localizedDescription)
                 continue
             }
             if look.isBuiltIn {
-                fail(&report, file, "uses the id of the built-in look \(OverlayLook.builtIns.first { $0.id == look.id }?.name ?? "")")
+                fail(&report, file, .unreadable, "uses the id of the built-in look \(OverlayLook.builtIns.first { $0.id == look.id }?.name ?? "")")
             } else if let first = owners[look.id] {
-                fail(&report, file, "has the same id as \(first.lastPathComponent)")
+                fail(&report, file, .unreadable, "has the same id as \(first.lastPathComponent)")
             } else {
                 owners[look.id] = file
                 if report.looks.count < limit {
                     report.looks.append(look)
                     report.urls[look.id] = file
                 } else {
-                    fail(&report, file, overLimitReason)
+                    fail(&report, file, .overLimit, "not loaded, over the limit")
                 }
             }
         }
@@ -80,8 +120,8 @@ enum LookFiles {
         return leftStem == rightStem ? left.lastPathComponent < right.lastPathComponent : leftStem < rightStem
     }
 
-    private static func fail(_ report: inout Report, _ file: URL, _ reason: String) {
-        report.failures.append(Failure(url: file, reason: reason))
+    private static func fail(_ report: inout Report, _ file: URL, _ kind: Failure.Kind, _ reason: String) {
+        report.failures.append(Failure(url: file, kind: kind, reason: reason))
         logLine("\(file.lastPathComponent) not loaded: \(reason)")
     }
 
@@ -94,7 +134,7 @@ enum LookFiles {
     /// files or the built-in ids. The test of `glass.json` and `slab.json`
     /// reads them this way, because `load` refuses a built-in id.
     static func read(_ file: URL, template: OverlayLook = .mergeTemplate) throws -> OverlayLook {
-        try read(file, over: (try? encodedObject(of: template)) ?? [:])
+        try read(file, over: template == .mergeTemplate ? templateObject : encodedTemplate(template))
     }
 
     private static func read(_ file: URL, over templateObject: [String: Any]) throws -> OverlayLook {
@@ -106,14 +146,21 @@ enum LookFiles {
         // and a missing name as the template's empty one.
         guard saved["id"] is String else { throw FileProblem("needs an id") }
         guard saved["name"] is String else { throw FileProblem("needs a name") }
-        let merged = SettingsMerge.merged(saved: saved, over: templateObject, elementDefaults: [:])
         do {
-            return try JSONDecoder()
-                .decode(OverlayLook.self, from: JSONSerialization.data(withJSONObject: merged))
-                .clamped()
+            return try decode(saved, over: templateObject)
         } catch let error as DecodingError {
             throw FileProblem(describe(error))
         }
+    }
+
+    /// The one decode path for a look: merge `object` over the template,
+    /// decode, clamp. Files and migrated `settings.json` entries both go
+    /// through it, so a look decoded from either reloads as an equal look.
+    static func decode(_ object: [String: Any], over templateObject: [String: Any] = templateObject) throws -> OverlayLook {
+        let merged = SettingsMerge.merged(saved: object, over: templateObject, elementDefaults: [:])
+        return try JSONDecoder()
+            .decode(OverlayLook.self, from: JSONSerialization.data(withJSONObject: merged))
+            .clamped()
     }
 
     private static func describe(_ error: DecodingError) -> String {

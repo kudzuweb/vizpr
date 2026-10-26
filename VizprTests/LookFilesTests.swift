@@ -114,7 +114,7 @@ struct LookFilesTests {
         #expect(report.looks.count == VizprSettings.maxLooks)
         #expect(report.urls.count == VizprSettings.maxLooks)
         #expect(report.failures.map(\.url.lastPathComponent) == ["look-22.json", "look-23.json"])
-        #expect(report.failures.allSatisfy { $0.isOverLimit })
+        #expect(report.failures.allSatisfy { $0.kind == .overLimit })
         #expect(LookFiles.load(from: folder, limit: .max).looks.count == 14)
     }
 
@@ -230,5 +230,28 @@ struct LookFilesTests {
         let report = LookFiles.load(from: folder)
         #expect(report.looks.isEmpty)
         #expect(report.failures.count == 1)
+    }
+
+    @Test("A Looks path that cannot be listed is one unreadable failure, and a missing folder is empty")
+    func unlistableFolder() throws {
+        let folder = try LookFixtures.folder()
+        let missing = LookFiles.load(from: folder.appendingPathComponent("absent"))
+        #expect(missing.looks.isEmpty && missing.failures.isEmpty)
+
+        let plainFile = try LookFixtures.put("{}", "Looks", in: folder)
+        let report = LookFiles.load(from: plainFile)
+        #expect(report.looks.isEmpty)
+        #expect(report.failures.map(\.kind) == [.unreadable])
+        #expect(report.failures.first?.url == plainFile)
+    }
+
+    @Test("Hidden files such as an AppleDouble ._night.json are ignored")
+    func hiddenFilesAreSkipped() throws {
+        let folder = try LookFixtures.folder()
+        try LookFixtures.put(#"{"id": "\#(LookFixtures.idA)", "name": "Night"}"#, "night.json", in: folder)
+        try LookFixtures.put("not json", "._night.json", in: folder)
+        let report = LookFiles.load(from: folder)
+        #expect(report.looks.map(\.name) == ["Night"])
+        #expect(report.failures.isEmpty)
     }
 }

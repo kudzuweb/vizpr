@@ -36,7 +36,6 @@ enum LookMigration {
             }
         }
 
-        let templateObject = (try? LookFiles.encodedObject(of: OverlayLook.mergeTemplate)) ?? [:]
         var known = Dictionary(
             uniqueKeysWithValues: LookFiles.load(from: folder, limit: .max).looks.map { ($0.id, $0) }
         )
@@ -45,7 +44,7 @@ enum LookMigration {
 
         do {
             for (index, element) in elements.enumerated() {
-                guard let look = decode(element, over: templateObject) else {
+                guard let look = try? LookFiles.decode(element) else {
                     try keepRaw(element, index: index, in: folder)
                     expectedRaw.append(element)
                     continue
@@ -90,14 +89,6 @@ enum LookMigration {
 
     // MARK: Elements
 
-    /// The element as a look, or nil when it cannot be decoded.
-    static func decode(_ element: [String: Any], over templateObject: [String: Any]) -> OverlayLook? {
-        let merged = SettingsMerge.merged(saved: element, over: templateObject, elementDefaults: [:])
-        guard let data = try? JSONSerialization.data(withJSONObject: merged),
-              let look = try? JSONDecoder().decode(OverlayLook.self, from: data) else { return nil }
-        return look.clamped()
-    }
-
     private static func sameApartFromID(_ existing: OverlayLook, _ candidate: OverlayLook) -> Bool {
         var copy = existing
         copy.id = candidate.id
@@ -119,8 +110,8 @@ enum LookMigration {
     }
 
     private static func jsonObjects(in folder: URL) -> [[String: Any]] {
-        let files = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
-        return files.filter { $0.pathExtension.lowercased() == LookFiles.fileExtension }.compactMap {
+        let files = (try? LookFiles.jsonFiles(in: folder)) ?? []
+        return files.compactMap {
             (try? Data(contentsOf: $0))
                 .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
         }

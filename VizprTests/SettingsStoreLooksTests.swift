@@ -10,6 +10,7 @@ import Testing
 struct SettingsStoreLooksTests {
     private let twoLooks = """
     {"autoStopSeconds": 7,
+     "activeLookID": "\(LookFixtures.idB)",
      "looks": [{"id": "\(LookFixtures.idA)", "name": "Sunset", "cornerRadius": 12},
                {"id": "\(LookFixtures.idB)", "name": "Night", "surface": "slab"}]}
     """
@@ -50,9 +51,13 @@ struct SettingsStoreLooksTests {
         let object = try parsed(url)
         #expect(object["looks"] == nil)
         #expect(object["autoStopSeconds"] as? Int == 7)
+        #expect(object["activeLookID"] as? String == LookFixtures.idB)
+        #expect(first.settings.activeLook.name == "Night")
 
         let second = SettingsStore(fileURL: url, looksFolder: folder)
         #expect(second.settings == first.settings)
+        #expect(second.settings.activeLook.name == "Night")
+        #expect(try parsed(url)["activeLookID"] as? String == LookFixtures.idB)
         #expect(try FileManager.default.contentsOfDirectory(atPath: url.deletingLastPathComponent().path)
             .filter { $0.hasSuffix("-before-look-files") }.count == 1, "no second backup")
     }
@@ -88,15 +93,26 @@ struct SettingsStoreLooksTests {
     func crashRerun() throws {
         let url = try settingsFile(twoLooks)
         let folder = try LookFixtures.folder()
-        // The state a crash between writing the files and rewriting settings.json leaves.
-        _ = SettingsStore(fileURL: try settingsFile(twoLooks), looksFolder: folder)
+        // The state a crash between writing the files and rewriting settings.json
+        // leaves on this same file: the backup and the look files exist, the array is still there.
+        let elements = try #require(parsed(url)["looks"] as? [[String: Any]])
+        let outcome = LookMigration.run(elements, backingUp: (url, try Data(contentsOf: url)), into: folder)
+        #expect(outcome.completed)
         let before = try fileNames(folder)
         #expect(before == ["night.json", "sunset.json"])
+        let settingsDirectory = url.deletingLastPathComponent().path
+        func backups() throws -> [String] {
+            try FileManager.default.contentsOfDirectory(atPath: settingsDirectory)
+                .filter { $0.hasSuffix("-before-look-files") }
+        }
+        #expect(try backups().count == 1)
+        #expect(try parsed(url)["looks"] != nil)
 
         let store = SettingsStore(fileURL: url, looksFolder: folder)
         #expect(store.lookFileFailures.isEmpty)
         #expect(store.lookMigrationProblem == nil)
         #expect(try fileNames(folder) == before, "no duplicate files")
+        #expect(try backups().count == 1, "the rerun skips the backup because an earlier copy has the same bytes")
         #expect(store.settings.looks.count == 2)
         #expect(try parsed(url)["looks"] == nil)
     }
@@ -228,5 +244,18 @@ struct SettingsStoreLooksTests {
         #expect(store.lookFileFailures.count == 1)
         #expect(try String(contentsOf: url, encoding: .utf8) == #"{"autoStopSeconds": 30}"#)
         #expect(!FileManager.default.fileExists(atPath: url.appendingPathExtension("bad").path))
+    }
+
+    @Test("A look file that cannot be written is reported as not saved, not as unreadable")
+    func saveFailureKind() throws {
+        let url = try settingsFile("{}")
+        let folder = try LookFixtures.folder()
+        let store = SettingsStore(fileURL: url, looksFolder: folder)
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: folder.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: folder.path) }
+
+        store.duplicateLook(.glass)
+        #expect(store.lookFileFailures.map(\.kind) == [.notSaved])
+        #expect(try fileNames(folder).isEmpty)
     }
 }

@@ -434,7 +434,10 @@ constants and the source of truth; `glass.json` and `slab.json` sit beside
   touches only looks does not rewrite `settings.json`. The folder is loaded
   inside `SettingsStore.init`, because the store is built before launch finishes.
   The Appearance pane has Open Looks Folder and Reload Looks, and shows
-  unreadable and over-the-limit files from the launch load.
+  unreadable and over-the-limit files from the launch load, and separately the
+  looks that could not be saved (gone after a relaunch) and the files that
+  could not be moved to the Trash. A Looks path that exists but cannot be
+  listed is one unreadable failure; hidden files are skipped.
 - **Migration out of `settings.json`.** A non-empty `looks` array, or the looks
   the pre-looks color migration produces, is written as files. First
   `settings.json` is copied to `settings.json.<yyyy-MM-dd-HHmmss>-before-look-files`
