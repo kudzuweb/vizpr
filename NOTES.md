@@ -433,9 +433,19 @@ is a uniform `colorHex` at `strength` inside the pane, fading to nothing over
 masked to the outside like glow and shadow). It is off by default, and
 `PaneEffects.margin(for:)` includes its reach when enabled.
 
-**Measurement.** `OverlayLook.paneHeight(fitting:)` is the one place that
-measures: width, padding, font, and line spacing (through `NSParagraphStyle`)
-all come from the look, matching how `OverlayView` lays the text out.
+**Measurement.** `OverlayLook.paneWidth(fitting:)` and `paneHeight(fitting:)` are
+the one place that measures: width, padding, font, and line spacing (through
+`NSParagraphStyle`) all come from the look, matching how `OverlayView` lays the
+text out. The pill is 220 pt wide at rest and grows with the single-line text
+width (plus padding and 2 pt of slack) up to the look's pane width; only then
+does the text wrap and the pane grow taller. AppKit supplies the line count and
+each line is priced at the height SwiftUI gives it, because `boundingRect`
+alone runs about a point short per line. The height carries 2 pt of slack
+under the last line, so the gap below equals the gap above to within that.
+(The first version of the measurement added a whole extra line "so growth leads
+the text"; with an accurate per-line height that headroom is no longer
+needed.) The text is laid out at the final width and the capsule animates over
+it, so it does not re-wrap mid-growth.
 
 **Offscreen renders.** `NSHostingView.cacheDisplay` does not run Metal shader
 effects, so the light layer is absent from such frames. `ImageRenderer` runs
@@ -490,6 +500,42 @@ window); that display's anchor positions the pane. Dropping the pane on another
 display saves the anchor for that display. The inviz pill sits in the same
 stage, so it follows the same anchor. The menu item "Reset Overlay Position"
 clears every anchor.
+
+## Target app indicator (Mauria, 2026-10-22)
+
+The overlay shows the frontmost app's icon, and its name when asked, so it is
+clear where the text will land (twice, dictation went to a window with no text
+field). `VizprSettings.targetAppDisplay` is `off`, `icon` (the default) or
+`iconAndName`, a global behavior outside the looks.
+
+**Tracking.** `TargetApp` (`Vizpr/Overlay/TargetApp.swift`) observes
+`NSWorkspace.didActivateApplicationNotification` from `OverlayController.show`
+until `dismiss`, so focus moving mid-dictation moves the icon, because that is
+where the commit now injects. Vizpr itself never replaces the target: its
+Settings window in front keeps the last other app.
+
+**Placement.** On the resting pill and the expanded pane the icon (24 pt)
+is tucked into the top-left corner: it hangs 5 pt outside the pill's left and
+top edges (`TargetAppMetrics.cornerOverhang`), whatever the corner radius, so
+the 19 pt inside the pill sit within a point of the pane's default 18 pt
+horizontal padding and the icon never covers the first line of text. It overlays the pill outside the
+clip, so it changes neither the pill's size nor the text column.
+`OverlayLook.panelMargin` is the larger of the glow/shadow reach and the
+icon's overhang, and the panel, the view and
+`dragEnded` all use it. With `iconAndName` the resting pill shows the name
+(11 pt, the look's mutable style) inside the pill, starting just past the icon;
+the expanded pane shows the icon only, because there is no room beside wrapped
+text. The recording dot stays at the bottom left. The inviz pill (84 x 36) is
+too small for the icon, so it keeps the badge outside its left edge (20 pt
+icon, 6 pt gap, name when asked). Opacity is 0.85. Sizes live in
+`TargetAppMetrics`.
+
+**Margin.** Only inviz mode reserves `sideInset` on both sides of the pane for
+the badge beside the pill, so the badge is not clipped and the pill stays
+centered where it was; resting and expanded panels have no side inset.
+`dragEnded` subtracts the same inset when it reads the pane's frame, so the
+pane, not the badge, is what the anchor positions. Toggling inviz re-places
+the panel.
 
 ## Future directions (Mauria, 2026-07-05 — recorded, not scheduled)
 

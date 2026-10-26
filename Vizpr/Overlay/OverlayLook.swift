@@ -137,22 +137,64 @@ struct OverlayLook: Codable, Equatable, Sendable, Identifiable {
         )
     }
 
-    /// Pane height needed for `text` at this look's width, font, line spacing
-    /// and padding, plus one extra line of headroom: growth leads the text
-    /// instead of trailing it, so a wrapping word never renders against the
-    /// clipped edge. OverlayView lays the text out with the same width,
-    /// padding, font and line spacing.
-    func paneHeight(fitting text: String) -> CGFloat {
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.lineSpacing = style.text.lineSpacing
-        let font = measuringFont
-        let width = style.pane.width - 2 * style.pane.paddingHorizontal
-        let bounds = (text as NSString).boundingRect(
-            with: NSSize(width: width, height: .greatestFiniteMagnitude),
+    /// Slack added to the measured text width so SwiftUI, which lays the text
+    /// out independently, never wraps a pane sized to one line.
+    private static let widthSlack = 2.0
+    /// Slack under the last line, covering the gap between AppKit's and
+    /// SwiftUI's line measurements.
+    private static let heightSlack = 2.0
+
+    /// Pane width for `text`: the single-line text width plus padding, between
+    /// the resting width and the look's pane width. Past the pane width the
+    /// text wraps and the pane grows taller instead.
+    func paneWidth(fitting text: String) -> CGFloat {
+        let oneLine = (text as NSString).boundingRect(
+            with: NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin, .usesFontLeading],
-            attributes: [.font: font, .paragraphStyle: paragraph]
+            attributes: [.font: measuringFont]
         )
-        return ceil(bounds.height) + 2 * style.pane.paddingVertical + ceil(font.ascender - font.descender)
+        let wanted = ceil(oneLine.width) + Self.widthSlack + 2 * style.pane.paddingHorizontal
+        let resting = OverlayLayout.restingSize.width
+        return min(max(wanted, resting), max(style.pane.width, resting))
+    }
+
+    /// Width the text wraps to inside a pane of `paneWidth`. The view and the
+    /// height measurement both use it.
+    func textWidth(inPaneWidth paneWidth: CGFloat) -> CGFloat {
+        paneWidth - 2 * style.pane.paddingHorizontal
+    }
+
+    /// Pane height needed for `text` in a pane of `paneWidth(fitting:)`, at this
+    /// look's font, line spacing and padding, plus a few points of slack.
+    /// OverlayView lays the text out with the same width, padding, font and
+    /// line spacing.
+    ///
+    /// AppKit finds how many lines the text wraps to; each line is then priced
+    /// at the height SwiftUI gives it, which is about a point more than
+    /// `boundingRect` reports and would add up over many lines.
+    func paneHeight(fitting text: String) -> CGFloat {
+        let spacing = style.text.lineSpacing
+        let font = measuringFont
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineSpacing = spacing
+        let attributes: [NSAttributedString.Key: Any] = [.font: font, .paragraphStyle: paragraph]
+        let options: NSString.DrawingOptions = [.usesLineFragmentOrigin, .usesFontLeading]
+        let width = textWidth(inPaneWidth: paneWidth(fitting: text))
+        let wrapped = (text as NSString).boundingRect(
+            with: NSSize(width: width, height: .greatestFiniteMagnitude), options: options, attributes: attributes
+        )
+        let single = ("x" as NSString).boundingRect(
+            with: NSSize(width: width, height: .greatestFiniteMagnitude), options: options, attributes: attributes
+        )
+        let lines = max(1, ((wrapped.height + spacing) / (single.height + spacing)).rounded())
+        let lineHeight = ceil(("x" as NSString).size(withAttributes: [.font: font]).height)
+        return lines * lineHeight + (lines - 1) * spacing + 2 * style.pane.paddingVertical + Self.heightSlack
+    }
+
+    /// Room the panel leaves around the pane: the larger of the glow and
+    /// shadow reach and the corner icon's overhang.
+    var panelMargin: CGFloat {
+        max(PaneEffects.margin(for: style), TargetAppMetrics.cornerOverhang)
     }
 }
 

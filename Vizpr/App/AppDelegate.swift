@@ -281,6 +281,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         overlay.setAnchors(settings.overlayAnchors)
         overlay.setLook(settings.activeLook)
         overlay.setInviz(settings.invizMode)
+        overlay.setTargetAppDisplay(settings.targetAppDisplay)
         Task { [tokenStream, smartCleanup, asrEngine] in
             await tokenStream.setSettleSentences(settings.settleSentences)
             await smartCleanup?.setRuntime(

@@ -109,9 +109,13 @@ struct PaneMeasurementTests {
         return look
     }
 
-    private func renderedTextHeight(_ look: OverlayLook) -> CGFloat {
+    private let shortText = "A few words that fit on one line."
+
+    /// Height SwiftUI gives `text` at the width the view lays it out in for
+    /// the pane the measurement chose.
+    private func renderedTextHeight(_ look: OverlayLook, _ text: String) -> CGFloat {
         let style = look.style
-        let width = style.pane.width - 2 * style.pane.paddingHorizontal
+        let width = look.textWidth(inPaneWidth: look.paneWidth(fitting: text))
         let view = Text(text)
             .font(look.font)
             .lineSpacing(style.text.lineSpacing)
@@ -138,18 +142,69 @@ struct PaneMeasurementTests {
         })
     ]
 
-    @Test("Measured height covers the text and stays within two lines of it")
+    @Test("Measured height covers the text and leaves at most a few points under it")
     func fits() {
         for (name, configure) in Self.options {
             let look = look(configure)
-            let rendered = renderedTextHeight(look)
-            let padding = 2 * look.style.pane.paddingVertical
-            let line = ceil(look.measuringFont.ascender - look.measuringFont.descender)
-            let measured = look.paneHeight(fitting: text)
-            #expect(measured >= rendered + padding, "\(name): text would clip")
-            #expect(measured <= rendered + padding + 2 * line + look.style.text.lineSpacing,
-                    "\(name): pane far taller than text")
+            for sample in [text, shortText] {
+                let rendered = renderedTextHeight(look, sample)
+                let padding = 2 * look.style.pane.paddingVertical
+                let measured = look.paneHeight(fitting: sample)
+                #expect(measured >= rendered + padding, "\(name): text would clip")
+                #expect(measured <= rendered + padding + 4, "\(name): gap under the text")
+            }
         }
+    }
+
+    @Test("A pane sized to one line never wraps the text in the view")
+    func narrowPaneDoesNotWrap() {
+        for (name, configure) in Self.options {
+            let look = look(configure)
+            let oneLine = ceil(look.measuringFont.ascender - look.measuringFont.descender) + 1
+            for sample in ["a", shortText, String(text.prefix(40))] {
+                guard look.paneWidth(fitting: sample) < CGFloat(look.style.pane.width) else { continue }
+                #expect(renderedTextHeight(look, sample) <= oneLine, "\(name): '\(sample)' wrapped")
+            }
+        }
+    }
+
+    @Test("Pane width clamps between the resting width and the look's width and never narrows as text grows")
+    func paneWidthGrowsWithText() {
+        for (name, configure) in Self.options {
+            let look = look(configure)
+            var previous = OverlayLayout.restingSize.width
+            for count in [1, 5, 20, 60, 200] {
+                let sample = String(repeating: "word ", count: count)
+                let width = look.paneWidth(fitting: sample)
+                #expect(width >= previous, "\(name): width shrank at \(count) words")
+                #expect(width >= OverlayLayout.restingSize.width && width <= look.style.pane.width)
+                previous = width
+            }
+            #expect(look.paneWidth(fitting: "a") == OverlayLayout.restingSize.width, "\(name)")
+            #expect(look.paneWidth(fitting: text) == CGFloat(look.style.pane.width), "\(name)")
+        }
+    }
+
+    @Test("The corner icon's overhang fits in the panel margin")
+    func marginCoversOverhang() {
+        #expect(look { _ in }.panelMargin >= TargetAppMetrics.cornerOverhang)
+    }
+
+    @Test("Only the inviz pill reserves side room; the pane stays put when it does")
+    func sideInsetKeepsPane() {
+        for display in [TargetAppDisplay.off, .icon, .iconAndName] {
+            #expect(TargetAppMetrics.sideInset(for: display, inviz: false) == 0)
+        }
+        #expect(TargetAppMetrics.sideInset(for: .off, inviz: true) == 0)
+        #expect(TargetAppMetrics.sideInset(for: .icon, inviz: true) > 0)
+        let layout = OverlayLayout(screen: CGRect(x: 0, y: 0, width: 1600, height: 1000))
+        let bare = layout.frame(contentHeight: 100, paneWidth: 560, margin: 10)
+        let inset = TargetAppMetrics.sideInset(for: .iconAndName, inviz: true)
+        let wide = layout.frame(contentHeight: 100, paneWidth: 560, margin: 10, sideInset: inset)
+        #expect(wide.minX == bare.minX - inset)
+        #expect(wide.width == bare.width + 2 * inset)
+        #expect(wide.midX == bare.midX)
+        #expect(wide.minY == bare.minY && wide.height == bare.height)
     }
 
     @Test("A named family that is installed is used; a missing one falls back to the system font")
