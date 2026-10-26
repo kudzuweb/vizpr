@@ -44,7 +44,7 @@ while IFS= read -r bin; do
     echo "  FAIL: dev-log build marker present." >&2
     FAIL=1
   fi
-  if nm "$bin" 2>/dev/null | grep -qiE "VizprTranscriptLogger|VizprDevLogWriter|DevDictationTracker|DevDictationRecord|DevCleanupRecord|DevTimingMark|MainStallProbe"; then
+  if nm "$bin" 2>/dev/null | grep -qiE "VizprTranscriptLogger|VizprDevLogWriter|DevDictationTracker|DevDictationRecord|DevCleanupRecord|DevTimingMark|MainStallProbe|LastSessionAudio"; then
     echo "  FAIL: dev logger symbols present." >&2
     FAIL=1
   fi

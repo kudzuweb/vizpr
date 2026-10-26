@@ -1155,6 +1155,25 @@ The auto-stop wording says "hands-free mode" because auto-stop is ignored while
 a key is held. The names are proposals to rename later; the keys and the saved
 file are unchanged.
 
+## Save the last session's audio (2026-10-25)
+
+Debug builds keep the last dictation session's audio in memory
+(`LastSessionAudio`, capped at 15 minutes per buffer) as two streams: `raw`,
+everything the microphone delivered, and `gated`, exactly what the speech gate
+let through to the engine. The status menu item "Save Last Session's Audio…" is
+enabled once that session has drained, and writes `<yyyyMMdd-HHmmss>-raw.wav`
+and `<yyyyMMdd-HHmmss>-gated.wav` (session start time; 16-bit mono, 16 kHz) to
+`audio/` inside the dev-log folder, reveals them in Finder, and logs both paths
+and durations. Under tests the folder is the per-run temporary one.
+
+Reading a lost ending: if the words are in the raw file but not the gated one,
+the gate dropped them; if they are in both, the decoder lost them, and the
+gated file is the exact input to re-run it on. Only the last session is kept,
+and nothing is saved until the menu item is used. A session committed at a
+password field has its audio discarded at commit, so it cannot be saved. The
+whole feature is `DICT_DEV_LOG` only, including the WAV encoder (`WAVFile`) and
+its byte-level test.
+
 ## Environment prerequisites discovered
 
 - **Metal Toolchain** is required to build the mlx-swift dependency (it compiles
