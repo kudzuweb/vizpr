@@ -1,8 +1,11 @@
-# Planning and reference documents
+# Planning and reference documents: plans, briefs and reviews stay out of the
+# public repo. context is a symlink into the private shared context repo
+# (~/Documents/Projects/context/vizpr), so the line has no trailing slash.
 PLAN.md
 HANDOFF.md
 AUDIT.md
 CODE_REVIEW.md
+/context
 
 # macOS
 .DS_Store
