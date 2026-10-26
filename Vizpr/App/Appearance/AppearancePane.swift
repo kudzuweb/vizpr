@@ -65,6 +65,35 @@ struct AppearancePane: View {
                 store.deleteAllLooks()
             }
             .disabled(store.settings.looks.isEmpty)
+            HStack {
+                Button("Open Looks Folder") { NSWorkspace.shared.open(store.looksFolderForOpening()) }
+                Button("Reload Looks") { store.reloadLooks() }
+            }
+            fileCaptions
+        }
+    }
+
+    @ViewBuilder
+    private var fileCaptions: some View {
+        let unreadable = store.lookFileFailures.filter { !$0.isOverLimit }
+        let overLimit = store.lookFileFailures.filter(\.isOverLimit)
+        if !unreadable.isEmpty {
+            HStack {
+                Text("\(unreadable.count) look \(unreadable.count == 1 ? "file" : "files") could not be read")
+                    .font(.caption).foregroundStyle(.secondary)
+                Button("Reveal") {
+                    NSWorkspace.shared.activateFileViewerSelecting(unreadable.map(\.url))
+                }
+            }
+        }
+        if !overLimit.isEmpty {
+            Text("Over the limit of \(VizprSettings.maxLooks), not loaded: "
+                + overLimit.map { $0.url.lastPathComponent }.joined(separator: ", "))
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        if let problem = store.lookMigrationProblem {
+            Text("Your looks are still stored in settings.json: \(problem)")
+                .font(.caption).foregroundStyle(.secondary)
         }
     }
 }

@@ -105,83 +105,21 @@ struct LooksTests {
         #expect(settings.overlayAnchors["b"] == OverlayAnchor(x: 0.4, y: 0.5))
     }
 
-    @Test("A saved look missing a field gets that field's default and keeps the rest")
-    func lookMissingField() throws {
-        let settings = try decode("""
-        {"looks": [{"id": "5A1B6A52-6F42-4B7E-8D5C-2C0B5C1D9E01", "name": "Mine",
-                    "cornerRadius": 12, "fontDesign": "serif"}]}
-        """)
-        let look = try #require(settings.looks.first)
-        #expect(look.name == "Mine")
-        #expect(look.cornerRadius == 12)
-        #expect(look.fontDesign == .serif)
-        #expect(look.fontSize == OverlayLook.glass.fontSize)
-        #expect(look.tintHex == OverlayLook.glass.tintHex)
-    }
-
-    @Test("A look with every field decodes the same whatever the merge template holds")
-    func templateOnlyFillsMissingFields() throws {
-        var look = OverlayLook.slab
-        look.id = UUID()
-        look.name = "Full"
-        look.cornerRadius = 33
-        look.tintHex = "123456"
-        look.tintStrength = 0.4
-        look.textBaseHex = "ABCDEF"
-        look.colorsLinked = true
-        look.slab.meshLoopSeconds = 12
-        look.fontDesign = .serif
-        look.fontSize = 20
-        look.wordAppearance = .fade
-        var settings = VizprSettings.default
-        settings.looks = [look]
-        let data = try JSONEncoder().encode(settings)
-
-        var other = OverlayLook.mergeTemplate
-        other.surface = .glass
-        other.cornerRadius = 8
-        other.tintHex = "000000"
-        other.tintStrength = 0.5
-        other.textBaseHex = "FFFFFF"
-        other.colorsLinked = false
-        other.slab.meshDrift = 0.5
-        other.fontDesign = .monospaced
-        other.fontSize = 28
-        other.wordAppearance = .blurIn
-
-        #expect(try VizprSettings.load(from: data) == settings)
-        #expect(try VizprSettings.load(from: data, lookTemplate: other) == settings)
-    }
-
-    @Test("A nested slab with only some keys merges with the rest defaulted")
-    func partialSlab() throws {
-        let settings = try decode("""
-        {"looks": [{"id": "5A1B6A52-6F42-4B7E-8D5C-2C0B5C1D9E01", "name": "Mine",
-                    "surface": "slab", "slab": {"meshLoopSeconds": 12}}]}
-        """)
-        let slab = try #require(settings.looks.first).slab
-        #expect(slab.meshLoopSeconds == 12)
-        #expect(slab.meshDrift == SlabStyle.default.meshDrift)
-        #expect(slab.meshColorsHex == SlabStyle.defaultMeshColors)
-    }
-
-    @Test("Encode then decode is lossless and writes no legacy keys")
+    @Test("Encode then decode is lossless, writes no legacy keys and leaves the looks to their files")
     func roundTrip() throws {
         var settings = VizprSettings.default
         var custom = OverlayLook.slab
         custom.id = UUID()
         custom.name = "Mine"
-        custom.fontDesign = .serif
-        custom.cornerRadius = 12
-        custom.slab.meshLoopSeconds = 12
         settings.looks = [custom]
         settings.activeLookID = custom.id
         settings.autoStopSeconds = 9
 
         let data = try JSONEncoder().encode(settings)
-        #expect(try JSONDecoder().decode(VizprSettings.self, from: data) == settings)
+        #expect(try JSONDecoder().decode(VizprSettings.self, from: data) == settings.withoutLooks)
         let keys = Set(try #require(JSONSerialization.jsonObject(with: data) as? [String: Any]).keys)
         #expect(keys.isDisjoint(with: ["tintHex", "tintStrength", "textBaseHex", "colorsLinked", "colorPresets"]))
+        #expect(!keys.contains("looks"))
     }
 
     @Test("Clamping bounds every look and slab value")
@@ -281,8 +219,10 @@ struct LooksTests {
         }
 
         let data = try JSONEncoder().encode(settings)
-        #expect(try JSONDecoder().decode(VizprSettings.self, from: data) == settings.clamped())
+        #expect(try JSONDecoder().decode(VizprSettings.self, from: data) == settings.clamped().withoutLooks)
         #expect(settings.clamped() == settings)
+        let keys = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any]).keys
+        #expect(!keys.contains("looks"), "looks are stored as files, never in settings.json")
     }
 }
 
@@ -355,7 +295,7 @@ struct SettingsStoreLoadingTests {
         let backup = url.appendingPathExtension("bad")
         try Data("older".utf8).write(to: backup)
 
-        let store = SettingsStore(fileURL: url)
+        let store = SettingsStore(fileURL: url, looksFolder: try LookFixtures.folder())
         #expect(store.settings == .default)
         #expect(try String(contentsOf: backup, encoding: .utf8) == "{ not json")
 
@@ -367,34 +307,41 @@ struct SettingsStoreLoadingTests {
     func wrongTypedValueIsBackedUp() throws {
         let json = #"{"autoStopSeconds": "soon", "settleSentences": 4}"#
         let url = try tempFile(json)
-        let store = SettingsStore(fileURL: url)
+        let store = SettingsStore(fileURL: url, looksFolder: try LookFixtures.folder())
         #expect(store.settings == .default)
         #expect(try String(contentsOf: url.appendingPathExtension("bad"), encoding: .utf8) == json)
     }
 
-    @Test("Loading a legacy file saves the migrated looks once, with stable ids and no legacy keys")
+    @Test("Loading a legacy file writes the migrated looks as files once, with stable ids and no legacy keys")
     func migrationIsPersisted() throws {
         let url = try tempFile(
             #"{"tintHex": "112233", "colorPresets": [{"name": "Sunset", "tintHex": "FF8800"}]}"#
         )
-        let first = SettingsStore(fileURL: url).settings
+        let folder = try LookFixtures.folder()
+        let first = SettingsStore(fileURL: url, looksFolder: folder).settings
         #expect(first.looks.map(\.name) == ["My colors", "Sunset"])
+        #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).sorted()
+            == ["my-colors.json", "sunset.json"])
 
         let object = try #require(
             JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any]
         )
         #expect(object["tintHex"] == nil && object["colorPresets"] == nil)
-        #expect(SettingsStore(fileURL: url).settings == first)
+        #expect(object["looks"] == nil)
+        let second = SettingsStore(fileURL: url, looksFolder: folder).settings
+        #expect(second == first)
+        #expect(second.looks.map(\.id) == first.looks.map(\.id))
     }
 
     @Test("Loading a file with removed keys drops them from the file and keeps the rest")
     func removedKeysAreShed() throws {
-        let lookID = "5A1B6A52-6F42-4B7E-8D5C-2C0B5C1D9E01"
+        let lookID = LookFixtures.idA
         let url = try tempFile("""
         {"settleCapMs": 500, "settleSentences": 4, "autoStopSeconds": 3,
          "looks": [{"id": "\(lookID)", "name": "Mine", "cornerRadius": 12}]}
         """)
-        let first = SettingsStore(fileURL: url).settings
+        let folder = try LookFixtures.folder()
+        let first = SettingsStore(fileURL: url, looksFolder: folder).settings
 
         let object = try #require(
             JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any]
@@ -403,16 +350,16 @@ struct SettingsStoreLoadingTests {
         #expect(object["draftMinTailMs"] == nil)
         #expect(object["settleSentences"] == nil)
         #expect(object["autoStopSeconds"] as? Int == 3)
-        let looks = try #require(object["looks"] as? [[String: Any]])
-        #expect(looks.map { $0["id"] as? String } == [lookID])
+        #expect(object["looks"] == nil, "the migrated looks leave settings.json")
+        #expect(first.looks.map { $0.id.uuidString } == [lookID])
         #expect(first.autoStopSeconds == 3)
-        #expect(SettingsStore(fileURL: url).settings == first)
+        #expect(SettingsStore(fileURL: url, looksFolder: folder).settings == first)
     }
 
     @Test("A readable file is not rewritten or backed up on load")
     func readableFileUntouched() throws {
         let url = try tempFile(#"{"autoStopSeconds": 30}"#)
-        _ = SettingsStore(fileURL: url)
+        _ = SettingsStore(fileURL: url, looksFolder: try LookFixtures.folder())
         #expect(try String(contentsOf: url, encoding: .utf8) == #"{"autoStopSeconds": 30}"#)
         #expect(!FileManager.default.fileExists(atPath: url.appendingPathExtension("bad").path))
     }
