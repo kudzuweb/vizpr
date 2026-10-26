@@ -337,7 +337,7 @@ struct SettingsStoreLoadingTests {
     func removedKeysAreShed() throws {
         let lookID = LookFixtures.idA
         let url = try tempFile("""
-        {"settleCapMs": 500, "settleSentences": 4, "autoStopSeconds": 3,
+        {"settleCapMs": 500, "draftMinTailMs": 1500, "settleSentences": 4, "autoStopSeconds": 3,
          "looks": [{"id": "\(lookID)", "name": "Mine", "cornerRadius": 12}]}
         """)
         let folder = try LookFixtures.folder()
