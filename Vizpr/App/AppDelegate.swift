@@ -97,6 +97,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Present only in Debug; proves the compile gate (verified absent from
         // Release by scripts/check-devlog-absent.sh).
         VizprTranscriptLogger.announce()
+        MainStallProbe.start()
         #endif
     }
 
@@ -166,6 +167,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         #endif
 
         defer {
+            // The pipeline reports only for its live session (a stopped
+            // session's task is cancelled first), so a late failure cannot
+            // cancel the next session.
+            audioPipeline?.onCaptureFailure = { [weak self] in
+                NSSound.beep()
+                self?.hotkeyMonitor.injectCaptureFailure()
+                #if DICT_DEV_LOG
+                VizprTranscriptLogger.note("CAPTURE FAILED: microphone could not start or was lost")
+                #endif
+            }
             audioPipeline?.onSilentSession = { [weak self] in
                 self?.lastSessionWasSilent = true
                 NSSound.beep()
