@@ -37,7 +37,12 @@ invention, so the counts are upper bounds.
 import re
 import sys
 
-TIMESTAMP = re.compile(r"^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ) (.*)$")
+# A line is `<timestamp> [s:<session id>] <message>`: the timestamp has
+# optional milliseconds and the session id is present while a session is open.
+# Both are consumed here so the record text starts at the message itself.
+TIMESTAMP = re.compile(
+    r"^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z) (?:\[s:[0-9A-Fa-f]+\] )?(.*)$"
+)
 # The committed text follows the first "))" + ": " (injected outcomes) or the
 # older "(would inject): " form.
 COMMIT_TEXT = re.compile(r"\)\): |\(would inject\): ")

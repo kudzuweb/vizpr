@@ -52,6 +52,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// race in either order; whichever lands second writes. Main-actor state.
     private var pendingInjection: String?
     private var sessionDrained = false
+    /// Log session id per settle-gate epoch, so a drain closes only its own
+    /// session's `[s:<id>]` prefix.
+    private var devSessionIDs: [Int: String] = [:]
     #endif
 
     /// NSApplication holds its delegate weakly, and a local would be releasable
@@ -69,6 +72,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        #if DICT_DEV_LOG
+        // First, so the logger's open time is launch time for the model-ready
+        // lines. Present only in Debug; proves the compile gate (verified
+        // absent from Release by scripts/check-devlog-absent.sh).
+        VizprTranscriptLogger.announce()
+        #endif
+
         // FIRST, before any FluidAudio API is touched: hard-disable its download
         // paths. Every fetch/download entry point throws from here on — the
         // app can only load models that shipped in its bundle (invariant 1).
@@ -94,9 +104,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         startHotkeyIfPermitted()
 
         #if DICT_DEV_LOG
-        // Present only in Debug; proves the compile gate (verified absent from
-        // Release by scripts/check-devlog-absent.sh).
-        VizprTranscriptLogger.announce()
         MainStallProbe.start()
         #endif
     }
@@ -136,9 +143,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let vocabulary = vocabularyModel.library.resolved(bundleID: nil)
         #if DICT_DEV_LOG
         let tracker = dictationTracker
-        let onOutcome: (@Sendable (CleanupOutcome) async -> Void)? = { outcome in
-            await VizprDevLogWriter.shared.append(DevCleanupRecord(outcome))
-        }
+        let onOutcome = Self.devCleanupOutcomeSink(tracker: tracker)
         #else
         let onOutcome: (@Sendable (CleanupOutcome) async -> Void)? = nil
         #endif
@@ -157,7 +162,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         #if DICT_DEV_LOG
         let onTokenEvent: @Sendable (TokenEvent) async -> Void = { [cleanup] event in
-            await tracker.observe(event)
+            await tracker.observe(event, at: ContinuousClock.now)
             await cleanup.ingest(event)
         }
         #else
@@ -193,9 +198,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onAutoStop: { [hotkeyMonitor] in hotkeyMonitor.injectAutoStop() }
         )
         #if DICT_DEV_LOG
-        audioPipeline?.onDevTimingMark = { [tracker] mark, instant in
-            Task { await tracker.mark(mark, at: instant) }
-        }
+        installDevTimingHooks(tracker: tracker)
         #endif
         guard audioPipeline != nil else {
             failLoudly(
@@ -225,6 +228,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         warmEngine(
             devLogLabel: "asr engine prepared",
+            devLogModel: "asr",
             failureMessage: "Vizpr's speech recognition model failed to load.",
             revertOnFailure: revertASR
         ) {
@@ -232,6 +236,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         warmEngine(
             devLogLabel: "cleanup engine prepared",
+            devLogModel: "cleanup",
             failureMessage: "Vizpr's cleanup model failed to load.",
             revertOnFailure: revertCleanup
         ) {
@@ -343,16 +348,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settleGate.noteDrained(epoch: epoch)
         #if DICT_DEV_LOG
         await handleSessionDrained()
+        if let id = devSessionIDs.removeValue(forKey: epoch) {
+            VizprTranscriptLogger.endSession(id)
+        }
         #endif
     }
 
     #if DICT_DEV_LOG
     // MARK: Dictation-record handshake (§14)
 
-    private func beginDictationRecord(startedAt: ContinuousClock.Instant) async {
+    /// The cleanup outcome seam: places the outcome in its session, then
+    /// writes the cleanup record.
+    private static func devCleanupOutcomeSink(
+        tracker: DevDictationTracker
+    ) -> @Sendable (CleanupOutcome) async -> Void {
+        { outcome in
+            let resolvedAt = ContinuousClock.now
+            let timing = await tracker.noteCleanupResolved(
+                enqueuedAt: outcome.enqueuedAt, startedAt: outcome.startedAt, resolvedAt: resolvedAt
+            )
+            await VizprDevLogWriter.shared.append(DevCleanupRecord(outcome, timing: timing))
+        }
+    }
+
+    private func installDevTimingHooks(tracker: DevDictationTracker) {
+        audioPipeline?.onDevTimingMark = { mark, instant in
+            Task { await tracker.mark(mark, at: instant) }
+        }
+        audioPipeline?.onDevCapturedSamples = { count in
+            Task { await tracker.noteCapturedSamples(count) }
+        }
+    }
+
+    private func beginDictationRecord(
+        startedAt: ContinuousClock.Instant, sessionID: String?
+    ) async {
         pendingInjection = nil
         sessionDrained = false
-        await dictationTracker.begin(at: startedAt)
+        await dictationTracker.begin(at: startedAt, sessionID: sessionID)
     }
 
     /// Commit half: stash the injected text; write now if the drain already
@@ -397,6 +430,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// bundled instead of terminating — a bad drop-in must never brick the app.
     private func warmEngine(
         devLogLabel: String,
+        devLogModel: String,
         failureMessage: String,
         revertOnFailure: (@MainActor @Sendable () -> Void)? = nil,
         _ prepare: @escaping @Sendable () async throws -> Void
@@ -406,6 +440,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 try await prepare()
                 #if DICT_DEV_LOG
                 VizprTranscriptLogger.note(devLogLabel)
+                VizprTranscriptLogger.note(
+                    "\(devLogModel) model ready in \(VizprTranscriptLogger.millisecondsSinceOpen()) ms")
                 #endif
             } catch {
                 if let revertOnFailure {
@@ -509,6 +545,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         actionsTask = Task { @MainActor [hotkeyMonitor, weak self] in
             for await action in hotkeyMonitor.actions {
                 #if DICT_DEV_LOG
+                // Opened before the action line so that line carries the id.
+                var devSessionID: String?
+                if case .startDictation = action {
+                    devSessionID = VizprTranscriptLogger.beginSession()
+                }
                 VizprTranscriptLogger.note("hotkey action: \(action)")
                 #endif
                 switch action {
@@ -520,7 +561,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     await self?.tokenStream.beginSession()
                     let sessionEpoch = self?.settleGate.beginSession() ?? 0
                     #if DICT_DEV_LOG
-                    await self?.beginDictationRecord(startedAt: startedAt)
+                    if let devSessionID { self?.devSessionIDs[sessionEpoch] = devSessionID }
+                    await self?.beginDictationRecord(startedAt: startedAt, sessionID: devSessionID)
                     #endif
                     // Capture starts FIRST (PR 13): the AX field read is
                     // blocking IPC into the target app, and serializing the

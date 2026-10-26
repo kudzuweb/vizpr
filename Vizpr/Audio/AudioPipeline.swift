@@ -53,6 +53,9 @@ final class AudioPipeline {
     /// Reports session timing marks (PR 13 latency audit) with the instant
     /// they happened, so a hop to the receiver cannot skew them.
     var onDevTimingMark: (@Sendable (DevTimingMark, ContinuousClock.Instant) -> Void)?
+    /// Reports the session's total captured sample count when the capture loop
+    /// ends, for the dictation record's `audio_ms`.
+    var onDevCapturedSamples: (@Sendable (Int) -> Void)?
     #endif
 
     private var sessionTask: Task<Void, Never>?
@@ -103,6 +106,7 @@ final class AudioPipeline {
         #if DICT_DEV_LOG
         // Captured by value here (a capture list cannot sit inside #if).
         let onDevTimingMark = self.onDevTimingMark
+        let onDevCapturedSamples = self.onDevCapturedSamples
         #endif
         sessionTask = Task { @MainActor [source, detector, engine, autoStopTimeout, onAutoStop, onTokenEvent, onSessionDrained] in
             let epoch = sessionEpoch
@@ -120,6 +124,7 @@ final class AudioPipeline {
             #if DICT_DEV_LOG
             var chunkCount = 0
             var sessionChunks = 0
+            var capturedSamples = 0
             #endif
             var fallbackAttempted = false
             var gate = SpeechGate()
@@ -131,6 +136,7 @@ final class AudioPipeline {
                     guard !Task.isCancelled else { break }
                     #if DICT_DEV_LOG
                     sessionChunks += 1
+                    capturedSamples += samples.count
                     if sessionChunks == 1 { onDevTimingMark?(.captureStarted, .now) }
                     #endif
                     // Dead-air failover (field case: a phone call owned the
@@ -187,6 +193,10 @@ final class AudioPipeline {
                 VizprTranscriptLogger.note("audio pipeline error: \(error)")
                 #endif
             }
+
+            #if DICT_DEV_LOG
+            onDevCapturedSamples?(capturedSamples)
+            #endif
 
             // Session over: release any held audio that may contain speech,
             // then end the engine's input so it finalizes its tail and

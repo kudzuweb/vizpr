@@ -207,6 +207,9 @@ actor FluidAudioASR: TranscriptionEngine {
                 startTolerance: plan.startTolerance
             )
             if let keptEnd = cut.keptEnd, !cut.text.isEmpty {
+                #if DICT_DEV_LOG
+                DevFinalWindowKinds.push(plan.kind == .forced ? "forced" : "pause")
+                #endif
                 continuation.yield(.finalized(
                     text: cut.text, confidence: cut.confidence, tokenConfidences: cut.tokenConfidences
                 ))
@@ -359,6 +362,9 @@ actor FluidAudioASR: TranscriptionEngine {
                         )
                         #endif
                         if let cut, !cut.text.isEmpty {
+                            #if DICT_DEV_LOG
+                            DevFinalWindowKinds.push("commit")
+                            #endif
                             continuation.yield(.finalized(
                                 text: cut.text, confidence: cut.confidence,
                                 tokenConfidences: cut.tokenConfidences

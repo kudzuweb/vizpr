@@ -1053,6 +1053,43 @@ sought to the same end offset and one line overwrote the other (a `window:` line
 and an `asr final` line never both landed). A lock now wraps the open-write-close;
 the call stays synchronous so a caller's next line follows its own previous one.
 
+## Dev-log marks for the latency measurement (2026-10-26)
+
+Debug builds only, all under `DICT_DEV_LOG`. These are the marks the 2026-10-25
+latency measurement could not take. No dictated text is logged that was not
+logged before.
+
+`debug.log` lines:
+
+| Change | Detail |
+|---|---|
+| Millisecond timestamps | Every line starts `2026-10-25T05:24:00.123Z` instead of whole seconds. The JSONL record `timestamp` fields stay at whole seconds; join a record to its lines through `session_id`. |
+| `[s:<id>]` prefix | While a dictation session is open, every line carries `[s:<8 hex characters>] ` after the timestamp. The id opens before the `hotkey action: startDictation` line and closes after the session's drain and record write. A line written between sessions has no prefix. A start that is ignored because a session is still running never drains, so its id stays on later lines until the next start. |
+| `build: <id> <Debug or Release>` | Written at launch with the `dev transcript log target:` line. `<id>` is `VIZPR_BUILD_ID`, which `scripts/run-dev.sh` sets to the short commit and passes through `open --env`; it is `unknown` when the app is launched any other way. |
+| `asr model ready in <ms> ms`, `cleanup model ready in <ms> ms` | Written beside the existing `asr engine prepared` and `cleanup engine prepared` lines. Milliseconds run from the logger's first use, which is the first statement of launch. |
+| No process-start line | `ProcessInfo` has no process start time; reading it takes `sysctl`, so the planned `launch: logger ready` line is omitted. |
+
+Dictation record (`type: dictation`), always present, `null` when the mark never happened:
+
+| Field | Meaning |
+|---|---|
+| `session_id` | The same id as the log prefix. |
+| `t_final_asr_ms` | Milliseconds from session start to the last finalized token event delivered, taken before the hop into the tracker. |
+| `t_cleanup_done_ms` | Milliseconds to the last cleanup of the session that resolved (applied, stale, cancelled or failed) before the session drained. A cleanup that resolves after the drain does not move it. |
+| `audio_ms` | Captured samples from the capture loop divided by the sample rate. |
+| `first_settled_window` | `pause`, `forced` or `commit`: the kind of the last final delivered at or before the first settled text rendered. It is the nearest final before the mark, not a proven cause, because settled text can also follow a cleanup or a sentence closing. |
+
+Cleanup record (`type: cleanup`), omitted when unknown:
+
+| Field | Meaning |
+|---|---|
+| `session_id` | The session that had started most recently when the cleanup was queued, so a cleanup resolving after its drain keeps its own session. |
+| `enqueued_ms`, `started_ms` | Milliseconds from session start to when the cleanup was queued and to when its engine call began. `duration_ms` still covers the engine call. |
+
+`scripts/tail-integrity-report.py` strips the optional milliseconds and the `[s:<id>] `
+prefix when it parses a line. Any other reader of `debug.log` that slices a fixed
+column for the timestamp needs the same change.
+
 ## A commit-cancelled cleanup is logged as cancelled (2026-10-25)
 
 `MLXCleanup.clean` now checks for cancellation after the generation stream ends. A

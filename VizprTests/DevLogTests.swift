@@ -168,7 +168,8 @@ struct DevLogTests {
     private let timingKeys = [
         "t_capture_ms", "t_speech_onset_ms", "t_first_draft_ms", "t_first_preview_ms",
         "t_first_settled_ms", "t_commit_ms", "t_injected_ms", "draft_count",
-        "draft_interval_mean_ms", "draft_interval_max_ms"
+        "draft_interval_mean_ms", "draft_interval_max_ms",
+        "t_final_asr_ms", "t_cleanup_done_ms", "audio_ms", "first_settled_window"
     ]
 
     private func encodedObject(_ record: DevDictationRecord) throws -> [String: Any] {
@@ -184,6 +185,8 @@ struct DevLogTests {
     func timingKeysAlwaysPresent() async throws {
         let empty = try encodedObject(await record(from: DevDictationTracker()))
         for key in timingKeys { #expect(empty[key] != nil, "missing \(key)") }
+        #expect(empty["session_id"] is NSNull)
+        #expect(empty["audio_ms"] is NSNull)
         #expect(empty["t_capture_ms"] is NSNull)
         #expect(empty["draft_interval_mean_ms"] is NSNull)
         #expect((empty["draft_count"] as? Int) == 0)
@@ -245,6 +248,74 @@ struct DevLogTests {
         #expect(timings.draftCount == 1)
         #expect(timings.draftIntervalMeanMs == nil)
         #expect(timings.draftIntervalMaxMs == nil)
+    }
+
+    @Test("The session id, final, cleanup, audio and window marks land on the record")
+    func sessionMarks() async throws {
+        let tracker = DevDictationTracker()
+        let start = ContinuousClock.now
+        await tracker.begin(at: start, sessionID: "ab12cd34")
+        await tracker.observe(
+            .finalized(text: "one.", confidence: 0.9, tokenConfidences: []),
+            at: start + .milliseconds(4000), windowKind: "pause"
+        )
+        await tracker.mark(.firstSettled, at: start + .milliseconds(4100))
+        let early = await tracker.noteCleanupResolved(
+            enqueuedAt: start + .milliseconds(4050), startedAt: start + .milliseconds(4200),
+            resolvedAt: start + .milliseconds(5000)
+        )
+        await tracker.observe(
+            .finalized(text: "two.", confidence: 0.9, tokenConfidences: []),
+            at: start + .milliseconds(9000), windowKind: "commit"
+        )
+        _ = await tracker.noteCleanupResolved(
+            enqueuedAt: start + .milliseconds(9010), startedAt: start + .milliseconds(9020),
+            resolvedAt: start + .milliseconds(9500)
+        )
+        await tracker.noteCapturedSamples(160_000)
+
+        #expect(early == DevCleanupTiming(sessionID: "ab12cd34", enqueuedMs: 4050, startedMs: 4200))
+        let record = await record(from: tracker)
+        let object = try encodedObject(record)
+        #expect(object["session_id"] as? String == "ab12cd34")
+        #expect(object["t_final_asr_ms"] as? Int == 9000)
+        #expect(object["t_cleanup_done_ms"] as? Int == 9500)
+        #expect(object["audio_ms"] as? Int == 10_000)
+        #expect(object["first_settled_window"] as? String == "pause")
+    }
+
+    @Test("A cleanup that resolves after its session ended keeps that session's id")
+    func lateCleanupKeepsItsSession() async {
+        let tracker = DevDictationTracker()
+        let start = ContinuousClock.now
+        await tracker.begin(at: start, sessionID: "11111111")
+        _ = await record(from: tracker)
+        await tracker.begin(at: start + .seconds(20), sessionID: "22222222")
+
+        let late = await tracker.noteCleanupResolved(
+            enqueuedAt: start + .seconds(5), startedAt: start + .seconds(6),
+            resolvedAt: start + .seconds(21)
+        )
+        #expect(late == DevCleanupTiming(sessionID: "11111111", enqueuedMs: 5000, startedMs: 6000))
+        #expect(await record(from: tracker).timings.cleanupDoneMs == nil)
+    }
+
+    @Test("Cleanup records carry the session id and queue timing, omitted when unknown")
+    func cleanupRecordTimingFields() throws {
+        let outcome = CleanupOutcome(
+            input: "a", output: "A", generation: 1, disposition: .applied, durationMs: 10
+        )
+        func object(_ record: DevCleanupRecord) throws -> [String: Any] {
+            let data = try JSONEncoder().encode(record)
+            return try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        }
+        let timed = try object(DevCleanupRecord(
+            outcome, timing: DevCleanupTiming(sessionID: "ab12cd34", enqueuedMs: 4050, startedMs: 4200)
+        ))
+        #expect(timed["session_id"] as? String == "ab12cd34")
+        #expect(timed["enqueued_ms"] as? Int == 4050)
+        #expect(timed["started_ms"] as? Int == 4200)
+        #expect(try object(DevCleanupRecord(outcome))["session_id"] == nil)
     }
 
     @Test("A new session starts from a clean slate")
