@@ -12,13 +12,10 @@ import AppKit
 /// A capture is refused, with a one-line reason in `message`, whenever the
 /// trigger would not work or would consume more than the user pressed: Fn held
 /// with another key, Esc in any combination, Caps Lock, a keycode outside the
-/// range `clamped()` accepts, or a combination equal to the secondary chord.
-/// The recorder never writes a value `clamped()` would change.
-private struct UncheckedEvent: @unchecked Sendable {
-    let event: NSEvent?
-    init(_ event: NSEvent?) { self.event = event }
-}
-
+/// range `clamped()` accepts, or a combination that holds the whole secondary
+/// chord. A key a laptop reaches only through Fn (F1 to F20, Home, End, Page Up,
+/// Page Down, Forward Delete) is accepted while Fn is down and is stored without
+/// Fn. The recorder never writes a value `clamped()` would change.
 @MainActor
 final class HotkeyTriggerRecorder: ObservableObject {
     @Published private(set) var isRecording = false
@@ -37,6 +34,12 @@ final class HotkeyTriggerRecorder: ObservableObject {
     private var fnUsed = false
     private var otherModifierPressed = false
     private var lastModifier: (keyCode: UInt16, others: [String])?
+
+    /// Carries an `NSEvent` out of the main-actor closure that `NSEvent` monitors need.
+    private struct UncheckedEvent: @unchecked Sendable {
+        let event: NSEvent?
+        init(_ event: NSEvent?) { self.event = event }
+    }
 
     init(store: SettingsStore, setSuspended: @escaping (Bool) -> Void) {
         self.store = store
@@ -79,6 +82,7 @@ final class HotkeyTriggerRecorder: ObservableObject {
         observers.forEach(NotificationCenter.default.removeObserver)
         observers = []
         isRecording = false
+        message = nil
         setSuspended(false)
     }
 
@@ -107,7 +111,7 @@ final class HotkeyTriggerRecorder: ObservableObject {
             return
         }
         clearPressed()
-        guard !fnHeld else {
+        guard !fnHeld || HotkeyTrigger.fnReachedKeyCodes.contains(event.keyCode) else {
             message = HotkeyTrigger.fnAloneReason
             return
         }
@@ -170,16 +174,10 @@ final class HotkeyTriggerRecorder: ObservableObject {
     }
 
     private static func heldFamilies(_ flags: NSEvent.ModifierFlags) -> [String] {
-        var names: [String] = []
-        if flags.contains(.control) { names.append("control") }
-        if flags.contains(.option) { names.append("option") }
-        if flags.contains(.shift) { names.append("shift") }
-        if flags.contains(.command) { names.append("command") }
-        return names
+        HotkeyTrigger.orderedFamilyFlags.filter { flags.contains($0.flag) }.map(\.name)
     }
 
     private static func hasDeviceBits(_ flags: NSEvent.ModifierFlags) -> Bool {
-        let all = HotkeyTrigger.modifierKeys.values.reduce(UInt64(0)) { $0 | $1.deviceBit }
-        return UInt64(flags.rawValue) & all != 0
+        UInt64(flags.rawValue) & HotkeyTrigger.allDeviceBits != 0
     }
 }

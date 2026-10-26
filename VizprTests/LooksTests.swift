@@ -437,7 +437,9 @@ struct SettingsStoreLoadingTests {
             #"{"keyCode": 61, "modifiers": ["hyper"]}"#,
             #"{"keyCode": 61, "modifiers": ["option"]}"#,
             #"{"keyCode": 63, "modifiers": ["shift"]}"#,
-            #"{"keyCode": 2, "modifiers": ["option", "control", "shift"]}"#
+            #"{"keyCode": 2, "modifiers": ["option", "control", "shift"]}"#,
+            #"{"keyCode": 58, "modifiers": ["control"]}"#,
+            "null"
         ] {
             let json = #"{"holdThresholdMs": 410, "trigger": \#(trigger)}"#
             let settings = try VizprSettings.load(from: Data(json.utf8))
@@ -454,9 +456,39 @@ struct SettingsStoreLoadingTests {
         // The default chord is control + option: a trigger holding both is refused.
         settings.trigger = HotkeyTrigger(keyCode: 2, modifiers: ["option", "control"])
         #expect(settings.clamped().trigger == .fn)
+        // Left Option with Control held is the chord itself pressed in one order.
+        settings.trigger = HotkeyTrigger(keyCode: 58, modifiers: ["control"])
+        #expect(settings.clamped().trigger == .fn)
+        // F5 is a plain regular key: reaching it through Fn is a recorder concern only.
+        settings.trigger = HotkeyTrigger(keyCode: 96, modifiers: [])
+        #expect(settings.clamped().trigger == settings.trigger)
         // Right Option as a bare trigger coexists with Option in the chord.
         settings.trigger = HotkeyTrigger(keyCode: 61, modifiers: [])
         #expect(settings.clamped().trigger == settings.trigger)
+    }
+
+    @Test("A trigger contains the chord through its own modifiers or its sided key's family")
+    func triggerContainsChord() {
+        let chord = ["control", "option"]
+        #expect(HotkeyTrigger(keyCode: 58, modifiers: ["control"]).containsChord(chord))
+        #expect(HotkeyTrigger(keyCode: 62, modifiers: ["option"]).containsChord(chord))
+        #expect(HotkeyTrigger(keyCode: 2, modifiers: ["control", "option"]).containsChord(chord))
+        #expect(!HotkeyTrigger(keyCode: 61, modifiers: []).containsChord(chord))
+        #expect(!HotkeyTrigger(keyCode: 2, modifiers: ["control"]).containsChord(chord))
+        #expect(!HotkeyTrigger.fn.containsChord([]))
+    }
+
+    @Test("The keys recordable while Fn is down are F1 to F20 and the navigation block, and nothing else")
+    func fnReachedKeys() {
+        let codes = HotkeyTrigger.fnReachedKeyCodes
+        #expect(codes.count == 25)
+        for code: UInt16 in [122, 120, 99, 118, 96, 97, 98, 100, 101, 109, 103, 111, 105, 107, 113, 106, 64, 79, 80, 90,
+                             115, 116, 117, 119, 121] {
+            #expect(codes.contains(code), "keycode \(code) is reached through Fn")
+        }
+        for code: UInt16 in [HotkeyTrigger.fnKeyCode, 0, 2, 49, 53, 123, 124, 125, 126] {
+            #expect(!codes.contains(code), "keycode \(code) is not an Fn-layer key")
+        }
     }
 
     @Test("A readable file is not rewritten or backed up on load")

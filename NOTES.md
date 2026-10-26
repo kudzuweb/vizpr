@@ -730,9 +730,9 @@ A malformed `trigger` decodes as Fn instead of failing the file, which would
 cost every other setting. `clamped()` resets to Fn a trigger that cannot
 work: a keycode outside 0...127, Caps Lock (it toggles), Esc (it cancels
 dictation), an unknown modifier, Fn with modifiers, a sided modifier key
-listing its own family, or modifiers that contain every modifier of the
-secondary chord (pressing those starts the chord session first, so the
-trigger could never fire).
+listing its own family, or a trigger that holds every modifier of the
+secondary chord, counting a sided key's own family (pressing it also starts
+the chord, so the chord would start dictation on a trigger press).
 
 **The invariant**, restated: the machine consumes only primary-trigger inputs
 (down, up, repeat), and the only physical events that become primary inputs
@@ -766,8 +766,13 @@ consumed.
   consumed; the new trigger applies from the next press.
 - *Reset.* A reset clears a taken modifier key (its release is
   self-correcting, since the event carries the full flag state) and keeps a
-  taken regular key, so its repeats and its `keyUp` are still consumed after
-  a blind window.
+  taken regular key that is still physically down, so its repeats and its
+  `keyUp` are still consumed after a blind window. After the tap is
+  re-enabled and after the recorder resumes the monitor, the shell asks the
+  system whether the key is down (`CGEventSource.keyState`). A taken regular
+  key that is already up is cleared, because its release was missed and a
+  stale take would leave a newly chosen trigger dead until the old key was
+  pressed again.
 - *Timestamps.* `flagsChanged`, `keyDown` and `keyUp` all go through one
   handler that converts the event's own timestamp, so a late-serviced
   callback cannot turn a quick tap into a hold.
@@ -787,9 +792,21 @@ modifier key that went down, with the other held families, when all
 modifiers are released. Fn is tracked by keycode 63. Recording ends on a
 capture, Esc, the window closing or losing key, and the app going inactive.
 Each refusal shows a one-line reason: Fn held with another key, Esc in any
-combination, Caps Lock, a keycode outside 0...127, a combination equal to the
-chord. The pane disables a chord toggle whose change would make the trigger
-contain the whole chord.
+combination, Caps Lock, a keycode outside 0...127, a combination that holds
+the whole chord (a trigger's modifiers plus, for a sided key, its own
+family, so Left Option with Control held is refused under the default
+chord). The pane disables a chord toggle whose change would make the trigger
+hold the whole chord. The reason a refused capture showed is cleared when
+recording ends.
+
+A capture made while Fn is physically down is refused, except for the keys a
+laptop keyboard reaches only through Fn: F1 to F20, Home, Page Up, Forward
+Delete, End and Page Down (`HotkeyTrigger.fnReachedKeyCodes`). For these the
+stored trigger is the key alone with its family modifiers, never Fn, and the
+tracker matches it with or without Fn held, since it ignores the Fn flag on
+a regular key. This is the orchestrator's ruling on PR review finding 6
+(2026-10-26). `clamped()` has no mirror of the Fn-down refusal, because it
+only sees the stored value and an F-key trigger is an ordinary regular key.
 
 **Tests.** `HotkeyStateMachineTests` runs over primary inputs including the
 repeat. `FlagEdgeTrackerTests` carries the Fn cases through the new event
@@ -797,8 +814,9 @@ API and pins the sequences above. `HotkeyEventRouterTests` runs the router
 over random streams of physical presses on sided modifiers, Fn and regular
 keys with resets, trigger changes and chord changes, and asserts that only
 the trigger's or the taken key's events are consumed, that no press has a
-consumed event after a passed down, and that a consumed down gets a consumed
-up.
+consumed event after a passed down except the two cases under Known limits,
+which the test models by name, that a consumed down gets a consumed up, and
+that every autorepeat of a consumed press is consumed.
 
 **Known limits.**
 
@@ -809,6 +827,10 @@ up.
   both fall inside one blind window, the second press's release is consumed
   although the app saw its down. The alternative, clearing the key on reset,
   lets a held key's repeats reach the app without a down.
+- An Fn held at a silent re-seed (pressed in a blind window, or the first
+  packet after a reset) while Fn is the trigger is taken as the trigger's own
+  press. Its up is consumed although the app saw its down. This is today's
+  production behavior, kept by ruling on 2026-10-26.
 - A sided modifier trigger needs a keyboard that reports device bits.
   Debug builds log when a `flagsChanged` for the trigger key carries none.
 

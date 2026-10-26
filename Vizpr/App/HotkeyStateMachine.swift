@@ -169,8 +169,8 @@ struct HotkeyStateMachine {
             return (.pressed(since: at, source: .secondary),
                     HotkeyDecision(action: .startDictation, disposition: .passThrough))
         case .primaryUp, .primaryRepeat:
-            // Stray trigger up or repeat (we may have eaten the down): still
-            // consume to be safe.
+            // Stray trigger up or repeat (we may have eaten the down, or the held
+            // key is repeating after a commit press): still consume to be safe.
             return (.idle, .ignoreConsume)
         case .secondaryUp:
             return (.idle, .ignorePassThrough)
@@ -295,9 +295,8 @@ struct HotkeyStateMachine {
         case .tapDisabled, .captureFailed:
             return (.idle, HotkeyDecision(action: .cancel, disposition: .passThrough))
 
-        // Strays (e.g. the up that paired the latching tap arrives late, or the
-        // held key repeating after a commit press): consume the trigger's events,
-        // pass the rest, stay latched.
+        // Strays (e.g. the up that paired the latching tap arrives late): consume
+        // the trigger's events, pass the rest, stay latched.
         case .primaryUp, .primaryRepeat:
             return (.latched(source: source), .ignoreConsume)
         case .secondaryUp:

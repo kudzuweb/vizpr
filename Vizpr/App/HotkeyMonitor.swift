@@ -29,8 +29,9 @@ final class HotkeyMonitor: @unchecked Sendable {
     // Hotkey-thread state.
     private var machine: HotkeyStateMachine
     /// Edge tracking lives in a pure, tested value type (see `FlagEdgeTracker`):
-    /// flagsChanged reports the whole flag set, so down/up edges are derived by
-    /// comparison, and that comparison has real failure modes worth testing.
+    /// it derives edges from `flagsChanged` by comparing the whole flag set with
+    /// the previous one, and from `keyDown`/`keyUp` by keycode, and that
+    /// comparison has real failure modes worth testing.
     private var edges: FlagEdgeTracker
     /// While true the callback forwards every event before the tracker runs, so
     /// the Settings recorder can see the trigger key itself. Hotkey thread only.
@@ -99,7 +100,7 @@ final class HotkeyMonitor: @unchecked Sendable {
             if suspended {
                 apply(machine.handle(.tapDisabled(.timeout)))
             } else {
-                edges.reset()
+                edges.reset(isKeyDown: Self.isPhysicallyDown)
             }
         }
     }
@@ -315,7 +316,7 @@ final class HotkeyMonitor: @unchecked Sendable {
     private func logDeviceBitsIfMissing(_ event: HotkeyKeyEvent) {
         guard !loggedMissingDeviceBits, event.kind == .flagsChanged,
               event.keyCode == edges.trigger.keyCode, edges.trigger.sidedKey != nil,
-              event.flags.rawValue & Self.deviceBitsMask == 0
+              event.flags.rawValue & HotkeyTrigger.allDeviceBits == 0
         else { return }
         loggedMissingDeviceBits = true
         VizprTranscriptLogger.note(
@@ -323,14 +324,19 @@ final class HotkeyMonitor: @unchecked Sendable {
         )
     }
 
-    private static let deviceBitsMask = HotkeyTrigger.modifierKeys.values.reduce(UInt64(0)) { $0 | $1.deviceBit }
     #endif
 
     /// Re-enable a disabled tap and clear edge state (fail-open: assume nothing is
     /// held). Shared by the in-callback disable path and the watchdog.
     private func reEnableTap() {
         if let port = machPort { CGEvent.tapEnable(tap: port, enable: true) }
-        edges.reset()
+        edges.reset(isKeyDown: Self.isPhysicallyDown)
+    }
+
+    /// The current hardware state of a key, so a reset after a blind window can
+    /// tell a regular key still held from one whose release was missed.
+    private static func isPhysicallyDown(_ keyCode: UInt16) -> Bool {
+        CGEventSource.keyState(.combinedSessionState, key: CGKeyCode(keyCode))
     }
 
     /// Forward any dictation action and keep the threshold timer in sync with the

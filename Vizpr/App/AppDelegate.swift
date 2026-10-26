@@ -68,7 +68,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsStore = store
         let monitor = HotkeyMonitor(
             holdThreshold: .milliseconds(store.settings.holdThresholdMs),
-            secondaryMask: Self.modifierMask(store.settings.secondaryModifiers),
+            secondaryMask: HotkeyTrigger.mask(forFamilies: store.settings.secondaryModifiers),
             trigger: store.settings.trigger
         )
         hotkeyMonitor = monitor
@@ -301,7 +301,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             rebuildPipeline()
         }
         hotkeyMonitor.setHoldThreshold(.milliseconds(settings.holdThresholdMs))
-        hotkeyMonitor.setSecondaryMask(Self.modifierMask(settings.secondaryModifiers))
+        hotkeyMonitor.setSecondaryMask(HotkeyTrigger.mask(forFamilies: settings.secondaryModifiers))
         hotkeyMonitor.setTrigger(settings.trigger)
         if settings.hotkeyEnabled {
             if permissionProbe.evaluate() == .ready { _ = hotkeyMonitor.start() }
@@ -338,10 +338,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             "pipeline rebuilt: asr=\(settingsStore.settings.asrModelID ?? "bundled") "
                 + "cleanup=\(settingsStore.settings.cleanupModelID ?? "bundled")")
         #endif
-    }
-
-    static func modifierMask(_ names: [String]) -> CGEventFlags {
-        HotkeyTrigger.mask(forFamilies: names)
     }
 
     /// Session drain (AudioPipeline hook): releases the settle window, then

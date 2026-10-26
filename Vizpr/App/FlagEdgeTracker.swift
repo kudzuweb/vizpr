@@ -9,8 +9,10 @@ import CoreGraphics
 /// device bit and its keycode is unverified across keyboards, so it keeps the
 /// field-tested detection by comparing the Fn flag with the previous snapshot.
 /// A key the tracker takes is *taken* until its up edge, and the tracker emits an
-/// up edge only for a key it took, so a key whose down reached an app is never
-/// followed by an up the app does not see.
+/// up edge only for a key it took, so a key whose down reached an app is not
+/// followed by an up the app does not see, with two exceptions documented under
+/// `reset()` and in NOTES.md "Known limits": an Fn held at a silent re-seed, and
+/// a regular key released and re-pressed inside one blind window.
 ///
 /// "Modifiers match" means the held modifier families, masked to the four
 /// families, equal the trigger's modifiers exactly; for a modifier-key trigger
@@ -112,11 +114,14 @@ struct FlagEdgeTracker {
     /// unacceptable.
     ///
     /// A taken modifier key is cleared: passing its release is self-correcting,
-    /// because the event carries the full flag state. A taken regular key is kept,
-    /// so its repeats and its `keyUp` are still consumed after the blind window
-    /// instead of reaching the app as a key-down-less repeat.
-    mutating func reset() {
-        if let taken, isModifierKeyCode(taken) { self.taken = nil }
+    /// because the event carries the full flag state. A taken regular key is kept
+    /// while `isKeyDown` says it is physically down, so its repeats and its `keyUp`
+    /// are still consumed after the blind window instead of reaching the app as a
+    /// key-down-less repeat. A taken regular key that is already up is cleared,
+    /// because its release was missed and a stale take would leave a newly chosen
+    /// trigger dead until the old key was pressed again.
+    mutating func reset(isKeyDown: (UInt16) -> Bool = { _ in true }) {
+        if let taken, isModifierKeyCode(taken) || !isKeyDown(taken) { self.taken = nil }
         fnFlagDown = false
         secondaryActive = false
         isSeeded = false

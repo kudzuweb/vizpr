@@ -13,11 +13,16 @@ import Testing
 ///    down was consumed.
 /// 3. A consumed down is followed by a consumed up, except across a reset that
 ///    clears a modifier key (passing a modifier's release is self-correcting).
+/// 4. Every autorepeat of a press whose down was consumed is consumed.
 ///
-/// One exception is by design and is modeled, not hidden: Fn keeps its
-/// field-tested flag detection, so an Fn held at a silent re-seed is treated as
-/// the trigger's own press and its up is consumed although its down was not
-/// seen (a press made in a blind window, or the first packet after a reset).
+/// Two exceptions are by design and are modeled by name, not hidden (see
+/// NOTES.md "Known limits"):
+/// - Fn keeps its field-tested flag detection, so an Fn held at a silent re-seed
+///   while Fn is the trigger is treated as the trigger's own press and its up is
+///   consumed although its down was not seen (`takenAtReseed`).
+/// - A regular key taken across a reset stays taken, so a press made in the same
+///   blind window as the earlier release has its release consumed
+///   (`inheritedStaleTake`).
 @Suite("HotkeyEventRouter composed fail-open properties")
 struct HotkeyEventRouterTests {
 
@@ -49,7 +54,9 @@ struct HotkeyEventRouterTests {
     private struct Press {
         /// nil when the down was never delivered (a blind window).
         var downConsumed: Bool?
-        var trackerSeededAtDown: Bool
+        /// Fn held at a silent re-seed while Fn was the trigger: the tracker took it
+        /// although its down was not consumed.
+        var takenAtReseed = false
         var resetSinceDown = false
         /// A regular key pressed in a blind window while the tracker still held it
         /// as taken from an earlier press whose release was also missed. The plan
@@ -67,6 +74,8 @@ struct HotkeyEventRouterTests {
         var clock: UInt64 = 1
         var blind = false
         var violations: [String] = []
+        /// Whether the most recent `deliver` took Fn at a silent re-seed.
+        var lastDeliverTookFnAtReseed = false
         /// The last events and operations, printed with a violation.
         var history: [String] = []
         let seed: UInt64
@@ -102,10 +111,14 @@ struct HotkeyEventRouterTests {
             clock += UInt64.random(in: 0...400, using: &rng)
             let takenBefore = tracker.taken
             let triggerKey = tracker.trigger.keyCode
+            let fnReseedPossible = event.kind == .flagsChanged && !tracker.isSeeded
+                && tracker.trigger.isFn && keysDown.contains(HotkeyTrigger.fnKeyCode) && takenBefore == nil
             let outcome = HotkeyEventRouter.route(
                 event, at: MonotonicTime(nanoseconds: clock * 1_000_000),
                 tracker: &tracker, machine: &machine
             )
+            lastDeliverTookFnAtReseed = fnReseedPossible && tracker.taken == HotkeyTrigger.fnKeyCode
+            if lastDeliverTookFnAtReseed { presses[HotkeyTrigger.fnKeyCode]?.takenAtReseed = true }
             let repeatMark = event.isAutorepeat ? "r" : ""
             let takenAfter = String(describing: tracker.taken)
             history.append("\(event.kind) k\(event.keyCode)\(repeatMark) \(outcome.edges) taken=\(String(describing: takenBefore))->\(takenAfter)")
@@ -124,7 +137,7 @@ struct HotkeyEventRouterTests {
             if blind {
                 history.append("blind press k\(key)")
                 presses[key] = Press(
-                    downConsumed: nil, trackerSeededAtDown: true,
+                    downConsumed: nil,
                     inheritedStaleTake: !isModifier(key) && tracker.taken == key
                 )
                 return
@@ -132,9 +145,11 @@ struct HotkeyEventRouterTests {
             let event = isModifier(key)
                 ? HotkeyKeyEvent(kind: .flagsChanged, keyCode: key, flags: currentFlags())
                 : HotkeyKeyEvent(kind: .keyDown, keyCode: key, flags: currentFlags())
-            let seeded = tracker.isSeeded || !isModifier(key)
             let outcome = deliver(event)
-            presses[key] = Press(downConsumed: outcome.suppress, trackerSeededAtDown: seeded)
+            presses[key] = Press(
+                downConsumed: outcome.suppress,
+                takenAtReseed: key == HotkeyTrigger.fnKeyCode && lastDeliverTookFnAtReseed
+            )
         }
 
         func autorepeat(_ key: UInt16) {
@@ -142,6 +157,9 @@ struct HotkeyEventRouterTests {
             let event = HotkeyKeyEvent(kind: .keyDown, keyCode: key, flags: currentFlags(), isAutorepeat: true)
             let outcome = deliver(event)
             if outcome.suppress, !consumptionAllowed(key) { fail("consumed a repeat whose down was not consumed", event) }
+            if !outcome.suppress, let press = presses[key], press.downConsumed == true || press.inheritedStaleTake {
+                fail("a repeat of a consumed press reached the app", event)
+            }
         }
 
         func release(_ key: UInt16) {
@@ -161,9 +179,8 @@ struct HotkeyEventRouterTests {
         private func consumptionAllowed(_ key: UInt16) -> Bool {
             guard let press = presses[key] else { return false }
             if press.downConsumed == true || press.inheritedStaleTake { return true }
-            // Fn's by-design exception: held at a silent re-seed, its up is consumed.
-            return key == HotkeyTrigger.fnKeyCode
-                && (press.downConsumed == nil || !press.trackerSeededAtDown)
+            // Fn's by-design exception: taken at a silent re-seed while Fn is the trigger.
+            return press.takenAtReseed
         }
 
         /// The shell's blind-window recovery: events during the window reach the
@@ -176,7 +193,7 @@ struct HotkeyEventRouterTests {
                 keysDown.contains(key) ? release(key) : press(key)
             }
             blind = false
-            tracker.reset()
+            tracker.reset(isKeyDown: { [keysDown] in keysDown.contains($0) })
             history.append("BLIND end, down=\(keysDown.sorted()) taken=\(String(describing: tracker.taken))")
             _ = machine.handle(.tapDisabled(.timeout))
             for key in presses.keys where isModifier(key) { presses[key]?.resetSinceDown = true }

@@ -173,12 +173,11 @@ struct BehaviorPane: View {
 
     private static let chordCaption = "The chord needs at least two modifiers."
 
-    /// Dropping a modifier from the chord can make the trigger's modifiers
-    /// contain the whole chord, a trigger that could never fire; the toggle is
-    /// disabled instead of the trigger being reset behind the user's back.
+    /// Dropping a modifier from the chord can make the trigger hold the whole
+    /// chord, which the recorder refuses; the toggle is disabled instead of the
+    /// trigger being reset behind the user's back.
     private func removalConflicts(with name: String) -> Bool {
-        let chord = store.settings.secondaryModifiers.filter { $0 != name }
-        return Set(chord).isSubset(of: store.settings.trigger.modifiers)
+        store.settings.trigger.containsChord(store.settings.secondaryModifiers.filter { $0 != name })
     }
 
     private var chordCaption: String {

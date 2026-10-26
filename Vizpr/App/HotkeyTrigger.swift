@@ -1,3 +1,5 @@
+import AppKit
+import Carbon.HIToolbox
 import CoreGraphics
 
 /// The key that starts and stops dictation: one physical key, named by its
@@ -75,6 +77,26 @@ extension HotkeyTrigger {
 
     static let allFamilyFlags: CGEventFlags = [.maskControl, .maskAlternate, .maskShift, .maskCommand]
 
+    /// The four families as AppKit modifier flags, in the order macOS writes them
+    /// in menus. The recorder reads held families from this list.
+    static let orderedFamilyFlags: [(name: String, flag: NSEvent.ModifierFlags)] = [
+        ("control", .control), ("option", .option), ("shift", .shift), ("command", .command)
+    ]
+
+    /// The union of every sided modifier key's device bit.
+    static let allDeviceBits: UInt64 = modifierKeys.values.reduce(UInt64(0)) { $0 | $1.deviceBit }
+
+    /// Keys a laptop keyboard reaches only through Fn: F1 to F20 and the
+    /// navigation block. A capture made while Fn is physically down is accepted
+    /// for these, because the Fn is how the user pressed the key. The tracker
+    /// ignores the Fn flag on a regular key's `keyDown`, so the trigger matches
+    /// with or without Fn held.
+    static let fnReachedKeyCodes: Set<UInt16> = [
+        kVK_F1, kVK_F2, kVK_F3, kVK_F4, kVK_F5, kVK_F6, kVK_F7, kVK_F8, kVK_F9, kVK_F10,
+        kVK_F11, kVK_F12, kVK_F13, kVK_F14, kVK_F15, kVK_F16, kVK_F17, kVK_F18, kVK_F19, kVK_F20,
+        kVK_Home, kVK_PageUp, kVK_ForwardDelete, kVK_End, kVK_PageDown
+    ].reduce(into: Set<UInt16>()) { $0.insert(UInt16($1)) }
+
     /// The combined flag for a list of family names; unknown names add nothing.
     static func mask(forFamilies names: [String]) -> CGEventFlags {
         names.reduce(into: CGEventFlags()) { mask, name in
@@ -95,6 +117,13 @@ extension HotkeyTrigger {
 
     /// The families that must be held, as flags.
     var modifierMask: CGEventFlags { Self.mask(forFamilies: modifiers) }
+
+    /// Whether pressing this trigger also holds every modifier of the given
+    /// chord: its `modifiers` plus, for a sided key, the key's own family.
+    func containsChord(_ secondaryModifiers: [String]) -> Bool {
+        let held = Set(modifiers).union([sidedKey?.family].compactMap { $0 })
+        return !secondaryModifiers.isEmpty && Set(secondaryModifiers).isSubset(of: held)
+    }
 }
 
 // MARK: - Validity
@@ -127,8 +156,8 @@ extension HotkeyTrigger {
         if let family = sidedKey?.family, modifiers.contains(family) {
             return "The trigger key already is that modifier."
         }
-        if !secondaryModifiers.isEmpty, Set(secondaryModifiers).isSubset(of: modifiers) {
-            return "That combination is the chord that also starts dictation, so it could never fire."
+        if containsChord(secondaryModifiers) {
+            return "That combination is the dictation chord, so it can't also be the trigger."
         }
         return nil
     }

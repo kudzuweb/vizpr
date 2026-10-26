@@ -355,6 +355,34 @@ struct FlagEdgeTrackerTests {
         #expect(tracker.edges(for: up(keyD)) == [.primaryUp])
     }
 
+    @Test("Reset keeps a taken regular key the probe reports down, and clears one it reports up")
+    func resetConsultsTheKeyProbe() {
+        var held = tracker(HotkeyTrigger(keyCode: keyD, modifiers: []))
+        _ = held.edges(for: down(keyD))
+        held.reset(isKeyDown: { $0 == keyD })
+        #expect(held.taken == keyD)
+
+        var released = tracker(HotkeyTrigger(keyCode: keyD, modifiers: []))
+        _ = released.edges(for: down(keyD))
+        released.reset(isKeyDown: { _ in false })
+        #expect(released.taken == nil)
+    }
+
+    @Test("A new trigger takes on its first press once the old trigger's stale take is cleared")
+    func staleTakeDoesNotBlockNewTrigger() {
+        var stale = tracker(HotkeyTrigger(keyCode: keyD, modifiers: []))
+        _ = stale.edges(for: down(keyD))                 // D's release is then missed
+        var withStaleTake = stale.replacingTrigger(rightOptionTrigger)
+        withStaleTake.reset()                            // default probe keeps the take
+        _ = withStaleTake.edges(for: modifier(rightOption, []))   // re-seed
+        #expect(withStaleTake.edges(for: modifier(rightOption, held(rightOption))).isEmpty)
+
+        stale.reset(isKeyDown: { _ in false })
+        var cleared = stale.replacingTrigger(rightOptionTrigger)
+        _ = cleared.edges(for: modifier(rightOption, []))         // re-seed
+        #expect(cleared.edges(for: modifier(rightOption, held(rightOption))) == [.primaryDown])
+    }
+
     @Test("Regular-key events are not held back by an unseeded baseline")
     func regularKeysIgnoreSeeding() {
         var tracker = tracker(HotkeyTrigger(keyCode: keyD, modifiers: []))
