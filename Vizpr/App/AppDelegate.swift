@@ -255,6 +255,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     let renderedAt = ContinuousClock.now
                     Task { await tracker.mark(.firstPreview, at: renderedAt) }
                 }
+                if !snapshot.settled.isEmpty {
+                    let renderedAt = ContinuousClock.now
+                    Task { await tracker.mark(.firstSettled, at: renderedAt) }
+                }
                 if snapshot != .empty {
                     VizprTranscriptLogger.note("display: \(snapshot.displayed)")
                 }
@@ -293,8 +297,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         overlay.setLook(settings.activeLook)
         overlay.setInviz(settings.invizMode)
         overlay.setTargetAppDisplay(settings.targetAppDisplay)
-        Task { [tokenStream, smartCleanup, asrEngine] in
-            await tokenStream.setSettleSentences(settings.settleSentences)
+        Task { [smartCleanup, asrEngine] in
             await smartCleanup?.setRuntime(
                 enabled: settings.cleanupEnabled,
                 codeModeOverride: settings.codeModeOverride

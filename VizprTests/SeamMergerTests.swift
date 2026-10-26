@@ -41,52 +41,14 @@ struct SeamMergerTests {
                 == "Good work, Fable. I love it.")
     }
 
-    @Test("Field fixture: word overlap at the seam is trimmed")
-    func overlapTrimmed() {
-        #expect(merged("We don't say accidental discharge. We say negligent discharge",
-                       "negligent discharge for a reason.")
-                == "We don't say accidental discharge. We say negligent discharge for a reason.")
-    }
-
-    @Test("Overlap comparison ignores case and punctuation")
-    func overlapNormalized() {
-        #expect(merged("I think this is going to translate into a good UI.",
-                       "a good ui. Nice.")
-                == "I think this is going to translate into a good UI. Nice.")
-    }
-
-    @Test("Genuinely repeated emphasis words are NOT deleted")
+    @Test("Genuinely repeated words across finals are kept")
     func realRepeatPreserved() {
-        // Review finding: a user saying "…that's final. Final answer." must keep
-        // the second "Final" — the surface forms differ ("final." vs "Final"),
-        // so a 1-word match is not trimmed.
+        // "I really / really mean it" and "that's final. Final answer." are
+        // speech, not a re-decoded seam: windows no longer repeat each other.
+        #expect(merged("I really", "really mean it.") == "I really really mean it.")
         #expect(merged("I want it done, and that's final.", "Final answer.")
                 == "I want it done, and that's final. Final answer.")
-    }
-
-    @Test("Single-word overlap trims only on exact (case+punct) raw match")
-    func singleWordExactOnly() {
-        // Exact raw repeat = seam artifact → trim.
-        #expect(merged("go to the store", "store now")
-                == "go to the store now")
-        // Differing surface form = real speech → keep.
-        #expect(merged("go to the Store", "store now")
-                == "go to the Store store now")
-    }
-
-    @Test("Internal whitespace of retained speech is preserved")
-    func whitespaceFidelity() {
-        // The retained portion after the trimmed overlap word keeps its internal
-        // spacing byte-faithfully (slicing the original string, not rejoining
-        // split words). The seam separator itself normalizes to one space.
-        #expect(merged("one two three", "three  four   five")
-                == "one two three four   five")
-    }
-
-    @Test("Fully duplicated text appends nothing")
-    func fullDuplicateDrops() {
-        let context = "one two three"
-        #expect(SeamMerger.appendix(context: context, new: "two three").isEmpty)
+        #expect(merged("one two three", "two three four") == "one two three two three four")
     }
 
     @Test("Empty and whitespace-only additions append nothing")
@@ -121,11 +83,10 @@ struct SeamMergerPropertyTests {
         text.split { $0 == " " }.map { String($0.filter(\.isLetter)) }.filter { !$0.isEmpty }
     }
 
-    /// The seam merger may drop text ONLY at a genuine overlap; it must never
-    /// invent or lose words otherwise. Property: for a random context and a
-    /// random independent continuation, every non-overlap word of the incoming
-    /// text survives into the merged result.
-    @Test("Merging never loses non-overlapping spoken words")
+    /// The seam merger must never invent or lose words. Property: for a random
+    /// context and a random independent continuation, every word of both
+    /// survives into the merged result, in order.
+    @Test("Merging never loses or invents spoken words")
     func neverLosesNonOverlapWords() {
         let vocab = ["the", "quick", "brown", "fox", "jumps", "over", "lazy", "dog", "and", "then"]
         for seed in UInt64(1)...500 {
@@ -137,21 +98,9 @@ struct SeamMergerPropertyTests {
 
             let merged = context + SeamMerger.appendix(context: context, new: incoming)
 
-            // Any incoming word beyond the trimmed prefix must appear in merged.
-            // Conservatively: the merged word-count is at least the context's,
-            // and merged ends with a suffix of the incoming words.
             let mergedWords = words(merged)
-            let contextWords = words(context)
-            let incomingWords = words(incoming)
-            #expect(mergedWords.count >= contextWords.count,
-                    "merge lost context words (seed \(seed)): \(merged)")
-            #expect(mergedWords.count <= contextWords.count + incomingWords.count,
-                    "merge invented words (seed \(seed)): \(merged)")
-            // The tail of merged equals a suffix of incoming (overlap only trims
-            // a prefix of incoming, never reorders or drops from its tail).
-            let tail = Array(mergedWords.suffix(incomingWords.count))
-            #expect(incomingWords.suffix(tail.count).map { $0.lowercased() } == tail.map { $0.lowercased() },
-                    "merge reordered/dropped incoming tail (seed \(seed)): \(merged)")
+            #expect(mergedWords == words(context) + words(incoming),
+                    "merge changed the words (seed \(seed)): \(merged)")
         }
     }
 }
@@ -186,48 +135,9 @@ struct SentenceSplitterTests {
     }
 }
 
-/// Field regressions from the 2026-07-04 PR 9 dogfood: windowed finals
-/// re-covering the previous window's tail with a filler or punctuation
-/// variation rendered the words twice.
-@Suite("SeamMerger filler-tolerant overlap")
-struct SeamMergerFillerTests {
-    @Test("A filler inside the overlap does not break the match")
-    func fillerInOverlap() {
-        let merged = SeamMerger.appendix(
-            context: "Sorry about that. Otherwise, we're",
-            new: "Otherwise, uh we're coming along here"
-        )
-        #expect(merged == " coming along here", "got: \(merged.debugDescription)")
-    }
-
-    @Test("Trailing punctuation on the context side still matches one word")
-    func punctuationSingleWord() {
-        let merged = SeamMerger.appendix(
-            context: "I do like the confirmation.",
-            new: "confirmation lag whatever thing"
-        )
-        #expect(merged == " lag whatever thing", "got: \(merged.debugDescription)")
-    }
-
-    @Test("Real repeated speech with different casing is preserved")
-    func emphasisRepeatPreserved() {
-        let merged = SeamMerger.appendix(context: "that's final.", new: "Final answer.")
-        #expect(merged.contains("Final answer"), "emphasis repeat was eaten: \(merged.debugDescription)")
-    }
-}
-
 /// Field regressions from the 2026-07-05 dogfood.
-@Suite("SeamMerger echo + contraction")
+@Suite("SeamMerger echo")
 struct SeamMergerEchoTests {
-    @Test("Contraction variants align across the seam (gonna / going to)")
-    func contractionSeam() {
-        let merged = SeamMerger.appendix(
-            context: "and I think that's going to feel different than",
-            new: "And I think that's gonna feel different than if I tried."
-        )
-        #expect(merged == " if I tried.", "got: \(merged.debugDescription)")
-    }
-
     @Test("A full context echo ahead of the rewrite is stripped")
     func contextEchoStripped() {
         let context = "It's not there. They're both just kind of slow. There's a few seconds before it starts showing."
@@ -245,6 +155,17 @@ struct SeamMergerEchoTests {
         )
         #expect(stripped == "and one of them was just right.",
                 "got: \(stripped.debugDescription)")
+    }
+
+    @Test("Echo detection survives a dropped filler and a normalized contraction in the copy")
+    func echoWithFillerAndContractionDrift() {
+        // Cleanup removes fillers and may expand contractions when it copies
+        // the context, so the alignment must not depend on either.
+        let stripped = SeamMerger.stripContextEcho(
+            context: "and I think that's gonna feel um different than before.",
+            from: "And I think that's going to feel different than before. Then we moved on."
+        )
+        #expect(stripped == "Then we moved on.", "got: \(stripped.debugDescription)")
     }
 
     @Test("Output that is nothing but echo strips to empty")

@@ -4,7 +4,7 @@ import Foundation
 /// A session mark reported to the tracker for the PR 13 latency audit.
 /// The first draft is not a mark: the tracker sees it through `observe`.
 enum DevTimingMark: Sendable {
-    case captureStarted, speechOnset, firstPreview, commit, injected
+    case captureStarted, speechOnset, firstPreview, firstSettled, commit, injected
 }
 
 /// Accumulates the raw ASR text of the current session for the per-dictation
@@ -14,11 +14,11 @@ enum DevTimingMark: Sendable {
 ///
 /// Raw mirrors the display's own shape: confirmed (finalized) spans plus the
 /// trailing unconfirmed draft. The trailing draft is load-bearing, not a
-/// nicety — sessions under the sliding window's 10 s confirmation context
-/// never confirm ANYTHING, even at flush (field-observed: every short
-/// dictation logged empty raw when only finals were tracked). Each finalized
-/// span supersedes the drafts of the window it confirms, so finals clear the
-/// trailing draft.
+/// nicety — a session that ends before its first pause or 12 s window has no
+/// final until the commit decode, which can be dropped by the settle cap
+/// (field-observed: every short dictation logged empty raw when only finals
+/// were tracked). Each finalized span supersedes the drafts of the window it
+/// confirms, so finals clear the trailing draft.
 actor DevDictationTracker {
     private var rawFinalized: [String] = []
     private var trailingDraft = ""
@@ -77,6 +77,7 @@ actor DevDictationTracker {
         result.speechOnsetMs = ms(marks[.speechOnset])
         result.firstDraftMs = ms(draftArrivals.first)
         result.firstPreviewMs = ms(marks[.firstPreview])
+        result.firstSettledMs = ms(marks[.firstSettled])
         result.commitMs = ms(marks[.commit])
         result.injectedMs = ms(marks[.injected])
         result.draftCount = draftArrivals.count

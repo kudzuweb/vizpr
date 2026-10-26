@@ -652,7 +652,8 @@ itself. Each `t_*` field is integer milliseconds since the startDictation
 action, or `null` when the mark never happened: `t_capture_ms` (first audio
 chunk), `t_speech_onset_ms` (first VAD speech start), `t_first_draft_ms`
 (first draft reaches the tracker), `t_first_preview_ms` (first non-empty
-display snapshot rendered), `t_commit_ms` (commit action received) and
+display snapshot rendered), `t_first_settled_ms` (first snapshot with
+non-empty settled text, added by windows by pause), `t_commit_ms` (commit action received) and
 `t_injected_ms` (inject returned). `draft_count` counts drafts;
 `draft_interval_mean_ms` and `draft_interval_max_ms` give the gaps between
 consecutive drafts, `null` below two drafts. Baseline to beat: first preview
@@ -910,13 +911,149 @@ Known limits:
   4 s of the session and shows no live draft while it is spoken.
 - Soft speech inside a long pause that never reaches 0.5 probability is
   dropped (11 of 3,173 sampled chunks were inactive while scoring 0.3-0.85).
-- The commit decode has no left context, so the first word after a
-  confirmation can decode slightly weaker; this is the draft policy today.
-- The seam trim is text-based, so a genuine repeat of the previous window's
-  last words can still be trimmed.
-- A window FluidAudio skips through `attemptErrorRecovery` advances its center
-  without an update, so `windowsProcessed` falls one behind for the rest of
-  that session.
+
+## Windows by pause (2026-10-25)
+
+FluidAudio's sliding window confirmed a 10 s window after 2 s of further
+audio, so the first final text landed at about 12 s and every 10 s after it.
+Windows were cut on a clock, so a cut landed mid-word about half the time; the
+window kept its 2 s of right context, the next decode heard those words again,
+and a text match was the only thing stopping a duplicate. Field case,
+`debug.log` 2026-10-25T19:26Z: the window's text ended "pushes are." because
+its audio ended at 12 s in the middle of "ready", the tail decode heard "are
+ready" as "already" with no words before it, the match failed, and the
+injected text read "whatever pushes are. whatever pushes already."
+
+The app now owns its windows: a window closes at each pause the VAD reports,
+and every decode is cut by token timing, so no decode repeats another's words.
+This replaces the sliding-window decisions in "Tail integrity at commit" (the
+window boundary, the seam trim, cancelling the manager); its other decisions
+stand. The decisions, by step:
+
+- **The engine's input carries pause marks.** `TranscriptionEngine.transcribe`
+  takes `AsyncStream<AudioInput>`, where `AudioInput` is `.samples([Float])` or
+  `.pause`. `AudioPipeline` yields `.pause` after the gate's batches for a
+  capture batch whose VAD updates contain a `speechEnd` event, one per event.
+  The mark carries no position: the gate forwards about 1 s of audio after
+  speech stops and then nothing, so the engine's own sample count when the
+  mark arrives is the pause. The VAD still never decides commits; a mark only
+  lets the engine close a window.
+
+- **The engine owns its windows.** `SlidingWindowAsrManager` is gone; the
+  batch `AsrManager` does every decode, in one decode task per session.
+  `WindowTracker` (renamed from `DraftTailTracker`) plans three kinds of
+  decode, each over a range that starts 2 s before its window for acoustic
+  context:
+  - *pause*: the last `.pause` mark closes a window from the confirmed
+    boundary to the mark, if it follows at least 0.5 s of unconfirmed audio. A
+    shorter pause is dropped, not deferred.
+  - *forced*: 12 s of unconfirmed audio without a pause closes a window of
+    10 s, decoded to 12 s so the cut can land between words. The forced check
+    runs first, so a pause window never covers more than 12 s of unconfirmed
+    audio plus context, which keeps every decode under FluidAudio's 240,000
+    sample single-pass limit.
+  - *commit*: as on tail integrity, with the 2 s of context and the cut.
+- **Words are cut by token timing, not matched by text.** `TimedCut` groups a
+  decode's `tokenTimings` into words (a word starts at a token whose text
+  starts with a space; a punctuation piece stays with its word) and keeps the
+  words whose first token starts inside the window. The text is rebuilt by
+  joining the kept tokens. A forced window is cut at the midpoint of the widest
+  gap between words that lies inside 9 to 11 s after the boundary; with no such
+  gap it cuts at the first word starting at or after 10 s, else at 10 s.
+- **Where the boundary moves.** A forced window confirms through the end of
+  its last kept word: a word it omitted at its edge is decoded whole by the
+  next window, and a word it kept starts before the boundary, so the next
+  window drops it. A pause window confirms through the pause, because the
+  silence between its last word and the pause was heard and yielded nothing;
+  leaving it unconfirmed would make every dictation that ends after a pause
+  run a commit decode over context plus silence. A window that kept no word
+  (an empty cut) confirms through its end, or a forced window would plan again
+  on every wake. A failed decode confirms nothing and emits nothing: a forced
+  window is retried on the next wake, and a pause window, whose pause is
+  consumed, leaves its audio in the tail for the next window or the commit
+  decode.
+- **A pause pending when the input ends is not run.** The commit decode covers
+  everything past the boundary, so planning stops when the input ends and one
+  decode replaces a window plus the commit decode behind it.
+- **Draft de-duplication restarts at each window.** The engine suppressed a
+  draft equal to the previous one; that memory now clears at each confirm, so
+  a phrase repeated in the next window is not hidden.
+- **Timings.** Each window logs one line, numbers only:
+  `window: pause|forced, decoded N ms, cut M samples`.
+
+- **Seam merging no longer matches words.** Finals do not repeat each other's
+  words, so `SeamMerger.trimOverlap` is removed and `appendix(context:new:)`
+  keeps only its punctuation and spacing rules. A phrase repeated across two
+  finals ("I really" / "really mean it") is kept. The filler and contraction
+  tables stay because `stripContextEcho` aligns a cleanup rewrite with its
+  settled context through them: cleanup drops fillers and may expand
+  contractions when it copies the context.
+
+- **Text turns white when its cleanup resolves.** Finalized text used to
+  settle only when two more sentences arrived. Now the cleanup launched for the
+  live region's current generation settles the complete sentences of the live
+  region when it resolves, and a trailing sentence fragment stays live, so a
+  pause mid-sentence never settles half a sentence before the sentence-end
+  cleanup sees the whole. Resolution means: the rewrite applied
+  (`applyCleanup` settles the prefix of what it wrote), the cleanup failed
+  (including an echo-only rewrite), the gate skipped cleanup, or cleanup is
+  off (the last two through `resolveLive(generation:)`). A skip while another
+  cleanup is in flight settles nothing at that moment, so an earlier
+  low-confidence span keeps its cleanup, and the refusal is retried when the
+  running cleanups finish if the generation is still current; a result for an older generation settles nothing;
+  commit is unchanged (strict cancel, the display is committed as shown).
+  The two-sentence rule stays as `settledSentenceBacklog`, so text still
+  settles when cleanups keep going stale under fast speech.
+- **The space before the next final goes with the settled text.** When a
+  resolution settles all of live, the next final's leading space is appended
+  to settled, not live. Cleanup returns trimmed text, so a space left at the
+  front of live would be lost when cleanup rewrites it, and the display would
+  read "Hello there.Next one".
+- **`launchCleanup` hands its operation its own id.** A failed cleanup resolves
+  the live region from inside its own task, which is still registered; the id
+  lets it stop counting itself as in flight.
+- **The "Settle window" setting is gone.** `settleSentences` leaves
+  `VizprSettings` and the Behavior tab; an old `settings.json` that has the
+  key still loads, because decoding ignores unknown keys. Cleanup latency on the
+  bundled model with an empty context (10 runs after a warm run, 2026-10-25):
+  one 13-word sentence p50 680 ms, p90 689 ms; two sentences (27 words) p50
+  1,024 ms, p90 1,032 ms; three sentences (41 words) p50 1,348 ms, p90
+  1,370 ms. Text therefore turns white about 0.7 to 1.4 s after a window's
+  cleanup starts.
+
+- **The dictation record measures settling.** `t_first_settled_ms` is the
+  time from the startDictation action to the first snapshot whose settled text
+  is non-empty, next to `t_first_preview_ms`. Dev-log builds only.
+
+Known limits:
+
+- A VAD `speechEnd` needs 0.75 s of silence, so a window closes only at a real
+  pause. Text turns final no sooner than 0.75 s after the pause plus the
+  decode; speech with no pauses waits for the forced 10 s window.
+- White text waits for cleanup, so the lag after a pause is the cleanup time
+  above; the two-sentence backstop bounds it while cleanup lags.
+- A forced window cuts on the clock, at the widest gap between words near
+  10 s. Two decodes can place the same word's start a frame or more apart
+  (FluidAudio's emission-delay correction is a median shift, not a per-token
+  alignment). Confirming through the end of the last kept word makes the next
+  window the one that decides any word the previous one omitted. A word the
+  earlier window kept, even truncated, starts before the boundary and is
+  dropped by the next window; only a word the earlier window omitted is
+  recovered.
+- A decode can stamp a word's start a frame or more before its true position.
+  Live (2026-10-25T20:40Z), speech resumed 50 ms after a pause mark and the
+  first word was stamped before the boundary and dropped as context. A window
+  or commit decode whose cut starts at a pause (or the session's start)
+  therefore keeps words starting up to 0.25 s before the boundary
+  (`WindowTracker.pauseStartToleranceSamples`). That is safe because the
+  0.75 s of audio before a pause scored as silence, so no word of the previous
+  window can start inside it. A forced boundary is the end of the previous
+  window's last kept word, inside speech, so its tolerance is 0.
+- The decode task is single, so a confirm delays the next draft refresh by one
+  decode, about 150 ms.
+- A pause pending when the input ends is not run as a window; the commit
+  decode covers it. A pause less than 0.5 s past a forced window's cut is
+  cleared with it; a pause further past survives and closes the next window.
 
 ## Environment prerequisites discovered
 

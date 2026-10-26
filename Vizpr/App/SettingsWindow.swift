@@ -125,8 +125,6 @@ struct BehaviorPane: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Dictation") {
-                Stepper("Settle window: \(store.settings.settleSentences) sentences",
-                        value: bind(store, \.settleSentences), in: 1...6)
                 sliderRow("Auto-stop after silence", bind(store, \.autoStopSeconds),
                           range: 2...60, unit: "s")
                 sliderRow("Hold threshold (tap vs hold)", bind(store, \.holdThresholdMs),

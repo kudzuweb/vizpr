@@ -8,6 +8,11 @@
 /// fully high-confidence mid-sentence text skips the LLM entirely. Invocations
 /// are launched through `TokenStream.launchCleanup`, so a commit cancels every
 /// in-flight cleanup structurally (strict cancel).
+///
+/// Cleanup also decides when text turns final: the stream settles the complete
+/// sentences of the live region when the cleanup for its generation resolves.
+/// A final that skips cleanup (trusted text, or cleanup switched off) resolves
+/// at once through `TokenStream.resolveLive`, and so does a cleanup that fails.
 actor SmartCleanup {
     private let tokenStream: TokenStream
     private let engine: any CleanupEngine
@@ -85,11 +90,14 @@ actor SmartCleanup {
 
         case let .finalized(text, confidence, tokenConfidences):
             let normalized = vocabulary.apply(to: text)
-            await tokenStream.apply(.finalized(
+            let generation = await tokenStream.apply(.finalized(
                 text: normalized, confidence: confidence, tokenConfidences: tokenConfidences
             ))
             if enabled, shouldClean(text: normalized, confidence: confidence, tokens: tokenConfidences) {
                 await launchCleanup()
+            } else {
+                // No cleanup will follow this text: the raw text is what it is.
+                await tokenStream.resolveLive(generation: generation)
             }
         }
     }
@@ -134,7 +142,18 @@ actor SmartCleanup {
         // Launched through the stream so commit()/cancel() cancels it. Every
         // path reports its disposition through onOutcome — cleanup failures
         // are fail-open for the display (span stays raw) but never silent.
-        await tokenStream.launchCleanup { [engine, vocabulary, tokenStream, onOutcome] in
+        await tokenStream.launchCleanup { [engine, vocabulary, tokenStream, onOutcome] cleanupID in
+            #if DICT_DEV_LOG
+            let started = ContinuousClock.now
+            #endif
+            func elapsedMs() -> Int? {
+                #if DICT_DEV_LOG
+                let parts = (ContinuousClock.now - started).components
+                return Int(parts.seconds * 1000 + parts.attoseconds / 1_000_000_000_000_000)
+                #else
+                return nil
+                #endif
+            }
             do {
                 let result = try await engine.clean(request)
                 // POST-PASS is authoritative: re-fix any canonical form the
@@ -153,8 +172,10 @@ actor SmartCleanup {
                     await onOutcome?(CleanupOutcome(
                         input: request.text, output: nil,
                         generation: input.generation, disposition: .failed,
-                        errorDescription: "output was context echo only"
+                        errorDescription: "output was context echo only",
+                        durationMs: elapsedMs()
                     ))
+                    await tokenStream.resolveLive(generation: input.generation, finishedCleanup: cleanupID)
                     return
                 }
                 let applied = await tokenStream.applyCleanup(
@@ -163,19 +184,23 @@ actor SmartCleanup {
                 await onOutcome?(CleanupOutcome(
                     input: request.text, output: cleaned,
                     generation: input.generation,
-                    disposition: applied ? .applied : .stale
+                    disposition: applied ? .applied : .stale,
+                    durationMs: elapsedMs()
                 ))
             } catch is CancellationError {
                 await onOutcome?(CleanupOutcome(
                     input: request.text, output: nil,
-                    generation: input.generation, disposition: .cancelled
+                    generation: input.generation, disposition: .cancelled,
+                    durationMs: elapsedMs()
                 ))
             } catch {
                 await onOutcome?(CleanupOutcome(
                     input: request.text, output: nil,
                     generation: input.generation, disposition: .failed,
-                    errorDescription: String(describing: error)
+                    errorDescription: String(describing: error),
+                    durationMs: elapsedMs()
                 ))
+                await tokenStream.resolveLive(generation: input.generation, finishedCleanup: cleanupID)
             }
         }
     }
@@ -195,4 +220,6 @@ struct CleanupOutcome: Sendable, Equatable {
     let generation: Int
     let disposition: Disposition
     var errorDescription: String?
+    /// Wall time of the invocation; measured in dev-log builds only.
+    var durationMs: Int?
 }
