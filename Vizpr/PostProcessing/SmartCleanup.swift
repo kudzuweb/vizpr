@@ -149,15 +149,13 @@ actor SmartCleanup {
         #endif
         await tokenStream.launchCleanup { [engine, vocabulary, tokenStream, onOutcome] cleanupID in
             #if DICT_DEV_LOG
-            let started = ContinuousClock.now
-            let startedAt: ContinuousClock.Instant? = started
+            let startedAt: ContinuousClock.Instant? = .now
             #else
             let startedAt: ContinuousClock.Instant? = nil
             #endif
             func elapsedMs() -> Int? {
                 #if DICT_DEV_LOG
-                let parts = (ContinuousClock.now - started).components
-                return Int(parts.seconds * 1000 + parts.attoseconds / 1_000_000_000_000_000)
+                return startedAt.map { (ContinuousClock.now - $0).devLogMilliseconds }
                 #else
                 return nil
                 #endif
@@ -182,7 +180,7 @@ actor SmartCleanup {
                         generation: input.generation, disposition: .failed,
                         errorDescription: "output was context echo only",
                         durationMs: elapsedMs(),
-                        enqueuedAt: enqueued, startedAt: startedAt
+                        enqueuedAt: enqueued, startedAt: startedAt, firstTokenAt: result.firstTokenAt
                     ))
                     await tokenStream.resolveLive(generation: input.generation, finishedCleanup: cleanupID)
                     return
@@ -195,7 +193,7 @@ actor SmartCleanup {
                     generation: input.generation,
                     disposition: applied ? .applied : .stale,
                     durationMs: elapsedMs(),
-                    enqueuedAt: enqueued, startedAt: startedAt
+                    enqueuedAt: enqueued, startedAt: startedAt, firstTokenAt: result.firstTokenAt
                 ))
             } catch is CancellationError {
                 await onOutcome?(CleanupOutcome(
@@ -234,8 +232,11 @@ struct CleanupOutcome: Sendable, Equatable {
     var errorDescription: String?
     /// Wall time of the invocation; measured in dev-log builds only.
     var durationMs: Int?
-    /// When the cleanup was queued and when its engine call began; measured
-    /// in dev-log builds only.
+    /// When the cleanup was queued, when its task began, and when the model's
+    /// first chunk arrived; measured in dev-log builds only. The task begins
+    /// before the engine takes the model, so waiting for another cleanup's
+    /// pre-fill is between `startedAt` and `firstTokenAt`, not before `startedAt`.
     var enqueuedAt: ContinuousClock.Instant?
     var startedAt: ContinuousClock.Instant?
+    var firstTokenAt: ContinuousClock.Instant?
 }

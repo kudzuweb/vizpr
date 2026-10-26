@@ -40,13 +40,12 @@ enum VizprTranscriptLogger {
     private static let openedAt = ContinuousClock.now
 
     static func millisecondsSinceOpen() -> Int {
-        let parts = (ContinuousClock.now - openedAt).components
-        return Int(parts.seconds * 1000 + parts.attoseconds / 1_000_000_000_000_000)
+        (ContinuousClock.now - openedAt).devLogMilliseconds
     }
 
     /// Report where the dev transcript log is written (the structured JSONL
     /// records land there via VizprDevLogWriter) and which build is running.
-    /// `VIZPR_BUILD_ID` is exported by scripts/run-dev.sh.
+    /// `VIZPR_BUILD_ID` is passed by scripts/run-dev.sh.
     static func announce() {
         _ = openedAt
         note("dev transcript log target: \(VizprDevLogDirectory.transcriptsURL.path)")
@@ -70,6 +69,14 @@ enum VizprTranscriptLogger {
         let id = String(UUID().uuidString.prefix(8))
         sessionLock.lock()
         defer { sessionLock.unlock() }
+        if let previous = openSessionID {
+            // Lines the previous session writes from here on carry the new id.
+            // This line is written under the lock, with the previous id.
+            writeLine(
+                "session \(previous) still open; later lines may belong to it",
+                prefix: "[s:\(previous)] "
+            )
+        }
         openSessionID = id
         return id
     }
@@ -98,7 +105,11 @@ enum VizprTranscriptLogger {
     /// the pipeline live. Safe from any thread; returns after the line is written.
     static func note(_ message: String) {
         log.debug("[\(buildMarker, privacy: .public)] \(message, privacy: .public)")
-        let line = "\(Date().formatted(timestampStyle)) \(sessionPrefix)\(message)\n"
+        writeLine(message, prefix: sessionPrefix)
+    }
+
+    private static func writeLine(_ message: String, prefix: String) {
+        let line = "\(Date().formatted(timestampStyle)) \(prefix)\(message)\n"
         guard let data = line.data(using: .utf8) else { return }
         append(data, to: debugFileURL)
     }

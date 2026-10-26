@@ -227,7 +227,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             revertCleanup = { [weak self] in self?.settingsStore.update { $0.cleanupModelID = nil } }
         }
         warmEngine(
-            devLogLabel: "asr engine prepared",
             devLogModel: "asr",
             failureMessage: "Vizpr's speech recognition model failed to load.",
             revertOnFailure: revertASR
@@ -235,7 +234,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             try await engine.prepare()
         }
         warmEngine(
-            devLogLabel: "cleanup engine prepared",
             devLogModel: "cleanup",
             failureMessage: "Vizpr's cleanup model failed to load.",
             revertOnFailure: revertCleanup
@@ -365,7 +363,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         { outcome in
             let resolvedAt = ContinuousClock.now
             let timing = await tracker.noteCleanupResolved(
-                enqueuedAt: outcome.enqueuedAt, startedAt: outcome.startedAt, resolvedAt: resolvedAt
+                enqueuedAt: outcome.enqueuedAt, startedAt: outcome.startedAt,
+                firstTokenAt: outcome.firstTokenAt, resolvedAt: resolvedAt,
+                disposition: outcome.disposition
             )
             await VizprDevLogWriter.shared.append(DevCleanupRecord(outcome, timing: timing))
         }
@@ -429,7 +429,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// USER model folder), a load failure alerts and reverts the selection to
     /// bundled instead of terminating — a bad drop-in must never brick the app.
     private func warmEngine(
-        devLogLabel: String,
         devLogModel: String,
         failureMessage: String,
         revertOnFailure: (@MainActor @Sendable () -> Void)? = nil,
@@ -439,7 +438,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             do {
                 try await prepare()
                 #if DICT_DEV_LOG
-                VizprTranscriptLogger.note(devLogLabel)
+                VizprTranscriptLogger.note("\(devLogModel) engine prepared")
                 VizprTranscriptLogger.note(
                     "\(devLogModel) model ready in \(VizprTranscriptLogger.millisecondsSinceOpen()) ms")
                 #endif
@@ -599,9 +598,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     let settleStart = ContinuousClock.now
                     let settle = await self?.settleGate.awaitDrain(cap: .milliseconds(cap))
                     if let settle {
-                        let waited = ContinuousClock.now - settleStart
-                        let waitedMs = Int(waited.components.seconds) * 1000
-                            + Int(waited.components.attoseconds / 1_000_000_000_000_000)
+                        let waitedMs = (ContinuousClock.now - settleStart).devLogMilliseconds
                         VizprTranscriptLogger.note(
                             "settle: \(settle == .drained ? "drained" : "capped") after \(waitedMs) ms"
                         )

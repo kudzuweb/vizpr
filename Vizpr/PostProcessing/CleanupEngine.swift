@@ -30,6 +30,8 @@ struct CleanupRequest: Sendable, Equatable {
 /// per-request metadata the dev logger records in PR 7.)
 struct CleanupResult: Sendable, Equatable {
     let text: String
+    /// When the first decoded chunk arrived; measured in dev-log builds only.
+    var firstTokenAt: ContinuousClock.Instant?
 }
 
 /// Abstraction over the cleanup LLM (PLAN.md §11). The pipeline depends only on

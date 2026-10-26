@@ -125,12 +125,14 @@ struct DevDictationContext: Encodable, Sendable {
 }
 
 /// Where one cleanup sits in its dictation session: the session's id and the
-/// milliseconds from session start to when the cleanup was queued and to when
-/// the engine call began. Nil fields are omitted from the record.
+/// milliseconds from session start to when the cleanup was queued, to when
+/// its task began and to when the model's first chunk arrived. Nil fields are
+/// omitted from the record.
 struct DevCleanupTiming: Sendable, Equatable {
     var sessionID: String?
     var enqueuedMs: Int?
     var startedMs: Int?
+    var firstTokenMs: Int?
 
     static let none = DevCleanupTiming()
 }
@@ -150,6 +152,7 @@ struct DevCleanupRecord: Encodable, Sendable {
     let sessionID: String?
     let enqueuedMs: Int?
     let startedMs: Int?
+    let firstTokenMs: Int?
 
     enum CodingKeys: String, CodingKey {
         case type, timestamp, input, output, generation, disposition, error
@@ -157,6 +160,7 @@ struct DevCleanupRecord: Encodable, Sendable {
         case sessionID = "session_id"
         case enqueuedMs = "enqueued_ms"
         case startedMs = "started_ms"
+        case firstTokenMs = "first_token_ms"
     }
 
     init(
@@ -174,6 +178,7 @@ struct DevCleanupRecord: Encodable, Sendable {
         self.sessionID = timing.sessionID
         self.enqueuedMs = timing.enqueuedMs
         self.startedMs = timing.startedMs
+        self.firstTokenMs = timing.firstTokenMs
     }
 }
 #endif

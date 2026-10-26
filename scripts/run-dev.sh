@@ -44,8 +44,8 @@ fi
 
 # The app writes this id on its `build:` log line. `open` starts the app
 # through LaunchServices, which does not pass this shell's environment on, so
-# the id is also given with --env.
-export VIZPR_BUILD_ID="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+# the id is given with --env. A `-dirty` suffix marks uncommitted changes.
+VIZPR_BUILD_ID="$(git describe --always --dirty --abbrev=7 2>/dev/null || echo unknown)"
 
 echo "Launching $APP (build $VIZPR_BUILD_ID) ..."
 open --env "VIZPR_BUILD_ID=$VIZPR_BUILD_ID" "$APP"

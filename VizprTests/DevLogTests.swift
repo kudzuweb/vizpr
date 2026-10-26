@@ -262,7 +262,7 @@ struct DevLogTests {
         await tracker.mark(.firstSettled, at: start + .milliseconds(4100))
         let early = await tracker.noteCleanupResolved(
             enqueuedAt: start + .milliseconds(4050), startedAt: start + .milliseconds(4200),
-            resolvedAt: start + .milliseconds(5000)
+            resolvedAt: start + .milliseconds(5000), disposition: .applied
         )
         await tracker.observe(
             .finalized(text: "two.", confidence: 0.9, tokenConfidences: []),
@@ -270,7 +270,12 @@ struct DevLogTests {
         )
         _ = await tracker.noteCleanupResolved(
             enqueuedAt: start + .milliseconds(9010), startedAt: start + .milliseconds(9020),
-            resolvedAt: start + .milliseconds(9500)
+            resolvedAt: start + .milliseconds(9500), disposition: .applied
+        )
+        // The commit cancels a later cleanup; it must not move the mark.
+        _ = await tracker.noteCleanupResolved(
+            enqueuedAt: start + .milliseconds(9100), startedAt: start + .milliseconds(9110),
+            resolvedAt: start + .milliseconds(9800), disposition: .cancelled
         )
         await tracker.noteCapturedSamples(160_000)
 
@@ -294,7 +299,7 @@ struct DevLogTests {
 
         let late = await tracker.noteCleanupResolved(
             enqueuedAt: start + .seconds(5), startedAt: start + .seconds(6),
-            resolvedAt: start + .seconds(21)
+            resolvedAt: start + .seconds(21), disposition: .cancelled
         )
         #expect(late == DevCleanupTiming(sessionID: "11111111", enqueuedMs: 5000, startedMs: 6000))
         #expect(await record(from: tracker).timings.cleanupDoneMs == nil)
@@ -310,11 +315,15 @@ struct DevLogTests {
             return try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
         }
         let timed = try object(DevCleanupRecord(
-            outcome, timing: DevCleanupTiming(sessionID: "ab12cd34", enqueuedMs: 4050, startedMs: 4200)
+            outcome,
+            timing: DevCleanupTiming(
+                sessionID: "ab12cd34", enqueuedMs: 4050, startedMs: 4200, firstTokenMs: 4900
+            )
         ))
         #expect(timed["session_id"] as? String == "ab12cd34")
         #expect(timed["enqueued_ms"] as? Int == 4050)
         #expect(timed["started_ms"] as? Int == 4200)
+        #expect(timed["first_token_ms"] as? Int == 4900)
         #expect(try object(DevCleanupRecord(outcome))["session_id"] == nil)
     }
 

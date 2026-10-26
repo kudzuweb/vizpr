@@ -84,11 +84,14 @@ actor DevDictationTracker {
 
     /// Place a resolved cleanup in its session. A cleanup belongs to the
     /// latest session that had started when it was queued. Resolving inside
-    /// the open session also moves the session's `t_cleanup_done_ms`.
+    /// the open session also moves the session's `t_cleanup_done_ms`, unless
+    /// the commit cancelled it.
     func noteCleanupResolved(
         enqueuedAt: ContinuousClock.Instant?,
         startedAt cleanupStartedAt: ContinuousClock.Instant?,
-        resolvedAt: ContinuousClock.Instant
+        firstTokenAt: ContinuousClock.Instant? = nil,
+        resolvedAt: ContinuousClock.Instant,
+        disposition: CleanupOutcome.Disposition
     ) -> DevCleanupTiming {
         let owner: (id: String, startedAt: ContinuousClock.Instant)?
         if let enqueuedAt {
@@ -97,14 +100,15 @@ actor DevDictationTracker {
             owner = recentSessions.last
         }
         guard let owner else { return .none }
-        if owner.id == sessionID, startedAt != nil {
+        if owner.id == sessionID, startedAt != nil, disposition != .cancelled {
             cleanupDoneAt = resolvedAt
         }
         func ms(_ instant: ContinuousClock.Instant?) -> Int? {
             instant.map { milliseconds(from: owner.startedAt, to: $0) }
         }
         return DevCleanupTiming(
-            sessionID: owner.id, enqueuedMs: ms(enqueuedAt), startedMs: ms(cleanupStartedAt)
+            sessionID: owner.id, enqueuedMs: ms(enqueuedAt), startedMs: ms(cleanupStartedAt),
+            firstTokenMs: ms(firstTokenAt)
         )
     }
 
@@ -124,8 +128,7 @@ actor DevDictationTracker {
     }
 
     private func milliseconds(from start: ContinuousClock.Instant, to end: ContinuousClock.Instant) -> Int {
-        let parts = (end - start).components
-        return Int(parts.seconds * 1000 + parts.attoseconds / 1_000_000_000_000_000)
+        (end - start).devLogMilliseconds
     }
 
     private func timings() -> DevSessionTimings {
