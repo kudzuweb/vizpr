@@ -396,38 +396,6 @@ becomes active. Migration runs after the merge, from a separate decode of the
 legacy keys, and the store saves once when the file carried any, so migrated
 look ids stay stable and the legacy keys leave the file.
 
-## Audio capture off the main thread, and the silent-mic check (2026-10-23)
-
-A cold `AVAudioEngine.start()` blocked the main thread for about 2 s, which also
-stalled the hotkey event tap. Capture start, stop and failover now run on one
-serial queue owned by `CaptureEngineController`, which takes an engine factory
-so its ordering is unit-tested with fake engines.
-
-- `CaptureSource.start()/stop()` are not `@MainActor`. `stop()` returns at once
-  and bumps a generation counter; a start or failover requested under an older
-  generation does nothing when it reaches the queue, and a stop queued behind a
-  start tears that start's engine down. No stop can leave a live engine for a
-  cancelled session.
-- The silent-microphone failover never fired as intended: it read the raw peak
-  at chunk 5, but the tap measured the peak only every 8th buffer, so the peak
-  read 0 on every route, including the built-in mic. The tap now measures every
-  buffer. `SilentRouteDecision` fails over only when at least 1.3 s of measured
-  audio (frames / hardware sample rate) is exactly zero, the route is positively
-  identified as non-built-in, and no attempt was made. An unidentifiable input
-  device does not trigger it.
-- The failover builds and prepares the replacement engine before touching the
-  running one, and returns `FailoverResult` (`switched`, `unchanged`, `lost`).
-  `AudioPipeline.onCaptureFailure` fires when `source.start()` throws or a
-  failover is `lost`. `AppDelegate` connects it to the hotkey: it beeps and
-  calls `HotkeyMonitor.injectCaptureFailure()`, which cancels the session.
-- Debug builds log `main stall Nms` when the main run loop is blocked over
-  100 ms (`MainStallProbe`).
-
-Known gaps, left as they are: a tap buffer with no `floatChannelData` is not
-measured, so the stop-time silent-session notice would report silence while the
-failover never fires; and an input device that disappears mid-session ends capture without a failover.
-Not exercised on hardware: a real cold start, a second microphone, an AirPods
-route.
 ## PR 15 — Sculptable looks (2026-10-21)
 
 ### Rendering
@@ -569,6 +537,39 @@ centered where it was; resting and expanded panels have no side inset.
 pane, not the badge, is what the anchor positions. Toggling inviz re-places
 the panel.
 
+## Audio capture off the main thread, and the silent-mic check (2026-10-23)
+
+A cold `AVAudioEngine.start()` blocked the main thread for about 2 s, which also
+stalled the hotkey event tap. Capture start, stop and failover now run on one
+serial queue owned by `CaptureEngineController`, which takes an engine factory
+so its ordering is unit-tested with fake engines.
+
+- `CaptureSource.start()/stop()` are not `@MainActor`. `stop()` returns at once
+  and bumps a generation counter; a start or failover requested under an older
+  generation does nothing when it reaches the queue, and a stop queued behind a
+  start tears that start's engine down. No stop can leave a live engine for a
+  cancelled session.
+- The silent-microphone failover never fired as intended: it read the raw peak
+  at chunk 5, but the tap measured the peak only every 8th buffer, so the peak
+  read 0 on every route, including the built-in mic. The tap now measures every
+  buffer. `SilentRouteDecision` fails over only when at least 1.3 s of measured
+  audio (frames / hardware sample rate) is exactly zero, the route is positively
+  identified as non-built-in, and no attempt was made. An unidentifiable input
+  device does not trigger it.
+- The failover builds and prepares the replacement engine before touching the
+  running one, and returns `FailoverResult` (`switched`, `unchanged`, `lost`).
+  `AudioPipeline.onCaptureFailure` fires when `source.start()` throws or a
+  failover is `lost`. `AppDelegate` connects it to the hotkey: it beeps and
+  calls `HotkeyMonitor.injectCaptureFailure()`, which cancels the session.
+- Debug builds log `main stall Nms` when the main run loop is blocked over
+  100 ms (`MainStallProbe`).
+
+Known gaps, left as they are: a tap buffer with no `floatChannelData` is not
+measured, so the stop-time silent-session notice would report silence while the
+failover never fires; and an input device that disappears mid-session ends capture without a failover.
+Not exercised on hardware: a real cold start, a second microphone, an AirPods
+route.
+
 ## Future directions (Mauria, 2026-07-05 — recorded, not scheduled)
 
 1. **Verbatim mode:** "I should be able to talk casually and have it show up
@@ -639,10 +640,13 @@ who starts speaking immediately; she waited ~0.4 s):
 | action → capture start begins | ~245 ms | FIX: synchronous AX field read + session begins run BEFORE the pipeline starts; reorder so capture starts first, AX/overlay follow concurrently |
 | capture setup (engine build, route query) | ~218 ms | PARTIAL: AVCaptureDevice.default device-name lookup is dev-log-only decoration on the hot path — move off. Engine build cost is real |
 | engine.start() (HAL spin-up) | ~74 ms | leave (keeping the mic hot is a privacy non-starter) |
-| speech → first draft | draftMinTailMs floor (1.5 s default) | leave — user lever, quality-bound (sub-1.5 s tails decode junk, field-observed); since 2026-10-25 a constant in `Tuning.swift`, see "Tuning values and single defaults" |
+| speech → first draft | draftMinTailMs floor (1.5 s default) | leave — user lever, quality-bound (sub-1.5 s tails decode junk, field-observed) |
 | draft refresh cadence | fixed 1 s + decode inline in the audio pump | DONE in PR 13: the cadence is adaptive with a 500 ms floor (a decode starts when the previous finishes and 500 ms of new audio has arrived), and decoding is decoupled from ingestion. Same decoder, same tail = accuracy unchanged |
 | commit → inject | ~170 ms observed (settle window worked) | already good |
 | engine swap (Models pane) | pipeline rebuild + warm | rare; acceptable |
+
+*(2026-10-25: draftMinTailMs is no longer a user lever; it is a constant in
+`Tuning.swift`. See "Tuning values and single defaults".)*
 
 Also: before PR 13 the dev JSONL carried no timings (the "feedstock" claim
 in Future Directions was wrong). PR 13 adds session timing marks to the
@@ -866,6 +870,20 @@ belong with the Settings work rather than the hotkey PR:
 - Post-commit stragglers: the engine's flush emits a last draft/final after
   commit; TokenStream's generation checks must drop these (they arrive after
   the snapshot).
+
+## Test runs no longer write the dev log (2026-10-25)
+
+The test host is the Debug app, so suites with fake engines (AudioPipelineTests,
+FluidAudioASRTests) appended their traffic to `~/Documents/dictation-dev/debug.log`
+and `transcripts.jsonl`. Under tests, `VizprDevLogDirectory` now points both
+writers at `vizpr-tests-<pid>` in the temporary directory, and the existing
+"dev transcript log target:" line says where. Production paths are unchanged.
+
+`VizprTranscriptLogger.note` is also called from several threads, and each call
+opened, seeked and wrote the file unserialized: two callers at the same instant
+sought to the same end offset and one line overwrote the other (a `window:` line
+and an `asr final` line never both landed). A lock now wraps the open-write-close;
+the call stays synchronous so a caller's next line follows its own previous one.
 
 ## Tail integrity at commit (2026-10-25)
 
@@ -1098,13 +1116,14 @@ stand. The decisions, by step:
   lets it stop counting itself as in flight.
 - **The "Settle window" setting is gone.** `settleSentences` leaves
   `VizprSettings` and the Behavior tab; an old `settings.json` that has the
-  key still loads, because decoding ignores unknown keys (since 2026-10-25 the
-  next load also drops it from the file). Cleanup latency on the
+  key still loads, because decoding ignores unknown keys. Cleanup latency on the
   bundled model with an empty context (10 runs after a warm run, 2026-10-25):
   one 13-word sentence p50 680 ms, p90 689 ms; two sentences (27 words) p50
   1,024 ms, p90 1,032 ms; three sentences (41 words) p50 1,348 ms, p90
   1,370 ms. Text therefore turns white about 0.7 to 1.4 s after a window's
   cleanup starts.
+  *(2026-10-25, later: an old file now also drops the key on its next load.
+  See "Tuning values and single defaults".)*
 
 - **The dictation record measures settling.** `t_first_settled_ms` is the
   time from the startDictation action to the first snapshot whose settled text
@@ -1139,19 +1158,6 @@ Known limits:
 - A pause pending when the input ends is not run as a window; the commit
   decode covers it. A pause less than 0.5 s past a forced window's cut is
   cleared with it; a pause further past survives and closes the next window.
-## Test runs no longer write the dev log (2026-10-25)
-
-The test host is the Debug app, so suites with fake engines (AudioPipelineTests,
-FluidAudioASRTests) appended their traffic to `~/Documents/dictation-dev/debug.log`
-and `transcripts.jsonl`. Under tests, `VizprDevLogDirectory` now points both
-writers at `vizpr-tests-<pid>` in the temporary directory, and the existing
-"dev transcript log target:" line says where. Production paths are unchanged.
-
-`VizprTranscriptLogger.note` is also called from several threads, and each call
-opened, seeked and wrote the file unserialized: two callers at the same instant
-sought to the same end offset and one line overwrote the other (a `window:` line
-and an `asr final` line never both landed). A lock now wraps the open-write-close;
-the call stays synchronous so a caller's next line follows its own previous one.
 
 ## Tuning values and single defaults (2026-10-25)
 

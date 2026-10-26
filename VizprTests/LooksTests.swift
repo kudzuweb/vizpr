@@ -392,7 +392,7 @@ struct SettingsStoreLoadingTests {
     func removedKeysAreShed() throws {
         let lookID = "5A1B6A52-6F42-4B7E-8D5C-2C0B5C1D9E01"
         let url = try tempFile("""
-        {"settleCapMs": 500, "settleSentences": 4, "autoStopSeconds": 3,
+        {"settleCapMs": 500, "draftMinTailMs": 1500, "settleSentences": 4, "autoStopSeconds": 3,
          "primaryTrigger": "fn",
          "looks": [{"id": "\(lookID)", "name": "Mine", "cornerRadius": 12}]}
         """)
