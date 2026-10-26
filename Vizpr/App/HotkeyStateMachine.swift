@@ -24,11 +24,12 @@ struct MonotonicTime: Comparable, Hashable, Sendable {
 
 // MARK: - Inputs
 
-/// Which key started the current dictation. Fn and the secondary combo drive the
-/// same machine; tracking the source lets us pair a down with its own up and
-/// suppress only Fn (never the secondary modifiers — see `EventDisposition`).
+/// Which key started the current dictation. The primary trigger and the
+/// secondary combo drive the same machine; tracking the source lets us pair a
+/// down with its own up and suppress only the primary trigger (never the
+/// secondary modifiers — see `EventDisposition`).
 enum ActivationSource: Sendable, Hashable {
-    case fn
+    case primary
     case secondary
 }
 
@@ -38,14 +39,16 @@ enum TapDisableReason: Sendable, Hashable {
     case userInput     // kCGEventTapDisabledByUserInput — e.g. secure input engaged
 }
 
-/// Every event the machine can receive. Fn/secondary carry a timestamp so the
-/// tap-vs-hold decision is a pure comparison. `thresholdElapsed` is delivered by
-/// a shell timer to promote a held key into `holding`; it is an *optimization*
+/// Every event the machine can receive. Primary/secondary carry a timestamp so
+/// the tap-vs-hold decision is a pure comparison. `thresholdElapsed` is delivered
+/// by a shell timer to promote a held key into `holding`; it is an *optimization*
 /// for reflecting hold state early — correctness does not depend on it, because
-/// `fnUp`/`secondaryUp` re-check the duration in `pressed` and `holding` alike.
+/// `primaryUp`/`secondaryUp` re-check the duration in `pressed` and `holding`
+/// alike.
 enum HotkeyInput: Sendable {
-    case fnDown(at: MonotonicTime)
-    case fnUp(at: MonotonicTime)
+    case primaryDown(at: MonotonicTime)
+    case primaryUp(at: MonotonicTime)
+    case primaryRepeat                     // autorepeat of the held primary key: swallowed, never acts
     case secondaryDown(at: MonotonicTime)
     case secondaryUp(at: MonotonicTime)
     case escape
@@ -66,11 +69,14 @@ enum DictationAction: Sendable, Hashable {
 
 /// What to do with the underlying CGEvent.
 ///
-/// **Fail-open invariant:** `.consume` is emitted *only* for Fn events. Every
-/// other input — secondary modifiers, Escape, and the non-CGEvent signals
-/// (autoStop / captureFailed / thresholdElapsed / tapDisabled) — yields `.passThrough`. There is
-/// no state in which a non-Fn key can be suppressed. This is the property the
-/// randomized test pins down; it is the point-for-point inversion of the Wispr
+/// **Fail-open invariant:** `.consume` is emitted *only* for primary-trigger
+/// inputs (down, up and repeat). Every other input — secondary modifiers,
+/// Escape, and the non-CGEvent signals (autoStop / captureFailed /
+/// thresholdElapsed / tapDisabled) — yields `.passThrough`. There is no state in
+/// which any other key can be suppressed. Which physical events become primary
+/// inputs is the tracker's job (the trigger key's own events, identified by
+/// keycode and, for sided modifiers, device bit). This is the property the
+/// randomized tests pin down; it is the point-for-point inversion of the Wispr
 /// stale-key bug that swallowed spacebars.
 enum EventDisposition: Sendable, Hashable {
     case consume         // return nil from the tap callback — event is deleted
@@ -152,17 +158,19 @@ struct HotkeyStateMachine {
 
     private static func reduceIdle(_ input: HotkeyInput) -> (HotkeyState, HotkeyDecision) {
         switch input {
-        case let .fnDown(at):
-            // Start dictating immediately; consume Fn so the system globe/Dictation never fires.
-            return (.pressed(since: at, source: .fn),
+        case let .primaryDown(at):
+            // Start dictating immediately; consume the trigger so the system (the
+            // globe/Dictation for Fn) or the focused app never sees it.
+            return (.pressed(since: at, source: .primary),
                     HotkeyDecision(action: .startDictation, disposition: .consume))
         case let .secondaryDown(at):
             // Secondary modifiers are benign to other apps and may be part of real
             // shortcuts — start dictating but never suppress them.
             return (.pressed(since: at, source: .secondary),
                     HotkeyDecision(action: .startDictation, disposition: .passThrough))
-        case .fnUp:
-            // Stray Fn-up (we may have eaten the down): still consume to be safe.
+        case .primaryUp, .primaryRepeat:
+            // Stray trigger up or repeat (we may have eaten the down): still
+            // consume to be safe.
             return (.idle, .ignoreConsume)
         case .secondaryUp:
             return (.idle, .ignorePassThrough)
@@ -186,8 +194,8 @@ struct HotkeyStateMachine {
         holdThreshold: Duration
     ) -> (HotkeyState, HotkeyDecision) {
         switch input {
-        case let .fnUp(at) where source == .fn:
-            return release(since: since, at: at, source: .fn, holdThreshold: holdThreshold, consume: true)
+        case let .primaryUp(at) where source == .primary:
+            return release(since: since, at: at, source: .primary, holdThreshold: holdThreshold, consume: true)
         case let .secondaryUp(at) where source == .secondary:
             return release(since: since, at: at, source: .secondary, holdThreshold: holdThreshold, consume: false)
 
@@ -206,8 +214,8 @@ struct HotkeyStateMachine {
             // Fail-open: discard the in-flight session and reset; shell re-enables.
             return (.idle, HotkeyDecision(action: .cancel, disposition: .passThrough))
 
-        // Cross-source and stray events: never get stuck, only ever suppress Fn.
-        case .fnDown, .fnUp:
+        // Cross-source and stray events: never get stuck, only ever suppress the trigger.
+        case .primaryDown, .primaryUp, .primaryRepeat:
             return (.pressed(since: since, source: source), .ignoreConsume)
         case .secondaryDown, .secondaryUp:
             return (.pressed(since: since, source: source), .ignorePassThrough)
@@ -246,8 +254,8 @@ struct HotkeyStateMachine {
         holdThreshold: Duration
     ) -> (HotkeyState, HotkeyDecision) {
         switch input {
-        case let .fnUp(at) where source == .fn:
-            return release(since: since, at: at, source: .fn, holdThreshold: holdThreshold, consume: true)
+        case let .primaryUp(at) where source == .primary:
+            return release(since: since, at: at, source: .primary, holdThreshold: holdThreshold, consume: true)
         case let .secondaryUp(at) where source == .secondary:
             return release(since: since, at: at, source: .secondary, holdThreshold: holdThreshold, consume: false)
 
@@ -256,7 +264,7 @@ struct HotkeyStateMachine {
         case .tapDisabled, .captureFailed:
             return (.idle, HotkeyDecision(action: .cancel, disposition: .passThrough))
 
-        case .fnDown, .fnUp:
+        case .primaryDown, .primaryUp, .primaryRepeat:
             return (.holding(since: since, source: source), .ignoreConsume)
         case .secondaryDown, .secondaryUp:
             return (.holding(since: since, source: source), .ignorePassThrough)
@@ -272,7 +280,7 @@ struct HotkeyStateMachine {
         input: HotkeyInput
     ) -> (HotkeyState, HotkeyDecision) {
         switch input {
-        case .fnDown:
+        case .primaryDown:
             // The "next press" commits. Either source may stop a latched session.
             return (.idle, HotkeyDecision(action: .commit, disposition: .consume))
         case .secondaryDown:
@@ -287,9 +295,10 @@ struct HotkeyStateMachine {
         case .tapDisabled, .captureFailed:
             return (.idle, HotkeyDecision(action: .cancel, disposition: .passThrough))
 
-        // Strays (e.g. the up that paired the latching tap arrives late): consume
-        // Fn, pass the rest, stay latched.
-        case .fnUp:
+        // Strays (e.g. the up that paired the latching tap arrives late, or the
+        // held key repeating after a commit press): consume the trigger's events,
+        // pass the rest, stay latched.
+        case .primaryUp, .primaryRepeat:
             return (.latched(source: source), .ignoreConsume)
         case .secondaryUp:
             return (.latched(source: source), .ignorePassThrough)

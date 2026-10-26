@@ -20,15 +20,13 @@ struct VizprSettings: Codable, Equatable, Sendable {
     /// command). At least two — a single bare modifier would collide with
     /// normal typing.
     var secondaryModifiers: [String] = ["control", "option"]
-    /// RESERVED for trigger reassignment (Mauria: "maybe other people want
-    /// other button. especially vim guys"). Only "fn" is valid today — the
-    /// fail-open state machine is written around Fn's flagsChanged behavior
-    /// and gets parameterized deliberately, with its own property-test pass
-    /// (see NOTES.md "Trigger reassignment"). Reserving the field now keeps
-    /// the on-disk format stable when that lands.
-    var primaryTrigger: String = "fn"
+    /// The key that starts and stops dictation: Fn by default, or any other
+    /// key or key-and-modifiers combination (see NOTES.md "Trigger
+    /// reassignment"). Its own events are consumed system-wide, so a value
+    /// that cannot work is reset to Fn by `clamped()`.
+    var trigger: HotkeyTrigger = .fn
 
-    static let validModifiers: Set<String> = ["control", "option", "shift", "command"]
+    static let validModifiers = Set(HotkeyTrigger.familyFlags.keys)
 
     // MARK: Session behavior
     /// Auto-stop after this much silence, seconds.
@@ -94,7 +92,7 @@ struct VizprSettings: Codable, Equatable, Sendable {
                                Self.holdThresholdRangeMs.upperBound)
         s.secondaryModifiers = s.secondaryModifiers.filter { Self.validModifiers.contains($0) }
         if s.secondaryModifiers.count < 2 { s.secondaryModifiers = Self.default.secondaryModifiers }
-        if s.primaryTrigger != "fn" { s.primaryTrigger = "fn" }   // only Fn yet
+        s.trigger = s.trigger.clamped(secondaryModifiers: s.secondaryModifiers)
         if s.asrModelID?.isEmpty == true { s.asrModelID = nil }
         if s.cleanupModelID?.isEmpty == true { s.cleanupModelID = nil }
         s.autoStopSeconds = min(max(s.autoStopSeconds, Self.autoStopRangeSeconds.lowerBound),
@@ -288,7 +286,7 @@ extension VizprSettings {
 
     /// Keys that were settings once and no longer are. The decoder ignores
     /// them; listing them here makes the next load drop them from the file.
-    private static let removedKeys = ["settleCapMs", "draftMinTailMs", "settleSentences"]
+    private static let removedKeys = ["settleCapMs", "draftMinTailMs", "settleSentences", "primaryTrigger"]
 
     /// True when `data` is a settings object still carrying pre-looks color
     /// keys or removed keys, so the store knows to save the current form.

@@ -1,99 +1,226 @@
 import CoreGraphics
 
-/// Derives discrete key edges from the modifier-flag snapshots that
-/// `flagsChanged` delivers (PLAN.md §6 + §8).
+/// Derives discrete key edges from keyboard events (PLAN.md §6 + §8): the
+/// primary trigger's down, repeat and up, and the secondary chord's down and up.
 ///
-/// `flagsChanged` reports the *entire* modifier set on every change, so detecting
-/// "Fn went down" or "the secondary combo was released" means comparing against
-/// the previous snapshot. That comparison is real logic with real failure modes
-/// (stale state after a missed event; two modifiers changing in one packet), so
-/// it lives here as a pure value type rather than buried in the tap shell — fully
-/// testable with synthetic flag sequences, no CGEventTap required.
+/// **Which events become primary edges.** Only the trigger key's own events,
+/// identified by keycode and, for a sided modifier such as Right Option, by that
+/// key's own device bit in the event flags. Fn is the exception: it has no
+/// device bit and its keycode is unverified across keyboards, so it keeps the
+/// field-tested detection by comparing the Fn flag with the previous snapshot.
+/// A key the tracker takes is *taken* until its up edge, and the tracker emits an
+/// up edge only for a key it took, so a key whose down reached an app is never
+/// followed by an up the app does not see.
 ///
-/// Pulling it out fixes two shell bugs by construction: a single packet that
-/// toggles both Fn and the secondary combo now yields *both* edges (the shell no
-/// longer early-returns after Fn), and `reset()` gives the shell one call to
-/// clear edge state on every tap re-enable so a missed up-edge can't strand
-/// `fnDown` true.
+/// "Modifiers match" means the held modifier families, masked to the four
+/// families, equal the trigger's modifiers exactly; for a modifier-key trigger
+/// the trigger key's own family is excluded from the held set. Every other flag
+/// bit is ignored, so a trigger "⌘D" does not fire on "⌘⇧D". The Fn trigger has
+/// no modifiers and ignores the held ones, as it always has.
+///
+/// `flagsChanged` reports the *entire* modifier set on every change, so the
+/// secondary chord and Fn are detected by comparing against the previous
+/// snapshot. That comparison has real failure modes (stale state after a missed
+/// event; two modifiers changing in one packet), so it lives here as a pure
+/// value type, testable with synthetic events and no CGEventTap.
 struct FlagEdgeTracker {
-    /// A single key transition derived from a flag change.
+    /// A single key transition derived from an event.
     enum Edge: Equatable, Sendable {
-        case fnDown, fnUp
+        case primaryDown, primaryUp
+        /// An autorepeat of the taken key's down.
+        case primaryRepeat
         case secondaryDown, secondaryUp
+
+        var isPrimary: Bool {
+            switch self {
+            case .primaryDown, .primaryUp, .primaryRepeat: return true
+            case .secondaryDown, .secondaryUp: return false
+            }
+        }
     }
 
     /// The modifiers that together form the secondary activation combo.
     let secondaryMask: CGEventFlags
+    let trigger: HotkeyTrigger
 
-    private(set) var fnDown = false
+    /// The keycode of the primary key whose down was turned into an edge and
+    /// whose up has not yet arrived.
+    private(set) var taken: UInt16?
+    private(set) var fnFlagDown = false
     private(set) var secondaryActive = false
+    /// True while an Fn press that reached the app (it was not the trigger when it
+    /// went down) is still held. Survives `reset()`, so a re-seed never mistakes
+    /// that Fn for the trigger's own press.
+    private var fnPassedThrough = false
 
-    /// Whether the current `fnDown`/`secondaryActive` baselines are trustworthy.
+    /// Whether the `fnFlagDown`/`secondaryActive` baselines are trustworthy.
     /// True from init (a fresh launch starts from "nothing held", so the first
     /// Fn press must emit immediately); false after `reset()`, because a reset
     /// follows a blind window in which any number of events were missed.
-    private var seeded = true
+    private(set) var isSeeded = true
 
-    init(secondaryMask: CGEventFlags) {
+    init(secondaryMask: CGEventFlags, trigger: HotkeyTrigger = .fn) {
         // The secondary combo must not include Fn, or one physical key would be
-        // both suppressed (as Fn) and tracked as a benign modifier.
+        // both consumed (as the trigger) and tracked as a benign modifier.
         precondition(!secondaryMask.contains(.maskSecondaryFn),
                      "secondaryMask must not include the Fn flag")
         self.secondaryMask = secondaryMask
+        self.trigger = trigger
     }
 
-    /// A tracker for a different secondary combo that keeps this one's held-key
-    /// state and seeding, so a key held across the change still yields its up
-    /// edge, and a pending post-`reset()` baseline is still swallowed.
+    /// A tracker for a different chord that keeps this one's held-key state and
+    /// seeding, so a key held across the change still yields its up edge, and a
+    /// pending post-`reset()` baseline is still swallowed.
     func replacingSecondaryMask(_ mask: CGEventFlags) -> FlagEdgeTracker {
-        var replacement = FlagEdgeTracker(secondaryMask: mask)
-        replacement.fnDown = fnDown
+        carrying(secondaryMask: mask, trigger: trigger)
+    }
+
+    /// A tracker for a different trigger that keeps the held-key state. The key
+    /// already taken stays taken, so its up is still consumed and the session
+    /// ends normally; the new trigger applies from the next press.
+    func replacingTrigger(_ trigger: HotkeyTrigger) -> FlagEdgeTracker {
+        carrying(secondaryMask: secondaryMask, trigger: trigger)
+    }
+
+    private func carrying(secondaryMask: CGEventFlags, trigger: HotkeyTrigger) -> FlagEdgeTracker {
+        var replacement = FlagEdgeTracker(secondaryMask: secondaryMask, trigger: trigger)
+        replacement.taken = taken
+        replacement.fnFlagDown = fnFlagDown
+        replacement.fnPassedThrough = fnPassedThrough
         replacement.secondaryActive = secondaryActive
-        replacement.seeded = seeded
+        replacement.isSeeded = isSeeded
         return replacement
     }
 
-    /// Fold a new flag snapshot in and return the edges it produced, in a stable
-    /// order (Fn first). Updates internal state. Returns an empty array when no
-    /// tracked modifier crossed a boundary.
+    /// Fold one event in and return the edges it produced, primary first. Updates
+    /// internal state. Returns an empty array when nothing crossed a boundary.
+    mutating func edges(for event: HotkeyKeyEvent) -> [Edge] {
+        switch event.kind {
+        case .flagsChanged: return flagsChangedEdges(event)
+        case .keyDown: return keyDownEdges(event)
+        case .keyUp: return keyUpEdges(event)
+        }
+    }
+
+    /// Clear edge state after a blind window (tap disable/re-enable, stop, a
+    /// suspension). The next `flagsChanged` re-seeds the baseline silently: after
+    /// a blind window we cannot tell "Fn is newly down" from "Fn was held the
+    /// whole time", and emitting a down edge on that guess would start a spurious
+    /// session and delete a packet that may carry another modifier's real
+    /// transition (e.g. Shift while typing a password, the very situation that
+    /// disables the tap). A missed trigger is annoying; an ambiguous consume is
+    /// unacceptable.
     ///
-    /// The first snapshot after `reset()` is adopted as the new baseline and
-    /// emits **no** edges: after a blind window we cannot tell "Fn is newly down"
-    /// from "Fn was held the whole time", and emitting a down-edge on that guess
-    /// would start a spurious dictation session and delete a flag packet that may
-    /// carry another modifier's real transition (e.g. Shift while typing a
-    /// password — the very situation that disables the tap). Fail-open per the
-    /// plan: a missed trigger is annoying; an ambiguous consume is unacceptable.
-    mutating func edges(for flags: CGEventFlags) -> [Edge] {
-        guard seeded else {
-            fnDown = flags.contains(.maskSecondaryFn)
-            secondaryActive = flags.contains(secondaryMask)
-            seeded = true
+    /// A taken modifier key is cleared: passing its release is self-correcting,
+    /// because the event carries the full flag state. A taken regular key is kept,
+    /// so its repeats and its `keyUp` are still consumed after the blind window
+    /// instead of reaching the app as a key-down-less repeat.
+    mutating func reset() {
+        if let taken, isModifierKeyCode(taken) { self.taken = nil }
+        fnFlagDown = false
+        secondaryActive = false
+        isSeeded = false
+    }
+
+    // MARK: flagsChanged
+
+    private mutating func flagsChangedEdges(_ event: HotkeyKeyEvent) -> [Edge] {
+        let fn = event.flags.contains(.maskSecondaryFn)
+        let combo = event.flags.contains(secondaryMask)
+
+        guard isSeeded else {
+            // An Fn held at the re-seed that was not seen passing through is treated
+            // as the trigger's own press, whose up is consumed, exactly as before
+            // triggers were configurable.
+            if fn, taken == nil, trigger.isFn, !fnPassedThrough { taken = HotkeyTrigger.fnKeyCode }
+            if !fn { fnPassedThrough = false }
+            fnFlagDown = fn
+            secondaryActive = combo
+            isSeeded = true
             return []
         }
 
         var result: [Edge] = []
-
-        let fn = flags.contains(.maskSecondaryFn)
-        if fn != fnDown {
-            result.append(fn ? .fnDown : .fnUp)
-            fnDown = fn
+        let primary = primaryFlagsEdge(event, fn: fn)
+        if let primary { result.append(primary) }
+        if !fn {
+            fnPassedThrough = false
+        } else if !fnFlagDown, primary != .primaryDown {
+            fnPassedThrough = true
         }
+        fnFlagDown = fn
 
-        let combo = flags.contains(secondaryMask)
         if combo != secondaryActive {
             result.append(combo ? .secondaryDown : .secondaryUp)
             secondaryActive = combo
         }
-
         return result
     }
 
-    /// Clear edge state after a blind window (tap disable/re-enable, stop). The
-    /// next snapshot re-seeds the baseline silently — see `edges(for:)`.
-    mutating func reset() {
-        fnDown = false
-        secondaryActive = false
-        seeded = false
+    private mutating func primaryFlagsEdge(_ event: HotkeyKeyEvent, fn: Bool) -> Edge? {
+        if taken == HotkeyTrigger.fnKeyCode || (taken == nil && trigger.isFn) {
+            // Fn is detected by its flag, whatever keycode the packet carries.
+            if taken == nil, fn, !fnFlagDown {
+                taken = HotkeyTrigger.fnKeyCode
+                return .primaryDown
+            }
+            if taken != nil, !fn {
+                taken = nil
+                return .primaryUp
+            }
+            return nil
+        }
+
+        if let key = taken.flatMap({ HotkeyTrigger.modifierKeys[$0] }), event.keyCode == taken {
+            // Down exactly while the key's own device bit is set, so a sibling
+            // key keeping the family flag set never turns a release into a press.
+            guard event.flags.rawValue & key.deviceBit == 0 else { return nil }
+            taken = nil
+            return .primaryUp
+        }
+
+        if taken == nil, event.keyCode == trigger.keyCode, let key = trigger.sidedKey,
+           event.flags.rawValue & key.deviceBit != 0,
+           modifiersMatch(event.flags, excludingFamily: key.family) {
+            taken = event.keyCode
+            return .primaryDown
+        }
+        return nil
+    }
+
+    // MARK: keyDown and keyUp
+
+    private mutating func keyDownEdges(_ event: HotkeyKeyEvent) -> [Edge] {
+        if event.isAutorepeat {
+            // Only a non-repeat key-down can take a key.
+            return event.keyCode == taken && !isModifierKeyCode(event.keyCode) ? [.primaryRepeat] : []
+        }
+        // A non-repeat down of the taken key means its up was missed: judge it
+        // as a fresh press.
+        if event.keyCode == taken, !isModifierKeyCode(event.keyCode) { taken = nil }
+
+        guard taken == nil, event.keyCode == trigger.keyCode, !trigger.isModifierKey,
+              modifiersMatch(event.flags, excludingFamily: nil)
+        else { return [] }
+        taken = event.keyCode
+        return [.primaryDown]
+    }
+
+    private mutating func keyUpEdges(_ event: HotkeyKeyEvent) -> [Edge] {
+        guard event.keyCode == taken, !isModifierKeyCode(event.keyCode) else { return [] }
+        taken = nil
+        return [.primaryUp]
+    }
+
+    // MARK: Helpers
+
+    private func modifiersMatch(_ flags: CGEventFlags, excludingFamily family: String?) -> Bool {
+        var held = flags.intersection(HotkeyTrigger.allFamilyFlags)
+        if let family, let own = HotkeyTrigger.familyFlags[family] { held.remove(own) }
+        return held == trigger.modifierMask
+    }
+
+    private func isModifierKeyCode(_ keyCode: UInt16) -> Bool {
+        keyCode == HotkeyTrigger.fnKeyCode || HotkeyTrigger.modifierKeys[keyCode] != nil
     }
 }

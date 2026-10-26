@@ -65,10 +65,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     override init() {
         let store = SettingsStore()
         settingsStore = store
-        hotkeyMonitor = HotkeyMonitor(
+        let monitor = HotkeyMonitor(
             holdThreshold: .milliseconds(store.settings.holdThresholdMs),
-            secondaryMask: Self.modifierMask(store.settings.secondaryModifiers)
+            secondaryMask: Self.modifierMask(store.settings.secondaryModifiers),
+            trigger: store.settings.trigger
         )
+        hotkeyMonitor = monitor
         super.init()
     }
 
@@ -298,6 +300,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         hotkeyMonitor.setHoldThreshold(.milliseconds(settings.holdThresholdMs))
         hotkeyMonitor.setSecondaryMask(Self.modifierMask(settings.secondaryModifiers))
+        hotkeyMonitor.setTrigger(settings.trigger)
         if settings.hotkeyEnabled {
             if permissionProbe.evaluate() == .ready { _ = hotkeyMonitor.start() }
         } else {
@@ -336,17 +339,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     static func modifierMask(_ names: [String]) -> CGEventFlags {
-        var mask: CGEventFlags = []
-        for name in names {
-            switch name {
-            case "control": mask.insert(.maskControl)
-            case "option": mask.insert(.maskAlternate)
-            case "shift": mask.insert(.maskShift)
-            case "command": mask.insert(.maskCommand)
-            default: break
-            }
-        }
-        return mask
+        HotkeyTrigger.mask(forFamilies: names)
     }
 
     /// Session drain (AudioPipeline hook): releases the settle window, then

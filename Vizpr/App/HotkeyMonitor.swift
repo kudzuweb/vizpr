@@ -19,12 +19,11 @@ import os
 /// must, because returning nil vs. the event is what suppresses or forwards the key.
 ///
 /// **Fail-open.** The callback returns `.consume` (nil) only when the machine says
-/// so, and the machine only ever says so for Fn events. No code path here can
-/// suppress a non-Fn key. This is the inversion of the Wispr stale-key bug.
+/// so, and the machine only ever says so for the trigger key's own events,
+/// identified by keycode and, for sided modifiers, device bit (see
+/// `FlagEdgeTracker`). No code path here can suppress any other key. This is the
+/// inversion of the Wispr stale-key bug.
 final class HotkeyMonitor: @unchecked Sendable {
-    /// Escape virtual keycode.
-    private static let escapeKeyCode: Int64 = 53
-
     private let runLoopThread = HotkeyRunLoopThread()
 
     // Hotkey-thread state.
@@ -33,6 +32,9 @@ final class HotkeyMonitor: @unchecked Sendable {
     /// flagsChanged reports the whole flag set, so down/up edges are derived by
     /// comparison, and that comparison has real failure modes worth testing.
     private var edges: FlagEdgeTracker
+    /// While true the callback forwards every event before the tracker runs, so
+    /// the Settings recorder can see the trigger key itself. Hotkey thread only.
+    private var suspended = false
     /// The tap currently attached to the run loop (port and source).
     private var installed: InstalledTap?
     private var thresholdTimer: CFRunLoopTimer?
@@ -71,13 +73,44 @@ final class HotkeyMonitor: @unchecked Sendable {
         }
     }
 
+    /// Live setting: reassign the trigger. Called on every settings change, so an
+    /// unchanged trigger is a no-op. A key held across the change stays taken, so
+    /// its up is still consumed and the session ends normally.
+    func setTrigger(_ trigger: HotkeyTrigger) {
+        runLoopThread.perform { [self] in
+            guard trigger != edges.trigger else { return }
+            edges = edges.replacingTrigger(trigger)
+            #if DICT_DEV_LOG
+            // Keycode and modifiers only: the display name needs the keyboard
+            // layout, a main-thread call.
+            VizprTranscriptLogger.note("hotkey trigger set: keyCode=\(trigger.keyCode) modifiers=\(trigger.modifiers)")
+            #endif
+        }
+    }
+
+    /// Stop acting on keys while the Settings recorder listens for a new trigger.
+    /// Suspending cancels any in-flight session; resuming resets the tracker,
+    /// because a suspension is a blind window. The tap, the permission flow and
+    /// `applySettings` are untouched.
+    func setSuspended(_ suspended: Bool) {
+        runLoopThread.perform { [self] in
+            guard suspended != self.suspended else { return }
+            self.suspended = suspended
+            if suspended {
+                apply(machine.handle(.tapDisabled(.timeout)))
+            } else {
+                edges.reset()
+            }
+        }
+    }
+
     /// Dictation actions for the rest of the app to consume with `for await`.
     let actions: AsyncStream<DictationAction>
     private let actionsContinuation: AsyncStream<DictationAction>.Continuation
 
-    init(holdThreshold: Duration, secondaryMask: CGEventFlags) {
+    init(holdThreshold: Duration, secondaryMask: CGEventFlags, trigger: HotkeyTrigger) {
         self.machine = HotkeyStateMachine(holdThreshold: holdThreshold)
-        self.edges = FlagEdgeTracker(secondaryMask: secondaryMask)
+        self.edges = FlagEdgeTracker(secondaryMask: secondaryMask, trigger: trigger)
         (actions, actionsContinuation) = AsyncStream.makeStream(bufferingPolicy: .bufferingNewest(16))
     }
 
@@ -108,12 +141,13 @@ final class HotkeyMonitor: @unchecked Sendable {
 
         let mask = CGEventMask(1 << CGEventType.flagsChanged.rawValue)
             | CGEventMask(1 << CGEventType.keyDown.rawValue)
+            | CGEventMask(1 << CGEventType.keyUp.rawValue)
         let context = Unmanaged.passUnretained(self).toOpaque()
 
         guard let port = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
             place: .headInsertEventTap,
-            options: .defaultTap,                 // active tap: required to consume Fn
+            options: .defaultTap,                 // active tap: required to consume the trigger
             eventsOfInterest: mask,
             callback: hotkeyTapCallback,
             userInfo: context
@@ -205,8 +239,8 @@ final class HotkeyMonitor: @unchecked Sendable {
         case .tapDisabledByTimeout, .tapDisabledByUserInput:
             // The OS disabled us (slow callback or secure input). Re-enable and
             // reset BOTH the machine and the edge tracker: a press whose release
-            // was missed while we were disabled must not strand `fnDown` true and
-            // swallow the next press's edge.
+            // was missed while we were disabled must not strand a held key's
+            // state and swallow the next press's edge.
             #if DICT_DEV_LOG
             VizprTranscriptLogger.note(
                 "tap disabled by \(type == .tapDisabledByTimeout ? "timeout" : "userInput") — re-enabling"
@@ -216,15 +250,15 @@ final class HotkeyMonitor: @unchecked Sendable {
             apply(machine.handle(.tapDisabled(type == .tapDisabledByTimeout ? .timeout : .userInput)))
             return Unmanaged.passUnretained(event)
 
-        case .flagsChanged:
-            return handleFlagsChanged(event)
-
-        case .keyDown:
-            if event.getIntegerValueField(.keyboardEventKeycode) == Self.escapeKeyCode {
+        case .flagsChanged, .keyDown, .keyUp:
+            guard !suspended, let keyEvent = HotkeyKeyEvent(type: type, event: event) else {
+                return Unmanaged.passUnretained(event)
+            }
+            if handle(keyEvent, stamp: event.timestamp) { return nil }
+            if keyEvent.kind == .keyDown, keyEvent.keyCode == HotkeyTrigger.escapeKeyCode {
                 // Escape only matters while dictating; the machine returns
                 // passThrough regardless, so Escape always also reaches the app.
-                let decision = machine.handle(.escape)
-                apply(decision)
+                apply(machine.handle(.escape))
             }
             return Unmanaged.passUnretained(event)
 
@@ -233,57 +267,64 @@ final class HotkeyMonitor: @unchecked Sendable {
         }
     }
 
-    private func handleFlagsChanged(_ event: CGEvent) -> Unmanaged<CGEvent>? {
+    /// Run one key event through the router and act on its decisions. Returns
+    /// whether the event is to be deleted.
+    private func handle(_ keyEvent: HotkeyKeyEvent, stamp: UInt64) -> Bool {
         // Edges carry the event's own time: a callback serviced late (main thread
         // blocked) must still see a quick tap as a quick tap.
         let handledAt = nowMonotonic()
-        let converted = EventTimestamp.converted(eventNanoseconds: event.timestamp, handledAt: handledAt)
+        let converted = EventTimestamp.converted(eventNanoseconds: stamp, handledAt: handledAt)
         let now = converted ?? handledAt
 
-        // One packet can toggle both Fn and the secondary combo, so process every
-        // edge it produces — never early-return after Fn. Only an Fn edge can ever
-        // set `suppress`, so a packet without an Fn edge is never deleted. A packet
-        // with an Fn edge is deleted whole, including any secondary edge in it.
-        var suppress = false
-        let found = edges.edges(for: event.flags)
+        let outcome = HotkeyEventRouter.route(keyEvent, at: now, tracker: &edges, machine: &machine)
         #if DICT_DEV_LOG
-        logTimestampPathOnce(edges: found, rawStamp: event.timestamp, converted: converted, handledAt: handledAt)
+        logDeviceBitsIfMissing(keyEvent)
+        logTimestampPathOnce(outcome: outcome, keyCode: keyEvent.keyCode,
+                             rawStamp: stamp, converted: converted, handledAt: handledAt)
         #endif
-        for edge in found {
-            let decision = machine.handle(input(for: edge, at: now))
-            apply(decision)
-            if decision.disposition == .consume { suppress = true }
-        }
-        return suppress ? nil : Unmanaged.passUnretained(event)
+        outcome.decisions.forEach(apply)
+        return outcome.suppress
     }
 
     #if DICT_DEV_LOG
     private var loggedTimestampPath = false
+    private var loggedMissingDeviceBits = false
 
-    /// Once per launch, on the first Fn edge: records whether the event stamp was
-    /// converted or fell back to handling time, with the raw numbers, so a wrong
-    /// unit assumption is visible. Numbers only, no typed text.
+    /// Once per launch, on the first primary edge: records the keycode the packet
+    /// carried (the answer to "does this keyboard's Fn report keycode 63?"),
+    /// whether the event stamp was converted or fell back to handling time, with
+    /// the raw numbers, so a wrong unit assumption is visible. Numbers only, no
+    /// typed text.
     private func logTimestampPathOnce(
-        edges: [FlagEdgeTracker.Edge], rawStamp: UInt64, converted: MonotonicTime?, handledAt: MonotonicTime
+        outcome: HotkeyEventRouter.Outcome, keyCode: UInt16,
+        rawStamp: UInt64, converted: MonotonicTime?, handledAt: MonotonicTime
     ) {
-        guard !loggedTimestampPath, edges.contains(where: { $0 == .fnDown || $0 == .fnUp }) else { return }
+        guard !loggedTimestampPath, outcome.edges.contains(where: \.isPrimary) else { return }
         loggedTimestampPath = true
         VizprTranscriptLogger.note(
-            "hotkey event stamp: \(converted == nil ? "fell back to handling time" : "converted") "
+            "hotkey first primary edge: keyCode=\(keyCode) "
+            + "stamp: \(converted == nil ? "fell back to handling time" : "converted") "
             + "rawStamp=\(rawStamp) convertedNs=\(converted?.nanoseconds.description ?? "-") "
             + "uptimeNs=\(handledAt.nanoseconds)"
         )
     }
-    #endif
 
-    private func input(for edge: FlagEdgeTracker.Edge, at now: MonotonicTime) -> HotkeyInput {
-        switch edge {
-        case .fnDown: return .fnDown(at: now)
-        case .fnUp: return .fnUp(at: now)
-        case .secondaryDown: return .secondaryDown(at: now)
-        case .secondaryUp: return .secondaryUp(at: now)
-        }
+    /// Once per launch: a `flagsChanged` for the sided trigger key that arrives
+    /// with no device bits at all means this keyboard cannot tell the left key
+    /// from the right, and the sided trigger cannot work on it.
+    private func logDeviceBitsIfMissing(_ event: HotkeyKeyEvent) {
+        guard !loggedMissingDeviceBits, event.kind == .flagsChanged,
+              event.keyCode == edges.trigger.keyCode, edges.trigger.sidedKey != nil,
+              event.flags.rawValue & Self.deviceBitsMask == 0
+        else { return }
+        loggedMissingDeviceBits = true
+        VizprTranscriptLogger.note(
+            "sided trigger key \(event.keyCode) arrived with no device bits, flags=\(event.flags.rawValue)"
+        )
     }
+
+    private static let deviceBitsMask = HotkeyTrigger.modifierKeys.values.reduce(UInt64(0)) { $0 | $1.deviceBit }
+    #endif
 
     /// Re-enable a disabled tap and clear edge state (fail-open: assume nothing is
     /// held). Shared by the in-callback disable path and the watchdog.
@@ -398,4 +439,24 @@ private func hotkeyTapCallback(
     guard let userInfo else { return Unmanaged.passUnretained(event) }
     let monitor = Unmanaged<HotkeyMonitor>.fromOpaque(userInfo).takeUnretainedValue()
     return monitor.handle(type: type, event: event)
+}
+
+private extension HotkeyKeyEvent {
+    /// The event value for a tap callback, or nil for an event type the trigger
+    /// logic does not read.
+    init?(type: CGEventType, event: CGEvent) {
+        let kind: Kind
+        switch type {
+        case .flagsChanged: kind = .flagsChanged
+        case .keyDown: kind = .keyDown
+        case .keyUp: kind = .keyUp
+        default: return nil
+        }
+        self.init(
+            kind: kind,
+            keyCode: UInt16(exactly: event.getIntegerValueField(.keyboardEventKeycode)) ?? .max,
+            flags: event.flags,
+            isAutorepeat: kind == .keyDown && event.getIntegerValueField(.keyboardEventAutorepeat) != 0
+        )
+    }
 }
