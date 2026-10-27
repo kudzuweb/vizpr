@@ -72,7 +72,7 @@ struct FluidAudioASRTests {
         let batchSize = 3210   // deliberately unaligned with any window size
         let feedTask = Task {
             for start in stride(from: 0, to: composite.count, by: batchSize) {
-                feeder.yield(.samples(Array(composite[start ..< min(start + batchSize, composite.count)])))
+                feeder.yield(.samples(Array(composite[start ..< min(start + batchSize, composite.count)]), soft: false))
                 // Drafts decode concurrently with ingestion and stop at end of
                 // input, so feed at a pace that gives the draft task time to
                 // run, as live capture does.
@@ -126,7 +126,7 @@ struct FluidAudioASRTests {
             let (audio, feeder) = AsyncStream.makeStream(of: AudioInput.self)
             let feedTask = Task {
                 for start in stride(from: 0, to: composite.count, by: 4000) {
-                    feeder.yield(.samples(Array(composite[start ..< min(start + 4000, composite.count)])))
+                    feeder.yield(.samples(Array(composite[start ..< min(start + 4000, composite.count)]), soft: false))
                 }
                 feeder.finish()
             }
@@ -157,7 +157,7 @@ struct FluidAudioASRTests {
         let (audio, feeder) = AsyncStream.makeStream(of: AudioInput.self)
         let feedTask = Task {
             for start in stride(from: 0, to: composite.count, by: 4000) {
-                feeder.yield(.samples(Array(composite[start ..< min(start + 4000, composite.count)])))
+                feeder.yield(.samples(Array(composite[start ..< min(start + 4000, composite.count)]), soft: false))
             }
             feeder.finish()
         }
@@ -209,7 +209,7 @@ struct FluidAudioASRTests {
             for await event in engine.transcribe(audio) { log.record(event) }
         }
         for start in stride(from: 0, to: speech.count, by: 3200) {
-            feeder.yield(.samples(Array(speech[start ..< min(start + 3200, speech.count)])))
+            feeder.yield(.samples(Array(speech[start ..< min(start + 3200, speech.count)]), soft: false))
             try await Task.sleep(for: .milliseconds(40))
         }
         // Let the last draft decode finish, so what follows is the commit alone.
@@ -242,7 +242,7 @@ struct FluidAudioASRTests {
         let firstConsumer = Task {
             for await event in engine.transcribe(firstAudio) { firstLog.record(event) }
         }
-        firstFeeder.yield(.samples(speech))
+        firstFeeder.yield(.samples(speech, soft: false))
         try await Task.sleep(for: .milliseconds(1500))
         firstLog.markInputEnded()
         firstFeeder.finish()
@@ -257,7 +257,7 @@ struct FluidAudioASRTests {
             }
             return finals
         }
-        secondFeeder.yield(.samples(speech))
+        secondFeeder.yield(.samples(speech, soft: false))
         await firstConsumer.value
 
         let entries = firstLog.all
@@ -286,7 +286,7 @@ struct FluidAudioASRTests {
         for _ in 0..<repeats {
             let audio = speech + silence
             for start in stride(from: 0, to: audio.count, by: 3200) {
-                inputs.append(.samples(Array(audio[start ..< min(start + 3200, audio.count)])))
+                inputs.append(.samples(Array(audio[start ..< min(start + 3200, audio.count)]), soft: false))
             }
             if pauseMarks { inputs.append(.pause) }
         }
@@ -320,6 +320,48 @@ struct FluidAudioASRTests {
     /// count above the number of utterances means a window repeated words.
     private func leadWordCount(in texts: [String]) -> Int {
         texts.joined(separator: " ").lowercased().components(separatedBy: "testing").count - 1
+    }
+
+    /// The fixture speech at `gain` under seeded white noise of `noise`
+    /// amplitude, as 0.2 s batches with a closing pause mark.
+    private func degradedUtterance(gain: Float, noise: Float, soft: Bool) throws -> [AudioInput] {
+        var generator = SeededGenerator(seed: 9)
+        let mixed = try fixtureSamples().map {
+            $0 * gain + Float.random(in: -noise ... noise, using: &generator)
+        }
+        let batches = stride(from: 0, to: mixed.count, by: 3200).map {
+            AudioInput.samples(Array(mixed[$0 ..< min($0 + 3200, mixed.count)]), soft: soft)
+        }
+        return batches + [.pause]
+    }
+
+    @Test("Soft audio that decodes to a low-confidence hallucination yields no final and no draft text")
+    func softHallucinationDropped() async throws {
+        DownloadUtils.enforceOffline = true
+        let engine = FluidAudioASR()
+        try await engine.prepare()
+
+        // Speech at 1% gain under noise decodes to invented words (confidence
+        // 0.48 on the bundled model, 2026-10-27) when the gate let it in as
+        // ordinary audio, so the soft case below drops real hallucination.
+        let ordinary = try await run(engine, feeding: degradedUtterance(gain: 0.01, noise: 0.01, soft: false))
+        #expect(!finalTexts(ordinary.all.map(\.event)).isEmpty, "the fixture no longer hallucinates unflagged")
+
+        let soft = try await run(engine, feeding: degradedUtterance(gain: 0.01, noise: 0.01, soft: true))
+        #expect(finalTexts(soft.all.map(\.event)).isEmpty, "a soft hallucination became a final")
+        let lastDraft = soft.all.reversed().compactMap { entry -> String? in
+            if case let .draft(_, text) = entry.event { text } else { nil }
+        }.first
+        #expect(lastDraft?.isEmpty ?? true, "a soft hallucination is left as a draft: \(lastDraft ?? "")")
+    }
+
+    @Test("Soft audio that decodes above the confidence bar keeps its text")
+    func softSpeechAboveBarKept() async throws {
+        DownloadUtils.enforceOffline = true
+        let engine = FluidAudioASR()
+        try await engine.prepare()
+        let log = try await run(engine, feeding: degradedUtterance(gain: 0.05, noise: 0.02, soft: true))
+        #expect(finalTexts(log.all.map(\.event)).joined(separator: " ").lowercased().contains("testing"))
     }
 
     @Test("Each pause closes one window, and no utterance's words reach two finals")
@@ -393,5 +435,17 @@ struct FluidAudioASRTests {
         // Draft windows only ever advance (draft-replaces-draft is per window).
         let windowIDs = drafts.map(\.windowID)
         #expect(windowIDs == windowIDs.sorted(), "draft windowIDs regressed")
+    }
+}
+
+private struct SeededGenerator: RandomNumberGenerator {
+    private var state: UInt64
+    init(seed: UInt64) { state = seed }
+    mutating func next() -> UInt64 {
+        state &+= 0x9E37_79B9_7F4A_7C15
+        var z = state
+        z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+        z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+        return z ^ (z >> 31)
     }
 }

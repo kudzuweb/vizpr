@@ -84,7 +84,7 @@ private final class InputRecordingEngine: TranscriptionEngine, @unchecked Sendab
                 for await input in audio {
                     lock.withLock {
                         switch input {
-                        case let .samples(samples): heardSamples += samples.count
+                        case let .samples(samples, _): heardSamples += samples.count
                         case .pause: pauseSampleCounts.append(heardSamples)
                         }
                     }

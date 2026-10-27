@@ -135,6 +135,15 @@ final class AudioPipeline {
             var gate = SpeechGate()
             var speechActive = false
 
+            @MainActor func forward(_ batches: [SpeechGate.Batch]) {
+                for batch in batches {
+                    #if DICT_DEV_LOG
+                    lastSessionAudio?.appendGated(batch.samples, epoch: epoch)
+                    #endif
+                    fanOut.audio?.yield(.samples(batch.samples, soft: batch.soft))
+                }
+            }
+
             let stream = await openCapture()
             do {
                 for await samples in stream {
@@ -160,13 +169,17 @@ final class AudioPipeline {
                     if let latest = updates.last {
                         speechActive = latest.speechActive
                     }
-                    for batch in gate.feed(
+                    let gated = gate.feed(
                         samples, speechActive: speechActive, chunkProbability: updates.last?.probability
-                    ) {
-                        #if DICT_DEV_LOG
-                        lastSessionAudio?.appendGated(batch, epoch: epoch)
-                        #endif
-                        fanOut.audio?.yield(.samples(batch))
+                    )
+                    forward(gated.batches)
+                    #if DICT_DEV_LOG
+                    Self.logSoftTransition(gated.softTransition, updates: updates, chunkCount: chunkCount)
+                    #endif
+                    // A soft span ends at its own pause, so the engine closes
+                    // a window there.
+                    if gated.softTransition == .closed {
+                        fanOut.audio?.yield(.pause)
                     }
                     for update in updates {
                         // After the gate's batches, so the engine has every
@@ -212,12 +225,7 @@ final class AudioPipeline {
             // finishes its event stream, then let it drain. Runs even when the
             // session task was cancelled by stop() — cancellation only breaks
             // the capture loop above; the tail decode must still complete.
-            for batch in gate.end() {
-                #if DICT_DEV_LOG
-                lastSessionAudio?.appendGated(batch, epoch: epoch)
-                #endif
-                fanOut.audio?.yield(.samples(batch))
-            }
+            forward(gate.end())
             fanOut.audio?.finish()
             await fanOut.events?.value
             await onSessionDrained?(epoch)
@@ -315,6 +323,24 @@ final class AudioPipeline {
                 format: "vad chunk %d: rms=%.4f prob=%.2f active=%d",
                 chunkCount, rms(update.chunk), update.probability, update.speechActive ? 1 : 0
             ))
+        }
+    }
+
+    /// One line when the gate opens or closes a soft span, numbers only. The
+    /// per-chunk line above prints every fourth chunk, too sparse to see them.
+    private static func logSoftTransition(
+        _ transition: SpeechGate.SoftTransition?, updates: [SpeechDetector.Update], chunkCount: Int
+    ) {
+        let chunk = chunkCount + updates.count
+        switch transition {
+        case .opened:
+            VizprTranscriptLogger.note(
+                String(format: "gate: soft open (chunk %d, prob %.2f)", chunk, updates.last?.probability ?? 0)
+            )
+        case .closed:
+            VizprTranscriptLogger.note("gate: soft close (chunk \(chunk))")
+        case nil:
+            break
         }
     }
 
