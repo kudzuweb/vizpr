@@ -10,7 +10,7 @@ import FluidAudio
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
-    private let hotkeyMonitor: HotkeyMonitor
+    let hotkeyMonitor: HotkeyMonitor
     private let permissionProbe = PermissionProbe()
     private var actionsTask: Task<Void, Never>?
     private var audioPipeline: AudioPipeline?
@@ -27,7 +27,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let overlay = OverlayController()
     private let settleGate = SettleGate()
     private let fieldReader = FieldContextReader()
-    private let settingsStore: SettingsStore
+    let settingsStore: SettingsStore
     /// Hierarchical vocabulary (PR 11): global + named buckets + app
     /// assignments; resolved per session against the focused bundle id.
     private let vocabularyModel = VocabularyModel()
@@ -44,6 +44,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Set when the last session's mic delivered pure silence (AirPods
     /// held-route trap); shown in the menu until a session gets real audio.
     private var lastSessionWasSilent = false
+    var bundleWatcher: BundleWatcher?
     #if DICT_DEV_LOG
     private let dictationTracker = DevDictationTracker()
     /// Dictation-record handshake: the record needs the committed text (known
@@ -93,6 +94,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         VizprTranscriptLogger.announce()
         #endif
 
+        // Before anything that can install the tap. Returning keeps even a test
+        // host, where failLoudly does not quit, from reaching applySettings.
+        guard verifyBundleAndWatch() else { return }
+
         // FIRST, before any FluidAudio API is touched: hard-disable its download
         // paths. Every fetch/download entry point throws from here on — the
         // app can only load models that shipped in its bundle (invariant 1).
@@ -110,6 +115,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         overlay.onAnchorChange = { [weak self] displayID, anchor in
             self?.settingsStore.update { $0.overlayAnchors[displayID] = anchor }
         }
+        hotkeyMonitor.setOnGiveUp { [weak self] in self?.hotkeyGaveUp() }
         applySettings(settingsStore.settings)
         settingsStore.onChange { [weak self] settings in
             self?.applySettings(settings)
@@ -450,7 +456,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func failLoudly(_ message: String, detail: String) {
+    func failLoudly(_ message: String, detail: String) {
         presentAlert(message, detail: detail)
         // A test host that quit mid-run would fail the whole test run.
         guard !Self.isHostedByTests else { return }
@@ -461,7 +467,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     nonisolated static let isHostedByTests = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
 
     /// Modal alert, except under a test host, where a dialog would block the run: log instead.
-    private func presentAlert(_ message: String, detail: String) {
+    func presentAlert(_ message: String, detail: String) {
         if Self.isHostedByTests {
             NSLog("Vizpr alert suppressed under test: %@ %@", message, detail)
             return
@@ -711,13 +717,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshMenu()
     }
 
-    private func cycleItem(_ title: String, _ action: Selector) -> NSMenuItem {
+    func cycleItem(_ title: String, _ action: Selector) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
         item.target = self
         return item
     }
 
-    private func refreshMenu() {
+    func refreshMenu() {
         let menu = NSMenu()
         let header = NSMenuItem(title: "Vizpr", action: nil, keyEquivalent: "")
         header.isEnabled = false
@@ -725,7 +731,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
 
         let capability = permissionProbe.evaluate()
-        if capability != .ready || !hotkeyMonitor.isTapHealthy {
+        if hotkeyMonitor.hasGivenUp {
+            addGaveUpItems(to: menu)
+        } else if capability != .ready || !hotkeyMonitor.isTapHealthy {
             let title: String
             switch capability {
             case .grantedButDead: title = "Permission granted — relaunch to enable"
