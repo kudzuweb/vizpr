@@ -35,11 +35,68 @@ enum VizprTranscriptLogger {
         return VizprDevLogDirectory.debugLogURL
     }()
 
-    /// Report where the dev transcript log is written (the structured JSONL
-    /// records land there via VizprDevLogWriter).
-    static func announce() {
-        note("dev transcript log target: \(VizprDevLogDirectory.transcriptsURL.path)")
+    /// The moment the logger was first used; launch marks are measured from it.
+    /// `announce()` runs first in the launch sequence so this is launch time.
+    private static let openedAt = ContinuousClock.now
+
+    static func millisecondsSinceOpen() -> Int {
+        (ContinuousClock.now - openedAt).devLogMilliseconds
     }
+
+    /// Report where the dev transcript log is written (the structured JSONL
+    /// records land there via VizprDevLogWriter) and which build is running.
+    /// `VIZPR_BUILD_ID` is passed by scripts/run-dev.sh.
+    static func announce() {
+        _ = openedAt
+        note("dev transcript log target: \(VizprDevLogDirectory.transcriptsURL.path)")
+        let buildID = ProcessInfo.processInfo.environment["VIZPR_BUILD_ID"] ?? "unknown"
+        #if DEBUG
+        let configuration = "Debug"
+        #else
+        let configuration = "Release"
+        #endif
+        note("build: \(buildID) \(configuration)")
+    }
+
+    // MARK: Dictation session id
+
+    private static let sessionLock = NSLock()
+    nonisolated(unsafe) private static var openSessionID: String?
+
+    /// Open a dictation session: every line noted until `endSession` carries
+    /// its id, so the log lines and the JSONL records of one session join.
+    static func beginSession() -> String {
+        let id = String(UUID().uuidString.prefix(8))
+        sessionLock.lock()
+        defer { sessionLock.unlock() }
+        if let previous = openSessionID {
+            // Lines the previous session writes from here on carry the new id.
+            // This line is written under the lock, with the previous id.
+            writeLine(
+                "session \(previous) still open; later lines may belong to it",
+                prefix: "[s:\(previous)] "
+            )
+        }
+        openSessionID = id
+        return id
+    }
+
+    /// Close the session at its drain. Ignored when a newer session has
+    /// already opened, so a late drain cannot strip the new session's id.
+    static func endSession(_ id: String) {
+        sessionLock.lock()
+        defer { sessionLock.unlock() }
+        if openSessionID == id { openSessionID = nil }
+    }
+
+    private static var sessionPrefix: String {
+        sessionLock.lock()
+        defer { sessionLock.unlock() }
+        return openSessionID.map { "[s:\($0)] " } ?? ""
+    }
+
+    /// `2026-10-25T05:24:00.123Z`: the same shape as before with milliseconds.
+    private static let timestampStyle = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
 
     private static let fileLock = NSLock()
 
@@ -48,7 +105,11 @@ enum VizprTranscriptLogger {
     /// the pipeline live. Safe from any thread; returns after the line is written.
     static func note(_ message: String) {
         log.debug("[\(buildMarker, privacy: .public)] \(message, privacy: .public)")
-        let line = "\(Date().ISO8601Format()) \(message)\n"
+        writeLine(message, prefix: sessionPrefix)
+    }
+
+    private static func writeLine(_ message: String, prefix: String) {
+        let line = "\(Date().formatted(timestampStyle)) \(prefix)\(message)\n"
         guard let data = line.data(using: .utf8) else { return }
         append(data, to: debugFileURL)
     }

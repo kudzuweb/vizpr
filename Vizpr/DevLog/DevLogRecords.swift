@@ -11,6 +11,8 @@ import Foundation
 struct DevDictationRecord: Encodable, Sendable {
     let type = "dictation"
     let timestamp: String
+    /// Joins this record to its cleanup records and `[s:<id>]` log lines.
+    var sessionID: String?
     let rawASRText: String
     let injectedText: String
     let context: DevDictationContext
@@ -19,6 +21,7 @@ struct DevDictationRecord: Encodable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case type, timestamp, context
+        case sessionID = "session_id"
         case rawASRText = "raw_asr_text"
         case injectedText = "injected_text"
         case modelTier = "model_tier"
@@ -31,6 +34,7 @@ struct DevDictationRecord: Encodable, Sendable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(type, forKey: .type)
         try container.encode(timestamp, forKey: .timestamp)
+        try container.encode(sessionID, forKey: .sessionID)
         try container.encode(rawASRText, forKey: .rawASRText)
         try container.encode(injectedText, forKey: .injectedText)
         try container.encode(context, forKey: .context)
@@ -51,6 +55,17 @@ struct DevSessionTimings: Sendable {
     var firstSettledMs: Int?
     var commitMs: Int?
     var injectedMs: Int?
+    /// The last finalized token event delivered, whether the tail decode's or
+    /// the last window's.
+    var finalASRMs: Int?
+    /// The last cleanup of the session to resolve (applied, stale, cancelled
+    /// or failed) before the session drained.
+    var cleanupDoneMs: Int?
+    /// Captured audio length, from the capture loop's sample count.
+    var audioMs: Int?
+    /// Kind (`pause`, `forced` or `commit`) of the last final delivered at or
+    /// before the first settled text appeared.
+    var firstSettledWindow: String?
     var draftCount = 0
     var draftIntervalMeanMs: Int?
     var draftIntervalMaxMs: Int?
@@ -67,6 +82,10 @@ extension DevSessionTimings: Encodable {
         case firstSettledMs = "t_first_settled_ms"
         case commitMs = "t_commit_ms"
         case injectedMs = "t_injected_ms"
+        case finalASRMs = "t_final_asr_ms"
+        case cleanupDoneMs = "t_cleanup_done_ms"
+        case audioMs = "audio_ms"
+        case firstSettledWindow = "first_settled_window"
         case draftCount = "draft_count"
         case draftIntervalMeanMs = "draft_interval_mean_ms"
         case draftIntervalMaxMs = "draft_interval_max_ms"
@@ -81,6 +100,10 @@ extension DevSessionTimings: Encodable {
         try container.encode(firstSettledMs, forKey: .firstSettledMs)
         try container.encode(commitMs, forKey: .commitMs)
         try container.encode(injectedMs, forKey: .injectedMs)
+        try container.encode(finalASRMs, forKey: .finalASRMs)
+        try container.encode(cleanupDoneMs, forKey: .cleanupDoneMs)
+        try container.encode(audioMs, forKey: .audioMs)
+        try container.encode(firstSettledWindow, forKey: .firstSettledWindow)
         try container.encode(draftCount, forKey: .draftCount)
         try container.encode(draftIntervalMeanMs, forKey: .draftIntervalMeanMs)
         try container.encode(draftIntervalMaxMs, forKey: .draftIntervalMaxMs)
@@ -101,6 +124,19 @@ struct DevDictationContext: Encodable, Sendable {
     }
 }
 
+/// Where one cleanup sits in its dictation session: the session's id and the
+/// milliseconds from session start to when the cleanup was queued, to when
+/// its task began and to when the model's first chunk arrived. Nil fields are
+/// omitted from the record.
+struct DevCleanupTiming: Sendable, Equatable {
+    var sessionID: String?
+    var enqueuedMs: Int?
+    var startedMs: Int?
+    var firstTokenMs: Int?
+
+    static let none = DevCleanupTiming()
+}
+
 /// One cleanup invocation — the feedstock for prompt tuning. Dispositions:
 /// applied | stale | cancelled | failed (failed carries the engine error;
 /// see CleanupOutcome for why it extends the spec's set).
@@ -113,13 +149,25 @@ struct DevCleanupRecord: Encodable, Sendable {
     let disposition: String
     let error: String?
     let durationMs: Int?
+    let sessionID: String?
+    let enqueuedMs: Int?
+    let startedMs: Int?
+    let firstTokenMs: Int?
 
     enum CodingKeys: String, CodingKey {
         case type, timestamp, input, output, generation, disposition, error
         case durationMs = "duration_ms"
+        case sessionID = "session_id"
+        case enqueuedMs = "enqueued_ms"
+        case startedMs = "started_ms"
+        case firstTokenMs = "first_token_ms"
     }
 
-    init(_ outcome: CleanupOutcome, timestamp: String = Date().ISO8601Format()) {
+    init(
+        _ outcome: CleanupOutcome,
+        timestamp: String = Date().ISO8601Format(),
+        timing: DevCleanupTiming = .none
+    ) {
         self.timestamp = timestamp
         self.input = outcome.input
         self.output = outcome.output
@@ -127,6 +175,10 @@ struct DevCleanupRecord: Encodable, Sendable {
         self.disposition = outcome.disposition.rawValue
         self.error = outcome.errorDescription
         self.durationMs = outcome.durationMs
+        self.sessionID = timing.sessionID
+        self.enqueuedMs = timing.enqueuedMs
+        self.startedMs = timing.startedMs
+        self.firstTokenMs = timing.firstTokenMs
     }
 }
 #endif

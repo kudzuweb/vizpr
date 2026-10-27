@@ -42,8 +42,13 @@ if pgrep -f "Vizpr.app/Contents/MacOS/Vizpr" >/dev/null; then
   sleep 1
 fi
 
-echo "Launching $APP ..."
-open "$APP"
+# The app writes this id on its `build:` log line. `open` starts the app
+# through LaunchServices, which does not pass this shell's environment on, so
+# the id is given with --env. A `-dirty` suffix marks uncommitted changes.
+VIZPR_BUILD_ID="$(git describe --always --dirty --abbrev=7 2>/dev/null || echo unknown)"
+
+echo "Launching $APP (build $VIZPR_BUILD_ID) ..."
+open --env "VIZPR_BUILD_ID=$VIZPR_BUILD_ID" "$APP"
 
 # Ctrl+C must stop the APP, not just the log stream: a lingering instance keeps
 # its Fn event tap alive and eats the key for every other app (field-reported:

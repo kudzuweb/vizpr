@@ -76,15 +76,29 @@ actor MLXCleanup: CleanupEngine {
         let stream = try await container.generate(input: lmInput, parameters: parameters)
 
         var output = ""
+        #if DICT_DEV_LOG
+        var firstTokenAt: ContinuousClock.Instant?
+        #else
+        let firstTokenAt: ContinuousClock.Instant? = nil
+        #endif
         for await generation in stream {
             // Cooperative cancellation: bail as soon as the task is cancelled
             // (commit fired). Terminating the stream cancels the decode task.
             try Task.checkCancellation()
             if case let .chunk(text) = generation {
+                #if DICT_DEV_LOG
+                if firstTokenAt == nil { firstTokenAt = .now }
+                #endif
                 output += text
             }
         }
-        return CleanupResult(text: output.trimmingCharacters(in: .whitespacesAndNewlines))
+        // A cancelled decode ends the stream without another element, so the
+        // check inside the loop never sees the cancellation. Without this the
+        // empty output is returned as a result and reported as a failure.
+        try Task.checkCancellation()
+        return CleanupResult(
+            text: output.trimmingCharacters(in: .whitespacesAndNewlines), firstTokenAt: firstTokenAt
+        )
     }
 }
 

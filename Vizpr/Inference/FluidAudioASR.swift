@@ -203,9 +203,7 @@ actor FluidAudioASR: TranscriptionEngine {
                 startTolerance: plan.startTolerance
             )
             if let keptEnd = cut.keptEnd, !cut.text.isEmpty {
-                continuation.yield(.finalized(
-                    text: cut.text, confidence: cut.confidence, tokenConfidences: cut.tokenConfidences
-                ))
+                Self.yieldFinal(cut, kind: plan.kind == .forced ? "forced" : "pause", to: continuation)
                 if plan.kind == .forced {
                     confirmedThrough = min(decodeStart + keptEnd, cutEnd)
                 }
@@ -355,10 +353,7 @@ actor FluidAudioASR: TranscriptionEngine {
                         )
                         #endif
                         if let cut, !cut.text.isEmpty {
-                            continuation.yield(.finalized(
-                                text: cut.text, confidence: cut.confidence,
-                                tokenConfidences: cut.tokenConfidences
-                            ))
+                            Self.yieldFinal(cut, kind: "commit", to: continuation)
                         }
                     } else {
                         #if DICT_DEV_LOG
@@ -411,10 +406,23 @@ actor FluidAudioASR: TranscriptionEngine {
         }
     }
 
+    /// Yield a final. In dev-log builds the window kind is pushed to
+    /// `DevFinalWindowKinds` first; the tracker pops one kind per final, so
+    /// every final goes through here and the two steps cannot be separated.
+    private nonisolated static func yieldFinal(
+        _ cut: TimedCut.Cut, kind: String, to continuation: AsyncStream<TokenEvent>.Continuation
+    ) {
+        #if DICT_DEV_LOG
+        DevFinalWindowKinds.push(kind)
+        #endif
+        continuation.yield(.finalized(
+            text: cut.text, confidence: cut.confidence, tokenConfidences: cut.tokenConfidences
+        ))
+    }
+
     #if DICT_DEV_LOG
     private nonisolated static func milliseconds(since start: ContinuousClock.Instant) -> Int {
-        let parts = (ContinuousClock.now - start).components
-        return Int(parts.seconds) * 1000 + Int(parts.attoseconds / 1_000_000_000_000_000)
+        (ContinuousClock.now - start).devLogMilliseconds
     }
     #endif
 }

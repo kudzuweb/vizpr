@@ -113,4 +113,14 @@ final class LastSessionAudio {
         return (rawURL, gatedURL)
     }
 }
+extension AppDelegate: NSMenuItemValidation {
+    @objc func saveLastSessionAudio() {
+        lastSessionAudio.saveToDevLog()
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        menuItem.action != #selector(saveLastSessionAudio) || lastSessionAudio.isComplete
+    }
+}
+
 #endif

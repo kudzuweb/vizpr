@@ -142,14 +142,20 @@ actor SmartCleanup {
         // Launched through the stream so commit()/cancel() cancels it. Every
         // path reports its disposition through onOutcome — cleanup failures
         // are fail-open for the display (span stays raw) but never silent.
+        #if DICT_DEV_LOG
+        let enqueued: ContinuousClock.Instant? = .now
+        #else
+        let enqueued: ContinuousClock.Instant? = nil
+        #endif
         await tokenStream.launchCleanup { [engine, vocabulary, tokenStream, onOutcome] cleanupID in
             #if DICT_DEV_LOG
-            let started = ContinuousClock.now
+            let startedAt: ContinuousClock.Instant? = .now
+            #else
+            let startedAt: ContinuousClock.Instant? = nil
             #endif
             func elapsedMs() -> Int? {
                 #if DICT_DEV_LOG
-                let parts = (ContinuousClock.now - started).components
-                return Int(parts.seconds * 1000 + parts.attoseconds / 1_000_000_000_000_000)
+                return startedAt.map { (ContinuousClock.now - $0).devLogMilliseconds }
                 #else
                 return nil
                 #endif
@@ -173,7 +179,8 @@ actor SmartCleanup {
                         input: request.text, output: nil,
                         generation: input.generation, disposition: .failed,
                         errorDescription: "output was context echo only",
-                        durationMs: elapsedMs()
+                        durationMs: elapsedMs(),
+                        enqueuedAt: enqueued, startedAt: startedAt, firstTokenAt: result.firstTokenAt
                     ))
                     await tokenStream.resolveLive(generation: input.generation, finishedCleanup: cleanupID)
                     return
@@ -185,20 +192,23 @@ actor SmartCleanup {
                     input: request.text, output: cleaned,
                     generation: input.generation,
                     disposition: applied ? .applied : .stale,
-                    durationMs: elapsedMs()
+                    durationMs: elapsedMs(),
+                    enqueuedAt: enqueued, startedAt: startedAt, firstTokenAt: result.firstTokenAt
                 ))
             } catch is CancellationError {
                 await onOutcome?(CleanupOutcome(
                     input: request.text, output: nil,
                     generation: input.generation, disposition: .cancelled,
-                    durationMs: elapsedMs()
+                    durationMs: elapsedMs(),
+                    enqueuedAt: enqueued, startedAt: startedAt
                 ))
             } catch {
                 await onOutcome?(CleanupOutcome(
                     input: request.text, output: nil,
                     generation: input.generation, disposition: .failed,
                     errorDescription: String(describing: error),
-                    durationMs: elapsedMs()
+                    durationMs: elapsedMs(),
+                    enqueuedAt: enqueued, startedAt: startedAt
                 ))
                 await tokenStream.resolveLive(generation: input.generation, finishedCleanup: cleanupID)
             }
@@ -222,4 +232,11 @@ struct CleanupOutcome: Sendable, Equatable {
     var errorDescription: String?
     /// Wall time of the invocation; measured in dev-log builds only.
     var durationMs: Int?
+    /// When the cleanup was queued, when its task began, and when the model's
+    /// first chunk arrived; measured in dev-log builds only. The task begins
+    /// before the engine takes the model, so waiting for another cleanup's
+    /// pre-fill is between `startedAt` and `firstTokenAt`, not before `startedAt`.
+    var enqueuedAt: ContinuousClock.Instant?
+    var startedAt: ContinuousClock.Instant?
+    var firstTokenAt: ContinuousClock.Instant?
 }
