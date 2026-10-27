@@ -459,7 +459,9 @@ Since 2026-10-27 `liquid-glass.json` is a third, for `OverlayLook.liquidGlass`.
   rewrite the file. If it saves a looks array later, the new build migrates that
   array again by the rules above. Since 2026-10-27 a build from before the
   Liquid Glass look that finds its id as the active look does not know it, and
-  falls back to Glass.
+  falls back to Glass. An older build also ignores a look's `glass` key, so
+  editing a clear custom look there rewrites its file without it, and this build
+  then loads it as regular.
 
 ## PR 15 — Sculptable looks (2026-10-21)
 

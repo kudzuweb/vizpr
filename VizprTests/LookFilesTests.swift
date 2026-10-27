@@ -239,6 +239,7 @@ struct LookFilesTests {
         #expect(report.looks.map(\.style.glass.variant) == [.regular, .clear])
         #expect(report.failures.map(\.url.lastPathComponent) == ["b-odd.json"])
         #expect(report.failures.map(\.kind) == [.unreadable])
+        #expect(report.failures.first?.reason.contains("style.glass.variant") == true)
     }
 
     @Test("A built-in file placed in the Looks folder is refused, because its id is a built-in's")
@@ -246,9 +247,11 @@ struct LookFilesTests {
         let folder = try LookFixtures.folder()
         try FileManager.default.copyItem(
             at: LookFixtures.sourceFile("glass.json"), to: folder.appendingPathComponent("glass.json"))
+        try FileManager.default.copyItem(
+            at: LookFixtures.sourceFile("liquid-glass.json"), to: folder.appendingPathComponent("liquid-glass.json"))
         let report = LookFiles.load(from: folder)
         #expect(report.looks.isEmpty)
-        #expect(report.failures.count == 1)
+        #expect(report.failures.count == 2)
     }
 
     @Test("A Looks path that cannot be listed is one unreadable failure, and a missing folder is empty")
