@@ -62,7 +62,26 @@ struct OverlayLook: Codable, Equatable, Sendable, Identifiable {
         return style
     }
 
-    static let builtIns = [glass, slab]
+    /// The system's clear glass over a dimming backdrop, with no frost over it.
+    /// The values are a starting point to tune by eye. Text carries its own
+    /// color because system label colors turn black in light mode over the
+    /// darkened pane.
+    static let liquidGlass = OverlayLook(
+        id: UUID(uuidString: "6B1E5A4C-0D2F-4C8E-9A57-3F1B7D20A003")!,
+        name: "Liquid Glass",
+        tintStrength: 0.06,
+        textBaseHex: "F2EEF8",
+        style: liquidGlassStyle
+    )
+
+    private static var liquidGlassStyle: LookStyle {
+        var style = LookStyle.neutral
+        style.glass = GlassStyle(variant: .clear)
+        style.backdrop = BackdropStyle(enabled: true, colorHex: "000000", strength: 0.30, feather: 18)
+        return style
+    }
+
+    static let builtIns = [glass, slab, liquidGlass]
 
     /// Each saved look is merged over this when loading, so a field added in a
     /// later build takes the value given here for every look saved before it

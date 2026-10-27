@@ -216,10 +216,29 @@ struct LookFilesTests {
         #expect(slab.meshColorsHex == SlabStyle.defaultMeshColors)
     }
 
-    @Test("The glass.json and slab.json files, decoded by the loader, equal the built-in constants")
+    @Test("The glass.json, slab.json and liquid-glass.json files, decoded by the loader, equal the built-in constants")
     func builtInFilesMatchConstants() throws {
         #expect(try LookFiles.read(LookFixtures.sourceFile("glass.json")) == OverlayLook.glass)
         #expect(try LookFiles.read(LookFixtures.sourceFile("slab.json")) == OverlayLook.slab)
+        #expect(try LookFiles.read(LookFixtures.sourceFile("liquid-glass.json")) == OverlayLook.liquidGlass)
+    }
+
+    @Test("A file without a glass key loads as regular glass, and an unknown variant fails only that file")
+    func glassVariantDecoding() throws {
+        let folder = try LookFixtures.folder()
+        try LookFixtures.put(#"{"id": "\#(LookFixtures.idA)", "name": "Old"}"#, "a-old.json", in: folder)
+        try LookFixtures.put(
+            #"{"id": "\#(LookFixtures.idB)", "name": "Odd", "style": {"glass": {"variant": "prism"}}}"#,
+            "b-odd.json", in: folder)
+        try LookFixtures.put(
+            #"{"id": "\#(UUID().uuidString)", "name": "Clear", "style": {"glass": {"variant": "clear"}}}"#,
+            "c-clear.json", in: folder)
+
+        let report = LookFiles.load(from: folder)
+        #expect(report.looks.map(\.name) == ["Old", "Clear"])
+        #expect(report.looks.map(\.style.glass.variant) == [.regular, .clear])
+        #expect(report.failures.map(\.url.lastPathComponent) == ["b-odd.json"])
+        #expect(report.failures.map(\.kind) == [.unreadable])
     }
 
     @Test("A built-in file placed in the Looks folder is refused, because its id is a built-in's")
