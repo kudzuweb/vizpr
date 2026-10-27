@@ -12,20 +12,20 @@ A look is one JSON file. The app loads every `.json` file in the Looks folder at
 | Slab | `BuiltIn/slab.json` | A dark animated nine-color mesh instead of glass, light text, a soft top-edge light, a bevel, fine grain and a drop shadow. |
 | Liquid Glass | `BuiltIn/liquid-glass.json` | The clear glass variant with no frost, a dim backdrop behind it so text stays legible, and light text. |
 
-The built-in files are copied into the app. They are read-only: a custom look cannot reuse a built-in `id`, and the app skips such a file with a message in the log.
+The built-in files are reference copies to start a new look from. The app draws the built-ins from constants in `OverlayLook.swift` and never reads these files, so editing one changes nothing in the app and fails the test that checks each file against its constant. A custom look cannot reuse a built-in `id`; the app skips such a file.
 
 ## Where custom looks go
 
 `~/Library/Application Support/Vizpr/Looks/`. The app is not sandboxed, so this is the same path for a build from source and a packaged build. Settings, Appearance has an Open Looks Folder button that creates the folder and opens it. A git pull cannot touch this folder.
 
-Files load in file-name order, and at most 12 custom looks load. A file past the twelfth is reported as over the limit and ignored until another is removed.
+Files load in file-name order, compared character by character, so capital letters sort before lowercase; use lowercase file names to keep the order alphabetical. At most 12 custom looks load. A file past the twelfth is reported as over the limit and ignored until another is removed.
 
 ## Recipe for a new look
 
 1. Copy `Vizpr/Looks/BuiltIn/glass.json` (or the built-in closest to what the user wants) into the Looks folder under a new name, for example `sunset.json`.
 2. Replace `id` with a new UUID from `uuidgen`. Every look needs its own; two files with the same `id` load only the first.
 3. Replace `name`. It is the label in the Appearance list and the menu bar, truncated to 40 characters.
-4. Change parameters from the table below. A file may also be partial: it needs only `id`, `name` and the fields that differ, and every missing field takes its default.
+4. Change parameters from the table below. A file may also be partial: it needs only `id`, `name` and the fields that differ, and every missing field takes its default. When the look is next edited in the Appearance pane, the app writes every field in full, with any out-of-range value replaced by its clamped value.
 5. Save the file in the Looks folder and press Reload Looks (or relaunch), then pick the look in Settings, Appearance.
 
 A hand-edited file needs Reload Looks before the next edit in the Appearance pane. The app holds each look in memory, and an edit in the pane rewrites the active look's file from that copy, so a hand edit that was never reloaded is overwritten.
@@ -36,8 +36,8 @@ A hand-edited file needs Reload Looks before the next edit in the Appearance pan
 |---|---|
 | A number outside its range | The value is clamped to the nearest end of the range. |
 | A color that is not six hex digits | The field takes its default. A leading `#` and surrounding spaces are accepted. |
-| An unknown enum value (`"surface": "metal"`), a wrong-typed field, invalid JSON, or a missing `id` or `name` | That one file is skipped and reported, with the reason, in Settings, Appearance and the log. Other files and all other settings are unaffected. |
-| A key the app does not know | It has no effect. |
+| An unknown enum value (`"surface": "metal"`), a wrong-typed field, invalid JSON, or a missing `id` or `name` | That one file is skipped. Settings, Appearance shows how many files could not be read and a Reveal button that selects them in Finder; the reason is written only to the dev log of a Debug build. To find the problem, check that the file is valid JSON and that every enum value and type matches the table below. Other files and all other settings are unaffected. |
+| A key the app does not know | It has no effect, and the app removes it the next time it saves the look from the Appearance pane. |
 
 ## Parameters
 
@@ -82,7 +82,7 @@ Colors are six-digit hex strings such as `"A16FDF"`. All ranges are enforced by 
 | `enabled` | `true` or `false`; default `false`. | Turns on a dimming layer drawn behind the surface. |
 | `colorHex` | Hex; default `000000`. | Color of the dimming layer. |
 | `strength` | 0 to 0.9; default 0.45. | Opacity of the layer inside the pane. |
-| `feather` | 0 to 60 points; default 16. | Distance past the pane edge over which the layer fades out. |
+| `feather` | 0 to 60 points; default 16. | Distance past the pane edge over which the layer fades out. When the backdrop is on, it also sets the panel margin, at 1.1 times the feather. |
 
 ### Light (`style.light`)
 
@@ -148,16 +148,18 @@ Colors are six-digit hex strings such as `"A16FDF"`. All ranges are enforced by 
 
 ## What inviz does with a look
 
-Inviz shows a small pill in place of the transcript. It draws the look's surface, light, border, glow and shadow on that 84 by 36 point pill, and colors its three dots with `tintHex`. It ignores the text, recording-dot and pane fields. A look with a 40-point `outerGlow.radius` therefore makes the glow dominate the small pill, and a `cornerRadius` above 18 is more than the pill's height allows. The Appearance preview shows the transcript only, so check a look in inviz mode on screen.
+Inviz shows a small pill in place of the transcript. It draws the look's surface, backdrop, light, border, glow and shadow on that 84 by 36 point pill, and colors its three dots with `tintHex`. It ignores the text, recording-dot and pane fields. A look with a 40-point `outerGlow.radius` therefore makes the glow dominate the small pill, and a `cornerRadius` above 18 is more than the pill's height allows. The Appearance preview shows the transcript only, so check a look in inviz mode on screen.
 
 ## Inputs the folder takes from the app
 
-The engine in this folder reads two values that live outside it, and nothing else.
+The model and drawing code in this folder read two values that live outside it:
 
 | Input | Value | What the folder uses it for |
 |---|---|---|
 | `OverlayLayout.restingSize` | 220 by 44 points. | The smallest pane. `paneWidth(fitting:)` never goes below its width, and a short utterance rests at this size. |
 | `TargetAppMetrics.cornerOverhang` | 5 points. | The least margin around the pane, so the target-app icon that hangs off the corner is never clipped. |
+
+`LookFiles.swift` also uses `StorageRoot.url` for the folder's location, `VizprSettings.maxLooks` for the cap of 12, `SettingsMerge.merged` to lay a partial file over the defaults, and the Debug dev logger.
 
 ## Sharing a look
 

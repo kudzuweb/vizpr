@@ -1268,9 +1268,11 @@ behavior change: `OverlayLook`, `LookStyle`, `SlabStyle`, `LookFiles`,
 `BackdropLayer` and `Color+Hex`, plus the built-in look files in
 `Vizpr/Looks/BuiltIn/`. Earlier entries above still give the old `Vizpr/Overlay/`
 paths. `VizprSettings.sanitizeHex` and `VizprSettings.mutableOpacityRatio` became
-`OverlayLook.sanitizeHex` and `OverlayLook.mutableOpacityRatio`, so the folder's
-only inputs from the app are `OverlayLayout.restingSize` and
-`TargetAppMetrics.cornerOverhang`. The authoring guide is `Vizpr/Looks/README.md`;
+`OverlayLook.sanitizeHex` and `OverlayLook.mutableOpacityRatio`, so the model and
+drawing code's only inputs from the app are `OverlayLayout.restingSize` and
+`TargetAppMetrics.cornerOverhang`. `LookFiles` also uses `StorageRoot.url`,
+`VizprSettings.maxLooks`, `SettingsMerge.merged` and the Debug dev logger. The
+authoring guide is `Vizpr/Looks/README.md`;
 `project.yml` excludes it from the app bundle, while the three JSON files stay in
 the bundle's `Resources`.
 
