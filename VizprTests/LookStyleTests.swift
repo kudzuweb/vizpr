@@ -15,6 +15,15 @@ struct LookStyleTests {
         #expect(OverlayLook.mergeTemplate.style == .neutral)
     }
 
+    @Test("A clear glass variant survives clamping")
+    func clearVariantSurvivesClamping() {
+        var look = OverlayLook.liquidGlass
+        look.id = UUID()
+        #expect(look.style.glass.variant == .clear)
+        #expect(look.clamped().style.glass.variant == .clear)
+        #expect(OverlayLook.liquidGlass.clamped() == OverlayLook.liquidGlass)
+    }
+
     @Test("A saved look without a style key loads with the neutral style")
     func missingStyleKeyLoadsNeutral() throws {
         let folder = try LookFixtures.folder()

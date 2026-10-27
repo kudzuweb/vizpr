@@ -49,6 +49,9 @@
       "colorHex" : "1C1828",
       "frost" : 0
     },
+    "glass" : {
+      "variant" : "regular"
+    },
     "light" : {
       "bevel" : 0,
       "edgeLight" : 0,

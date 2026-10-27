@@ -258,4 +258,19 @@ struct SettingsStoreLooksTests {
         #expect(store.lookFileFailures.map(\.kind) == [.notSaved])
         #expect(try fileNames(folder).isEmpty)
     }
+
+    @Test("Cycling goes Glass, Slab, Liquid Glass, then the custom looks, and wraps to Glass")
+    func cycleOrder() throws {
+        let store = SettingsStore(fileURL: try settingsFile(twoLooks), looksFolder: try LookFixtures.folder())
+        let customIDs = store.settings.looks.map(\.id)
+        #expect(customIDs.count == 2)
+
+        store.selectLook(OverlayLook.glass.id)
+        var order: [UUID] = []
+        for _ in 0..<5 { order.append(store.cycleLook().id) }
+        #expect(order == [OverlayLook.slab.id, OverlayLook.liquidGlass.id] + customIDs + [OverlayLook.glass.id])
+
+        store.selectLook(OverlayLook.liquidGlass.id)
+        #expect(store.cycleLook().id == customIDs[0])
+    }
 }

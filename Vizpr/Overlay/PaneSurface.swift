@@ -42,11 +42,18 @@ private struct SolidSurface: View {
 }
 
 /// §13 glass: frosted pane, tinted per look (lavender 13% default).
-/// macOS 26 gets real glass; earlier gets NSVisualEffectView (HUD material,
-/// behind-window) under the same low-opacity tint. Reduce Transparency is
-/// honored by the system materials automatically — never overridden here.
+/// macOS 26 gets real glass, regular or clear per the look; earlier gets
+/// NSVisualEffectView (HUD material, behind-window) under the same low-opacity
+/// tint. The system adapts regular glass to Reduce Transparency itself; clear
+/// glass is drawn as regular while the setting is on.
 private struct GlassSurface: View {
     let look: OverlayLook
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    @available(macOS 26, *)
+    private var glass: Glass {
+        look.style.glass.variant == .clear && !reduceTransparency ? .clear : .regular
+    }
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: look.cornerRadius, style: .continuous)
@@ -55,7 +62,7 @@ private struct GlassSurface: View {
         Group {
             if #available(macOS 26, *) {
                 shape.fill(.clear)
-                    .glassEffect(.regular.tint(tint), in: shape)
+                    .glassEffect(glass.tint(tint), in: shape)
             } else {
                 VisualEffectBlur()
                     .overlay(shape.fill(tint))

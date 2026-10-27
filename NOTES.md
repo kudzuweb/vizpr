@@ -367,6 +367,8 @@ change: the settled:mutable ratio stays locked in
   text color because system label colors turn black in light mode), are
   constants with fixed ids. They are read-only; a user duplicates one to edit
   it. Since 2026-10-26 each also ships as a JSON file (see "Looks as files").
+  Since 2026-10-27 there is a third built-in, Liquid Glass (see "A Liquid Glass
+  look").
 - The user's looks (max 12) are `VizprSettings.looks`, which since 2026-10-26 is
   loaded from the Looks folder and not from `settings.json` (see "Looks as
   files"). `activeLookID` picks the one rendered; an id that matches nothing
@@ -408,6 +410,7 @@ beside the `Fonts` folder and outside the repo. The folder is the single
 constant `LookFiles.folder`. `OverlayLook.glass` and `.slab` stay compiled
 constants and the source of truth; `glass.json` and `slab.json` sit beside
 `LookFiles.swift`, and a test decodes each and checks it equals its constant.
+Since 2026-10-27 `liquid-glass.json` is a third, for `OverlayLook.liquidGlass`.
 
 - **Format.** A file is one `OverlayLook` as the encoder writes it (pretty,
   sorted keys), and a partial file is allowed: it is merged over
@@ -454,7 +457,11 @@ constants and the source of truth; `glass.json` and `slab.json` sit beside
   `settings.json` sees no `looks` key, treats the file as pre-looks, finds no
   legacy keys and creates nothing, so it shows no custom looks and does not
   rewrite the file. If it saves a looks array later, the new build migrates that
-  array again by the rules above.
+  array again by the rules above. Since 2026-10-27 a build from before the
+  Liquid Glass look that finds its id as the active look does not know it, and
+  falls back to Glass. An older build also ignores a look's `glass` key, so
+  editing a clear custom look there rewrites its file without it, and this build
+  then loads it as regular.
 
 ## PR 15 — Sculptable looks (2026-10-21)
 
@@ -1219,6 +1226,39 @@ reported as a `failed` record with "output was context echo only". It is now a
 `cancelled` record. Nothing on screen changes. Dev-log counts from before this
 change count these cancellations as failures: 23 of the 24 such failures in the
 2026-10-25 logs.
+
+## A Liquid Glass look (2026-10-27)
+
+Mauria asked for a "real Liquid Glass effect" among the looks. The 26.2 SDK
+exposes `glassEffect(_:in:)` with `Glass.regular`, `.clear` and `.identity`,
+plus `.tint(_:)` and `.interactive(_:)`; there is no control over blur,
+refraction or thickness, so the variant is the only glass knob a look can have.
+
+- **The variant.** `LookStyle.glass.variant` (`GlassStyle`, `regular` or
+  `clear`, default `regular`) picks the `Glass` the glass surface draws. The
+  default is the no-visible-change value, so every existing look renders as
+  before. `interactive` is not exposed (the overlay takes no clicks) and neither
+  is `identity` (the solid surface already means no glass). An unknown variant
+  fails that one look file under the per-file rule. Other surfaces ignore the
+  field. Below macOS 26 the variant is ignored and the HUD-material fallback
+  renders as before. `LookStyle.clamped()` rebuilds the style field by field, so
+  it carries `glass` explicitly, and a test pins that `clear` survives it. The
+  Surface section of the Appearance pane has a Glass picker for glass looks.
+- **The built-in.** Liquid Glass (id `6B1E5A4C-0D2F-4C8E-9A57-3F1B7D20A003`)
+  follows Glass and Slab in the list and the menu cycle. Surface glass, variant
+  clear, no frost, tint strength 0.06, a black backdrop at 0.30 with an 18 pt
+  feather (the dimming layer the docs pair with `.clear`), and text base
+  `F2EEF8` because system label colors turn black in light mode over a darkened
+  pane. These values are a first proposal to tune by eye. A custom look file that
+  reuses the id is skipped by the built-in shadow rule. Inviz follows the look
+  through `PaneSurface` with no change.
+- **Reduce Transparency.** `GlassSurface` reads
+  `accessibilityReduceTransparency`; while it is on, clear draws as regular,
+  which the system already adapts. An opaque fallback fill was ruled out: with
+  the default fill color it puts black system text on a near-black pane in light
+  mode. Looks on the regular variant render as before with the setting on or off.
+- **Not verified here.** The appearance cannot be captured from the build shell
+  (no Screen Recording permission); the live check is by eye.
 
 ## Environment prerequisites discovered
 
