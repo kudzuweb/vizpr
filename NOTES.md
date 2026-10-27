@@ -1350,12 +1350,12 @@ close (chunk N)` line belongs to the kind of span the preceding open line names.
 `vad event: speechEnd` is still logged but is no longer when the pause is sent,
 so latency measured from it understates the time to the pause by at least 0.77 s.
 
-Measured over `~/Documents/dictation-dev/debug.log` (logged every fourth chunk):
+Measured over `~/Documents/dictation-dev/debug.log` on 2026-10-27 (505 sessions, 165 speech ends; chunks are logged every fourth):
 
 | Item | Content |
 |---|---|
-| Absorbed resumptions | 78 of 95 resumptions (82.1%) restart within 1.34 s of the VAD's reported end, before a minimal trailing span would close, so they share the previous sentence's window instead of getting a pause just before they start. |
-| Extension exposure | Of 78 logged inactive chunks inside a trailing span's first three chunks, 10 (12.8%) scored 0.5 or more and would extend it. This is per chunk and includes real speech, so it bounds noise from above; if chunks were independent, a span would be extended at least once with probability about 34% (inferred, an upper bound). |
+| Absorbed resumptions | 78 of 97 resumptions (80.4%) restart within 1.34 s of the VAD's reported end, before a minimal trailing span would close, so they share the previous sentence's window instead of getting a pause just before they start. |
+| Extension exposure | Of 82 logged inactive chunks inside a trailing span's first three chunks, 13 (15.9%) scored 0.5 or more and would extend it. This is per chunk and includes real speech, so it bounds noise from above; if chunks were independent, a span would be extended at least once with probability about 40% (inferred, an upper bound). |
 | Bounds | A trailing span has no length cap of its own. It ends on three chunks under 0.5, a real activation, or the session's end: key release in hold mode, a commit, or auto-stop in a latched session (2 to 60 s). Forced windows bound the decode size, not the span. |
 
 Known limits:
