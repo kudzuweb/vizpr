@@ -23,7 +23,7 @@ enum LookFixtures {
 
     static func sourceFile(_ name: String) -> URL {
         URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("Vizpr/Overlay/\(name)")
+            .appendingPathComponent("Vizpr/Looks/BuiltIn/\(name)")
     }
 }
 

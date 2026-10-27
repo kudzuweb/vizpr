@@ -79,9 +79,6 @@ struct VizprSettings: Codable, Equatable, Sendable {
     /// lower-center.
     var overlayAnchors: [String: OverlayAnchor] = [:]
 
-    /// The locked settled:mutable opacity ratio (not persisted, not a
-    /// setting — the trust contract's floor).
-    static let mutableOpacityRatio = 0.55
     static let maxLooks = 12
 
     static let `default` = VizprSettings()
@@ -131,13 +128,6 @@ struct VizprSettings: Codable, Equatable, Sendable {
     /// always render.
     var activeLook: OverlayLook {
         (OverlayLook.builtIns + looks).first { $0.id == activeLookID } ?? .glass
-    }
-
-    static func sanitizeHex(_ hex: String) -> String? {
-        let cleaned = hex.trimmingCharacters(in: .whitespaces)
-            .replacingOccurrences(of: "#", with: "").uppercased()
-        guard cleaned.count == 6, cleaned.allSatisfy(\.isHexDigit) else { return nil }
-        return cleaned
     }
 }
 
@@ -516,7 +506,7 @@ extension VizprSettings {
         let tintHex = legacy.tintHex ?? glass.tintHex
         let tintStrength = legacy.tintStrength ?? glass.tintStrength
         let colorsLinked = legacy.colorsLinked ?? glass.colorsLinked
-        let customized = VizprSettings.sanitizeHex(tintHex) != glass.tintHex
+        let customized = OverlayLook.sanitizeHex(tintHex) != glass.tintHex
             || abs(tintStrength - glass.tintStrength) > 1e-9
             || legacy.textBaseHex != nil
             || colorsLinked

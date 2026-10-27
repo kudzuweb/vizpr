@@ -361,7 +361,7 @@ slab parameters, font design and size, and a word-appearance field reserved for
 a later PR. This supersedes the PR 11 tint and text-theme settings and the
 six color presets (the PR 11 decisions above still hold for what a look may
 change: the settled:mutable ratio stays locked in
-`VizprSettings.mutableOpacityRatio` and no look can alter it).
+`OverlayLook.mutableOpacityRatio` and no look can alter it).
 
 - Two built-ins, Glass (exactly the old defaults) and Slab (dark, with its own
   text color because system label colors turn black in light mode), are
@@ -1259,6 +1259,20 @@ refraction or thickness, so the variant is the only glass knob a look can have.
   mode. Looks on the regular variant render as before with the setting on or off.
 - **Not verified here.** The appearance cannot be captured from the build shell
   (no Screen Recording permission); the live check is by eye.
+
+## The looks engine moved to Vizpr/Looks (2026-10-27)
+
+The looks engine moved out of `Vizpr/Overlay/` into `Vizpr/Looks/` with no
+behavior change: `OverlayLook`, `LookStyle`, `SlabStyle`, `LookFiles`,
+`PaneSurface`, `PaneEffects`, `LightLayer`, `PaneLight.metal`, `SlabSurface`,
+`BackdropLayer` and `Color+Hex`, plus the built-in look files in
+`Vizpr/Looks/BuiltIn/`. Earlier entries above still give the old `Vizpr/Overlay/`
+paths. `VizprSettings.sanitizeHex` and `VizprSettings.mutableOpacityRatio` became
+`OverlayLook.sanitizeHex` and `OverlayLook.mutableOpacityRatio`, so the folder's
+only inputs from the app are `OverlayLayout.restingSize` and
+`TargetAppMetrics.cornerOverhang`. The authoring guide is `Vizpr/Looks/README.md`;
+`project.yml` excludes it from the app bundle, while the three JSON files stay in
+the bundle's `Resources`.
 
 ## Environment prerequisites discovered
 

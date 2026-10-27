@@ -7,7 +7,7 @@ import SwiftUI
 /// also shipped as JSON files.
 ///
 /// The settled:mutable text ratio is NOT part of a look. It is the trust
-/// contract (VizprSettings.mutableOpacityRatio): a look recolors it, never
+/// contract (OverlayLook.mutableOpacityRatio): a look recolors it, never
 /// collapses it.
 struct OverlayLook: Codable, Equatable, Sendable, Identifiable {
     enum Surface: String, Codable, Sendable, CaseIterable { case glass, slab, solid }
@@ -16,6 +16,10 @@ struct OverlayLook: Codable, Equatable, Sendable, Identifiable {
     enum WordAppearance: String, Codable, Sendable, CaseIterable { case instant, fade, blurIn }
 
     static let defaultTintHex = "A16FDF"
+    /// The locked settled:mutable text opacity ratio. Not a look field and not
+    /// a setting: it is the trust contract's floor, so a look file cannot
+    /// change it.
+    static let mutableOpacityRatio = 0.55
     static let cornerRadiusRange = 8.0...40.0
     static let tintStrengthRange = 0.0...0.5
     static let fontSizeRange = 12.0...28.0
@@ -91,6 +95,15 @@ struct OverlayLook: Codable, Equatable, Sendable, Identifiable {
     /// id and name, so those two are placeholders.
     static let mergeTemplate = OverlayLook(id: glass.id, name: "")
 
+    /// Strips `#` and whitespace and uppercases; nil unless what remains is
+    /// six hex digits. Each `clamped()` falls back to its field's default on nil.
+    static func sanitizeHex(_ hex: String) -> String? {
+        let cleaned = hex.trimmingCharacters(in: .whitespaces)
+            .replacingOccurrences(of: "#", with: "").uppercased()
+        guard cleaned.count == 6, cleaned.allSatisfy(\.isHexDigit) else { return nil }
+        return cleaned
+    }
+
     static func isBuiltIn(_ id: UUID) -> Bool { builtIns.contains { $0.id == id } }
     var isBuiltIn: Bool { Self.isBuiltIn(id) }
 
@@ -99,10 +112,10 @@ struct OverlayLook: Codable, Equatable, Sendable, Identifiable {
         look.name = String(look.name.prefix(40))
         look.cornerRadius = min(max(look.cornerRadius, Self.cornerRadiusRange.lowerBound),
                                 Self.cornerRadiusRange.upperBound)
-        look.tintHex = VizprSettings.sanitizeHex(look.tintHex) ?? Self.defaultTintHex
+        look.tintHex = OverlayLook.sanitizeHex(look.tintHex) ?? Self.defaultTintHex
         look.tintStrength = min(max(look.tintStrength, Self.tintStrengthRange.lowerBound),
                                 Self.tintStrengthRange.upperBound)
-        look.textBaseHex = look.textBaseHex.flatMap(VizprSettings.sanitizeHex)
+        look.textBaseHex = look.textBaseHex.flatMap(OverlayLook.sanitizeHex)
         look.slab = look.slab.clamped()
         look.style = look.style.clamped()
         look.fontSize = min(max(look.fontSize, Self.fontSizeRange.lowerBound),
@@ -126,7 +139,7 @@ struct OverlayLook: Codable, Equatable, Sendable, Identifiable {
     }
 
     var mutableStyle: AnyShapeStyle {
-        textBaseColor.map { AnyShapeStyle($0.opacity(VizprSettings.mutableOpacityRatio)) }
+        textBaseColor.map { AnyShapeStyle($0.opacity(OverlayLook.mutableOpacityRatio)) }
             ?? AnyShapeStyle(.secondary)
     }
 
