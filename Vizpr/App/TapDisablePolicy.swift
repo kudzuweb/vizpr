@@ -39,12 +39,6 @@ struct TapDisablePolicy: Sendable {
         return latched ? .giveUp(count: disables.count) : .reArm(count: disables.count)
     }
 
-    /// Close the latch without a disable: the tap is being removed for another
-    /// reason and must not come back.
-    mutating func latch() {
-        latched = true
-    }
-
     /// An explicit user action reopens the latch and forgets the old disables.
     mutating func reset() {
         latched = false

@@ -56,12 +56,8 @@ enum BundleIdentity {
         return resources.first { !probe.resourceExists($0) }.map(Failure.resourceMissing)
     }
 
-    /// Whether `proc_pidpath` still resolves this process to a file.
-    static func processPathResolves() -> Bool {
-        processFileID() != nil
-    }
-
-    fileprivate static func processFileID() -> FileID? {
+    /// The file `proc_pidpath` reports for this process, or nil if it fails.
+    static func processFileID() -> FileID? {
         // proc_pidpath's documented buffer size, PROC_PIDPATHINFO_MAXSIZE (a macro Swift cannot import).
         var buffer = [UInt8](repeating: 0, count: 4 * Int(MAXPATHLEN))
         let length = proc_pidpath(getpid(), &buffer, UInt32(buffer.count))

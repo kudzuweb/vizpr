@@ -49,6 +49,9 @@ final class HotkeyMonitor: @unchecked Sendable {
     private struct Shared: @unchecked Sendable {
         var port: CFMachPort?
         var hasObservedEvent = false
+        /// Set by the bundle-loss teardown and never cleared: the app is about to
+        /// quit, so no tap may be installed again, whatever `Restart Hotkey` does.
+        var exiting = false
         var disablePolicy = TapDisablePolicy(
             limit: Tuning.tapDisableLimit, window: .seconds(Tuning.tapDisableWindowSeconds)
         )
@@ -130,7 +133,7 @@ final class HotkeyMonitor: @unchecked Sendable {
     @MainActor
     @discardableResult
     func start() -> Bool {
-        guard shared.withLockUnchecked({ $0.disablePolicy.mayArm }) else { return false }
+        guard shared.withLockUnchecked({ $0.disablePolicy.mayArm && !$0.exiting }) else { return false }
         guard machPort == nil else { return true }
         // Created here, on the caller's thread, so the Bool result is immediate;
         // only the run-loop source is attached on the hotkey thread.
@@ -153,7 +156,7 @@ final class HotkeyMonitor: @unchecked Sendable {
         // A give-up can land between the check above and here; the latch is
         // re-read under the same lock that publishes the port.
         let accepted = shared.withLockUnchecked { state -> Bool in
-            guard state.disablePolicy.mayArm else { return false }
+            guard state.disablePolicy.mayArm, !state.exiting else { return false }
             state.port = port
             return true
         }
@@ -164,6 +167,17 @@ final class HotkeyMonitor: @unchecked Sendable {
         }
         let tap = InstalledTap(port: port, source: CFMachPortCreateRunLoopSource(kCFAllocatorDefault, port, 0))
         runLoopThread.performAndWait { [self] in
+            // A teardown can take this port out of service between the publish
+            // above and this block; enabling it then would leave a live tap that
+            // nothing removes.
+            let publishedPort = shared.withLockUnchecked { $0.port.map(ObjectIdentifier.init) }
+            guard publishedPort == tap.port.map(ObjectIdentifier.init) else {
+                tap.port.map {
+                    CGEvent.tapEnable(tap: $0, enable: false)
+                    CFMachPortInvalidate($0)
+                }
+                return
+            }
             installed = tap
             if let source = tap.source { runLoopThread.add(source: source) }
             tap.port.map { CGEvent.tapEnable(tap: $0, enable: true) }
@@ -221,19 +235,19 @@ final class HotkeyMonitor: @unchecked Sendable {
     /// the rest is queued on the hotkey thread, which calls `completion` when
     /// done. Never waits on main or on the hotkey thread.
     func tearDownForExit(completion: @escaping @Sendable () -> Void) {
-        let disabledTap = disableAndDetachPort(latching: true)
+        let disabledTap = disableAndDetachPort(exiting: true)
         runLoopThread.perform { [self] in
             removeInstalledTap(matching: disabledTap)
             completion()
         }
     }
 
-    /// Disable the tap and clear the shared port, optionally closing the give-up
-    /// latch in the same lock hold. Safe from any thread, including inside the
+    /// Disable the tap and clear the shared port, optionally marking the monitor
+    /// as exiting in the same lock hold. Safe from any thread, including inside the
     /// tap callback. Returns the identity of the port taken out of service.
-    private func disableAndDetachPort(latching: Bool) -> ObjectIdentifier? {
+    private func disableAndDetachPort(exiting: Bool) -> ObjectIdentifier? {
         let port = shared.withLockUnchecked { state -> CFMachPort? in
-            if latching { state.disablePolicy.latch() }
+            if exiting { state.exiting = true }
             defer { state.port = nil }
             return state.port
         }
@@ -378,9 +392,14 @@ final class HotkeyMonitor: @unchecked Sendable {
     /// Resets the machine as well as the edges: a tap that was disabled
     /// mid-session already lost events, and a clean idle is fail-open.
     private func recoverFromTimeout(origin: String) {
-        // Disables already in flight when the monitor gave up change nothing.
-        guard shared.withLockUnchecked({ $0.disablePolicy.mayArm }) else { return }
-        let verdict = shared.withLockUnchecked { $0.disablePolicy.recordDisable(at: nowMonotonic()) }
+        // Disables already in flight when the monitor gave up or began exiting
+        // change nothing; checked and counted in one lock hold so a teardown
+        // cannot land between the two.
+        let verdict = shared.withLockUnchecked { state -> TapDisablePolicy.Verdict? in
+            guard state.disablePolicy.mayArm, !state.exiting else { return nil }
+            return state.disablePolicy.recordDisable(at: nowMonotonic())
+        }
+        guard let verdict else { return }
         switch verdict {
         case .reArm(let count):
             Self.log.notice("tap disabled by timeout (\(origin, privacy: .public)): \(count) in window — re-enabling")
@@ -404,7 +423,7 @@ final class HotkeyMonitor: @unchecked Sendable {
     /// was disabled); the rest of the teardown is queued on the next pass of the
     /// hotkey thread. Uses only CF and CGEvent calls, never waits on main.
     private func giveUp() {
-        let disabledTap = disableAndDetachPort(latching: false)
+        let disabledTap = disableAndDetachPort(exiting: false)
         runLoopThread.perform { [self] in removeInstalledTap(matching: disabledTap) }
         let handler = shared.withLockUnchecked { $0.onGiveUp }
         if let handler { Task { @MainActor in handler() } }

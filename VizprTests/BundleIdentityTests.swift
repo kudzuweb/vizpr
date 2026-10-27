@@ -63,7 +63,6 @@ struct BundleIdentityTests {
 
     @Test("The real process and bundle pass the system probe's identity checks")
     func systemProbeResolvesThisProcess() {
-        #expect(BundleIdentity.processPathResolves())
-        #expect(BundleIdentity.Probe.system.processFileID() != nil)
+        #expect(BundleIdentity.firstFailure(.system, resources: []) == nil)
     }
 }

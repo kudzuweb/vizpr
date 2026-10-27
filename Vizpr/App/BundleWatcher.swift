@@ -12,7 +12,9 @@ import os
 ///
 /// - a vnode watch on the executable for delete or rename, the primary signal;
 ///   it catches an atomic replace, where `proc_pidpath` keeps answering;
-/// - a 2 s `proc_pidpath` poll, which catches losses the vnode watch misses.
+/// - a 2 s `proc_pidpath` poll that fails when the process no longer resolves to
+///   the file it launched from, which catches losses and replacements the vnode
+///   watch misses.
 ///
 /// Renaming the whole bundle fires neither and is correct: the identity stays
 /// resolvable.
@@ -32,6 +34,7 @@ final class BundleWatcher: @unchecked Sendable {
     private static let teardownGrace = DispatchTimeInterval.seconds(1)
 
     private let executableURL: URL
+    private let launchFileID: BundleIdentity.FileID
     private let terminatesProcess: Bool
     private let tearDownTap: @Sendable (_ done: @escaping @Sendable () -> Void) -> Void
     private let presentLoss: @Sendable () -> Void
@@ -45,6 +48,8 @@ final class BundleWatcher: @unchecked Sendable {
     private var lost = false
 
     /// - Parameters:
+    ///   - launchFileID: the file the process launched from, which the poll compares
+    ///     against.
     ///   - terminatesProcess: false under a test host, where the watcher tears the
     ///     tap down but never arms `_exit`, matching `failLoudly`.
     ///   - tearDownTap: queues the tap teardown on the hotkey thread without
@@ -52,11 +57,13 @@ final class BundleWatcher: @unchecked Sendable {
     ///   - presentLoss: shows the alert on main and terminates; it may block.
     init(
         executableURL: URL,
+        launchFileID: BundleIdentity.FileID,
         terminatesProcess: Bool,
         tearDownTap: @escaping @Sendable (_ done: @escaping @Sendable () -> Void) -> Void,
         presentLoss: @escaping @Sendable () -> Void
     ) {
         self.executableURL = executableURL
+        self.launchFileID = launchFileID
         self.terminatesProcess = terminatesProcess
         self.tearDownTap = tearDownTap
         self.presentLoss = presentLoss
@@ -68,8 +75,8 @@ final class BundleWatcher: @unchecked Sendable {
             let timer = DispatchSource.makeTimerSource(queue: queue)
             timer.schedule(deadline: .now() + Self.pollInterval, repeating: Self.pollInterval)
             timer.setEventHandler { [self] in
-                if !BundleIdentity.processPathResolves() {
-                    handleLoss("proc_pidpath no longer resolves this process")
+                if BundleIdentity.processFileID() != launchFileID {
+                    handleLoss("proc_pidpath no longer resolves this process to the file it launched from")
                 }
             }
             pollTimer = timer

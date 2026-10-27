@@ -18,9 +18,11 @@ extension AppDelegate {
             )
             return false
         }
-        guard let executableURL = Bundle.main.executableURL else { return true }
+        guard let executableURL = Bundle.main.executableURL,
+              let launchFileID = BundleIdentity.processFileID() else { return true }
         let watcher = BundleWatcher(
             executableURL: executableURL,
+            launchFileID: launchFileID,
             terminatesProcess: !Self.isHostedByTests,
             tearDownTap: { [hotkeyMonitor] done in hotkeyMonitor.tearDownForExit(completion: done) },
             presentLoss: { [weak self] in

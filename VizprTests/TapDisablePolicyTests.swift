@@ -75,13 +75,4 @@ struct TapDisablePolicyTests {
         #expect(policy.mayArm)
         #expect(policy.recordDisable(at: at(3)) == .reArm(count: 1))
     }
-
-    @Test("latch() closes the latch with no disable, for a tap removed for another reason")
-    func explicitLatch() {
-        var policy = policy()
-        policy.latch()
-        #expect(!policy.mayArm)
-        policy.reset()
-        #expect(policy.mayArm)
-    }
 }
