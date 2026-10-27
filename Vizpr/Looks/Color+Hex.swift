@@ -1,7 +1,7 @@
 import SwiftUI
 
 extension Color {
-    /// 6-digit RGB hex (pre-sanitized by `VizprSettings.sanitizeHex`).
+    /// 6-digit RGB hex (pre-sanitized by `OverlayLook.sanitizeHex`).
     init?(hex: String) {
         guard hex.count == 6, let value = UInt32(hex, radix: 16) else { return nil }
         self.init(

@@ -58,7 +58,7 @@ struct FillStyle: Codable, Equatable, Sendable {
 
     func clamped() -> FillStyle {
         FillStyle(frost: frost.clamped(to: 0...1),
-                  colorHex: VizprSettings.sanitizeHex(colorHex) ?? FillStyle().colorHex)
+                  colorHex: OverlayLook.sanitizeHex(colorHex) ?? FillStyle().colorHex)
     }
 }
 
@@ -74,7 +74,7 @@ struct BackdropStyle: Codable, Equatable, Sendable {
 
     func clamped() -> BackdropStyle {
         BackdropStyle(enabled: enabled,
-                      colorHex: VizprSettings.sanitizeHex(colorHex) ?? BackdropStyle().colorHex,
+                      colorHex: OverlayLook.sanitizeHex(colorHex) ?? BackdropStyle().colorHex,
                       strength: strength.clamped(to: 0...0.9),
                       feather: feather.clamped(to: 0...60))
     }
@@ -116,7 +116,7 @@ struct BorderStyle: Codable, Equatable, Sendable {
     func clamped() -> BorderStyle {
         BorderStyle(enabled: enabled,
                     width: width.clamped(to: 0.5...6),
-                    colorHex: VizprSettings.sanitizeHex(colorHex) ?? BorderStyle().colorHex,
+                    colorHex: OverlayLook.sanitizeHex(colorHex) ?? BorderStyle().colorHex,
                     opacity: opacity.clamped(to: 0...1))
     }
 }
@@ -130,7 +130,7 @@ struct GlowStyle: Codable, Equatable, Sendable {
 
     func clamped() -> GlowStyle {
         GlowStyle(enabled: enabled,
-                  colorHex: VizprSettings.sanitizeHex(colorHex) ?? GlowStyle().colorHex,
+                  colorHex: OverlayLook.sanitizeHex(colorHex) ?? GlowStyle().colorHex,
                   radius: radius.clamped(to: 1...60),
                   strength: strength.clamped(to: 0...1))
     }
@@ -146,7 +146,7 @@ struct ShadowStyle: Codable, Equatable, Sendable {
 
     func clamped() -> ShadowStyle {
         ShadowStyle(enabled: enabled,
-                    colorHex: VizprSettings.sanitizeHex(colorHex) ?? ShadowStyle().colorHex,
+                    colorHex: OverlayLook.sanitizeHex(colorHex) ?? ShadowStyle().colorHex,
                     radius: radius.clamped(to: 0...60),
                     x: x.clamped(to: -40...40),
                     y: y.clamped(to: -40...40),
@@ -189,7 +189,7 @@ struct TextStyle: Codable, Equatable, Sendable {
                   weight: weight,
                   lineSpacing: lineSpacing.clamped(to: 0...16),
                   glowEnabled: glowEnabled,
-                  glowColorHex: VizprSettings.sanitizeHex(glowColorHex) ?? TextStyle().glowColorHex,
+                  glowColorHex: OverlayLook.sanitizeHex(glowColorHex) ?? TextStyle().glowColorHex,
                   glowRadius: glowRadius.clamped(to: 0...20))
     }
 }
@@ -202,7 +202,7 @@ struct DotStyle: Codable, Equatable, Sendable {
     var pulse = false
 
     func clamped() -> DotStyle {
-        DotStyle(colorHex: colorHex.flatMap(VizprSettings.sanitizeHex),
+        DotStyle(colorHex: colorHex.flatMap(OverlayLook.sanitizeHex),
                  size: size.clamped(to: 3...16),
                  pulse: pulse)
     }

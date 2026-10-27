@@ -21,7 +21,7 @@ struct SlabStyle: Codable, Equatable, Sendable {
 
     func clamped() -> SlabStyle {
         var style = self
-        let colors = style.meshColorsHex.compactMap(VizprSettings.sanitizeHex)
+        let colors = style.meshColorsHex.compactMap(OverlayLook.sanitizeHex)
         style.meshColorsHex = colors.count == 9 ? colors : Self.defaultMeshColors
         style.meshDrift = min(max(style.meshDrift, 0), 0.5)
         style.meshLoopSeconds = min(max(style.meshLoopSeconds, 2), 60)

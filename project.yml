@@ -74,6 +74,8 @@ targets:
           # would also copy it as a resource, which trips Xcode's
           # entitlements-modified-during-build signature check.
           - "Vizpr.entitlements"
+          # The authoring guide is read in the repo; the app does not need it.
+          - "Looks/README.md"
       # Bundled models ship as a folder reference copied verbatim: .mlmodelc is
       # already-compiled CoreML output, not something Xcode should process.
       # Lands at Contents/Resources/Models/ in the app bundle.
