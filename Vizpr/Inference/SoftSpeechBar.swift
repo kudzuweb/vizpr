@@ -31,10 +31,6 @@ struct SoftRuns: Equatable {
 enum SoftSpeechBar {
 
     /// Whether a final's text may be emitted.
-    static func keeps(_ cut: TimedCut.Cut, span: Range<Int>, runs: SoftRuns) -> Bool {
-        keeps(cut, entirelySoft: runs.covers(span))
-    }
-
     static func keeps(_ cut: TimedCut.Cut, entirelySoft: Bool) -> Bool {
         !entirelySoft || cut.confidence >= Tuning.softSpeechMinConfidence
     }

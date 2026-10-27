@@ -998,13 +998,14 @@ stand. The decisions, by step:
 - **The engine's input carries pause marks.** `TranscriptionEngine.transcribe`
   takes `AsyncStream<AudioInput>`, where `AudioInput` is `.samples([Float])` or
   `.pause`.
-  *(2026-10-27: `.samples` also carries `soft`; see "Speech that resumes soon
-  after a pause is kept".)* `AudioPipeline` yields `.pause` after the gate's batches for a
+  `AudioPipeline` yields `.pause` after the gate's batches for a
   capture batch whose VAD updates contain a `speechEnd` event, one per event.
   The mark carries no position: the gate forwards about 1 s of audio after
   speech stops and then nothing, so the engine's own sample count when the
   mark arrives is the pause. The VAD still never decides commits; a mark only
-  lets the engine close a window.
+  lets the engine close a window. *(2026-10-27: `.samples` also carries `soft`,
+  and a soft span after a speech end is forwarded until it closes, ending at
+  its own `.pause`; see "Speech that resumes soon after a pause is kept".)*
 
 - **The engine owns its windows.** `SlidingWindowAsrManager` is gone; the
   batch `AsrManager` does every decode, in one decode task per session.
@@ -1267,9 +1268,10 @@ The fix has two parts:
   a trailing flagged word that decodes under 0.8 is now dropped.
 
 The bar is the noise guard, and the threshold is not: 25 of 360 logged inactive
-chunks (6.9%) scored 0.6 or more, so false soft opens are routine. The bar
-never removes a word the previous build kept, because audio that was entirely
-soft never reached the engine. Breath is guarded only by the bar.
+chunks (6.9%) scored 0.6 or more, so false soft opens are routine. Inside a
+soft span the bar never removes a word the previous build kept, because that
+audio never reached the engine. The one exception is the `end()` release
+above. Breath is guarded only by the bar.
 
 Constants, with their evidence in `Tuning.swift`:
 

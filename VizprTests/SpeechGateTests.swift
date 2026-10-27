@@ -182,10 +182,10 @@ extension SpeechGateTests {
     func windowExpiry() {
         var inside = gateAfterSpeechEnd()
         let nearEnd = [Float](repeating: 2, count: Tuning.reonsetWindowSamples - 2 * Self.chunk)
-        let transition1 = inside.feed(nearEnd, speechActive: false, chunkProbability: 0.1).softTransition
-        #expect(transition1 == nil)
-        let transition2 = inside.feed(chunkBatch(3), speechActive: false, chunkProbability: 0.7).softTransition
-        #expect(transition2 == .opened)
+        let beforeWindowEnd = inside.feed(nearEnd, speechActive: false, chunkProbability: 0.1).softTransition
+        #expect(beforeWindowEnd == nil)
+        let atWindowEnd = inside.feed(chunkBatch(3), speechActive: false, chunkProbability: 0.7).softTransition
+        #expect(atWindowEnd == .opened)
 
         var outside = gateAfterSpeechEnd()
         let pastEnd = [Float](repeating: 2, count: Tuning.reonsetWindowSamples + 1_600)
@@ -197,23 +197,23 @@ extension SpeechGateTests {
     func noChaining() {
         // A span that closes inside the window may re-open.
         var gate = gateAfterSpeechEnd()
-        let transition3 = gate.feed(chunkBatch(2), speechActive: false, chunkProbability: 0.7).softTransition
-        #expect(transition3 == .opened)
+        let firstOpen = gate.feed(chunkBatch(2), speechActive: false, chunkProbability: 0.7).softTransition
+        #expect(firstOpen == .opened)
         for _ in 0..<2 { _ = gate.feed(chunkBatch(3), speechActive: false, chunkProbability: 0.1) }
-        let transition4 = gate.feed(chunkBatch(4), speechActive: false, chunkProbability: 0.1).softTransition
-        #expect(transition4 == .closed)
-        let transition5 = gate.feed(chunkBatch(5), speechActive: false, chunkProbability: 0.7).softTransition
-        #expect(transition5 == .opened)
+        let closed = gate.feed(chunkBatch(4), speechActive: false, chunkProbability: 0.1).softTransition
+        #expect(closed == .closed)
+        let reopened = gate.feed(chunkBatch(5), speechActive: false, chunkProbability: 0.7).softTransition
+        #expect(reopened == .opened)
 
         // A span that runs past the window and then closes opens no new window.
         var late = gateAfterSpeechEnd()
-        let transition6 = late.feed(chunkBatch(2), speechActive: false, chunkProbability: 0.7).softTransition
-        #expect(transition6 == .opened)
+        let lateOpen = late.feed(chunkBatch(2), speechActive: false, chunkProbability: 0.7).softTransition
+        #expect(lateOpen == .opened)
         let chunksInWindow = Tuning.reonsetWindowSamples / Self.chunk + 2
         for _ in 0..<chunksInWindow { _ = late.feed(chunkBatch(3), speechActive: false, chunkProbability: 0.8) }
         for _ in 0..<2 { _ = late.feed(chunkBatch(4), speechActive: false, chunkProbability: 0.1) }
-        let transition7 = late.feed(chunkBatch(5), speechActive: false, chunkProbability: 0.1).softTransition
-        #expect(transition7 == .closed)
+        let lateClose = late.feed(chunkBatch(5), speechActive: false, chunkProbability: 0.1).softTransition
+        #expect(lateClose == .closed)
         let afterClose = late.feed(chunkBatch(6), speechActive: false, chunkProbability: 0.9)
         #expect(afterClose == SpeechGate.Output())
     }
@@ -248,8 +248,8 @@ extension SpeechGateTests {
         _ = gate.feed(chunkBatch(7), speechActive: false, chunkProbability: nil)
         let still = gate.feed(chunkBatch(8), speechActive: false, chunkProbability: 0.1)
         #expect(still.softTransition == nil)
-        let transition8 = gate.feed(chunkBatch(9), speechActive: false, chunkProbability: 0.1).softTransition
-        #expect(transition8 == .closed)
+        let closedAfterReset = gate.feed(chunkBatch(9), speechActive: false, chunkProbability: 0.1).softTransition
+        #expect(closedAfterReset == .closed)
     }
 
     @Test("Opening releases the held batches and the opening batch, all soft, in order")
@@ -271,8 +271,8 @@ extension SpeechGateTests {
         #expect(output.batches.allSatisfy { !$0.soft })
         // The next speech end is a real flip and opens a fresh window.
         _ = gate.feed(chunkBatch(4), speechActive: false, chunkProbability: 0.2)
-        let transition9 = gate.feed(chunkBatch(5), speechActive: false, chunkProbability: 0.7).softTransition
-        #expect(transition9 == .opened)
+        let openedAfterActivation = gate.feed(chunkBatch(5), speechActive: false, chunkProbability: 0.7).softTransition
+        #expect(openedAfterActivation == .opened)
     }
 
     @Test("end() flags what it releases as soft once the session has triggered")

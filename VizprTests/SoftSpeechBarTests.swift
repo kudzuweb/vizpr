@@ -27,8 +27,9 @@ struct SoftSpeechBarTests {
     func finalBar() {
         let soft = runs(32_000 ..< 96_000)
         let span = 32_000 ..< 96_000
-        #expect(!SoftSpeechBar.keeps(cut(confidence: 0.79, cutStart: 32_000, cutEnd: 96_000), span: span, runs: soft))
-        #expect(SoftSpeechBar.keeps(cut(confidence: 0.81, cutStart: 32_000, cutEnd: 96_000), span: span, runs: soft))
+        let entirelySoft = soft.covers(span)
+        #expect(!SoftSpeechBar.keeps(cut(confidence: 0.79, cutStart: 32_000, cutEnd: 96_000), entirelySoft: entirelySoft))
+        #expect(SoftSpeechBar.keeps(cut(confidence: 0.81, cutStart: 32_000, cutEnd: 96_000), entirelySoft: entirelySoft))
     }
 
     @Test("The left context before cutStart does not make a soft cut mixed")
@@ -36,15 +37,15 @@ struct SoftSpeechBarTests {
         // The decode starts 2 s (32,000 samples) before the cut, in ordinary audio.
         let soft = runs(32_000 ..< 96_000)
         let low = cut(confidence: 0.5, decodeStart: 0, cutStart: 32_000, cutEnd: 96_000)
-        #expect(!SoftSpeechBar.keeps(low, span: 32_000 ..< 96_000, runs: soft))
+        #expect(!SoftSpeechBar.keeps(low, entirelySoft: soft.covers(32_000 ..< 96_000)))
     }
 
     @Test("A cut that reaches into ordinary audio is kept at 0.5")
     func mixedCutKept() {
         let soft = runs(32_000 ..< 64_000)
         let low = cut(confidence: 0.5, cutStart: 32_000, cutEnd: 96_000)
-        #expect(SoftSpeechBar.keeps(low, span: 32_000 ..< 96_000, runs: soft))
-        #expect(SoftSpeechBar.keeps(low, span: 32_000 ..< 96_000, runs: SoftRuns()), "no soft audio at all")
+        #expect(SoftSpeechBar.keeps(low, entirelySoft: soft.covers(32_000 ..< 96_000)))
+        #expect(SoftSpeechBar.keeps(low, entirelySoft: SoftRuns().covers(32_000 ..< 96_000)), "no soft audio at all")
     }
 
     @Test("A cut spanning two separate soft runs is mixed")

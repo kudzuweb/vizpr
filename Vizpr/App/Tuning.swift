@@ -44,7 +44,10 @@ enum Tuning {
     /// text. Two speech slices decoded at 0.944 and 0.962 and noise slices at
     /// 0.10 to 0.51. 9 of 583 logged finals (1.5%) and 5 of 178 finals of three
     /// words or fewer (2.8%) fall below 0.80 (that log includes some test-suite
-    /// traffic). Entirely soft audio is audio the gate dropped before this
-    /// existed, so a high bar cannot lose a word that was kept before.
+    /// traffic). Audio forwarded inside a soft span is audio the gate dropped
+    /// before this existed, so the bar cannot lose a word kept before there.
+    /// The exception is the trailing hold `SpeechGate.end()` releases after a
+    /// trigger, which the previous build kept at any confidence and which is
+    /// now held to this bar.
     static let softSpeechMinConfidence: Float = 0.8
 }

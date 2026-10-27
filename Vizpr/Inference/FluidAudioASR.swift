@@ -217,9 +217,10 @@ actor FluidAudioASR: TranscriptionEngine {
             )
             if let keptEnd = cut.keptEnd, !cut.text.isEmpty {
                 let span = plan.cutStart ..< cutEnd
-                let keeps = SoftSpeechBar.keeps(cut, span: span, runs: softRuns)
+                let entirelySoft = softRuns.covers(span)
+                let keeps = SoftSpeechBar.keeps(cut, entirelySoft: entirelySoft)
                 #if DICT_DEV_LOG
-                if softRuns.covers(span) {
+                if entirelySoft {
                     Self.logSoftSpeech(kept: keeps, confidence: cut.confidence, samples: span.count)
                 }
                 #endif
@@ -374,22 +375,21 @@ actor FluidAudioASR: TranscriptionEngine {
                     // The tail's final text is one more decode over everything
                     // past the boundary, with left context.
                     if let work = await self.takeCommitPlan(session: session) {
-                        let plan = work.plan, samples = work.samples
                         #if DICT_DEV_LOG
                         let started = ContinuousClock.now
                         #endif
-                        let result = await self.decode(samples)
+                        let result = await self.decode(work.samples)
                         let cut = result.map {
                             TimedCut.cut(
-                                result: $0, decodeStart: plan.range.lowerBound,
-                                cutStart: plan.cutStart, cutEnd: plan.cutEnd,
-                                startTolerance: plan.startTolerance
+                                result: $0, decodeStart: work.plan.range.lowerBound,
+                                cutStart: work.plan.cutStart, cutEnd: work.plan.cutEnd,
+                                startTolerance: work.plan.startTolerance
                             )
                         }
                         #if DICT_DEV_LOG
                         let outcome = cut?.text.isEmpty == false ? "decoded" : "empty"
                         VizprTranscriptLogger.note(
-                            "commit tail: \(outcome) \(Self.milliseconds(since: started)) ms over \(samples.count) samples"
+                            "commit tail: \(outcome) \(Self.milliseconds(since: started)) ms over \(work.samples.count) samples"
                         )
                         #endif
                         if let cut, !cut.text.isEmpty {
@@ -397,7 +397,7 @@ actor FluidAudioASR: TranscriptionEngine {
                             #if DICT_DEV_LOG
                             if work.entirelySoft {
                                 Self.logSoftSpeech(
-                                    kept: keeps, confidence: cut.confidence, samples: plan.cutEnd - plan.cutStart
+                                    kept: keeps, confidence: cut.confidence, samples: work.plan.cutEnd - work.plan.cutStart
                                 )
                             }
                             #endif

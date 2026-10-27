@@ -323,8 +323,11 @@ struct FluidAudioASRTests {
     }
 
     /// The fixture speech at `gain` under seeded white noise of `noise`
-    /// amplitude, as 0.2 s batches with a closing pause mark.
-    private func degradedUtterance(gain: Float, noise: Float, soft: Bool) throws -> [AudioInput] {
+    /// amplitude, as 0.2 s batches, closed by a pause mark when `pause` is set.
+    /// Without one the session is under 12 s, so only the commit decode runs.
+    private func degradedUtterance(
+        gain: Float, noise: Float, soft: Bool, pause: Bool = true
+    ) throws -> [AudioInput] {
         var generator = SeededGenerator(seed: 9)
         let mixed = try fixtureSamples().map {
             $0 * gain + Float.random(in: -noise ... noise, using: &generator)
@@ -332,7 +335,7 @@ struct FluidAudioASRTests {
         let batches = stride(from: 0, to: mixed.count, by: 3200).map {
             AudioInput.samples(Array(mixed[$0 ..< min($0 + 3200, mixed.count)]), soft: soft)
         }
-        return batches + [.pause]
+        return pause ? batches + [.pause] : batches
     }
 
     @Test("Soft audio that decodes to a low-confidence hallucination yields no final and no draft text")
@@ -349,10 +352,22 @@ struct FluidAudioASRTests {
 
         let soft = try await run(engine, feeding: degradedUtterance(gain: 0.01, noise: 0.01, soft: true))
         #expect(finalTexts(soft.all.map(\.event)).isEmpty, "a soft hallucination became a final")
-        let lastDraft = soft.all.reversed().compactMap { entry -> String? in
-            if case let .draft(_, text) = entry.event { text } else { nil }
-        }.first
-        #expect(lastDraft?.isEmpty ?? true, "a soft hallucination is left as a draft: \(lastDraft ?? "")")
+        #expect(
+            !soft.all.contains { if case let .draft(_, text) = $0.event { !text.isEmpty } else { false } },
+            "a soft hallucination was shown as a draft"
+        )
+
+        // Without a pause mark no window is planned, so the commit decode
+        // judges the same audio.
+        let ordinaryTail = try await run(engine, feeding: degradedUtterance(gain: 0.01, noise: 0.01, soft: false, pause: false))
+        #expect(!finalTexts(ordinaryTail.all.map(\.event)).isEmpty, "the fixture no longer hallucinates unflagged at commit")
+
+        let softTail = try await run(engine, feeding: degradedUtterance(gain: 0.01, noise: 0.01, soft: true, pause: false))
+        #expect(finalTexts(softTail.all.map(\.event)).isEmpty, "a soft hallucination became a commit final")
+        #expect(
+            !softTail.all.contains { if case let .draft(_, text) = $0.event { !text.isEmpty } else { false } },
+            "a soft hallucination was shown as a draft at commit"
+        )
     }
 
     @Test("Soft audio that decodes above the confidence bar keeps its text")
