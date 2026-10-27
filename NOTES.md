@@ -1220,6 +1220,67 @@ reported as a `failed` record with "output was context echo only". It is now a
 change count these cancellations as failures: 23 of the 24 such failures in the
 2026-10-25 logs.
 
+## Tap safety: give up a refused tap, quit when the bundle disappears (2026-10-27)
+
+**Incident.** On 2026-10-27 a Debug Vizpr whose bundle had been deleted while it
+ran blocked the keyboard for eight minutes. The tap is an active `defaultTap`, so
+keystrokes pass through Vizpr and are re-posted on its behalf. Once the
+executable was gone, `tccd` could not resolve the process to a path
+(`proc_pidpath_audittoken() failed ... No such file or directory`), and from
+02:55:43 WindowServer refused Vizpr's events ("Sender is prohibited from
+synthesizing events"). The tap timed out 17 times; each time the callback and the
+2 s watchdog re-enabled it at once, so input flowed only in the instants between
+(the two keyDowns delivered in eight minutes landed in the same millisecond as the
+first two timeout log lines). The hotkey thread stayed healthy, and `isTapHealthy`
+reported healthy throughout. Evidence: `debug.log` and the unified log for
+02:40 to 03:15 CDT.
+
+**Rule 1: a tap the system keeps disabling is given up.** `TapDisablePolicy`
+(pure) counts timeout disables in a sliding window: `Tuning.tapDisableLimit` (3)
+inside `Tuning.tapDisableWindowSeconds` (30). The counter is fed at exactly two
+sites in `HotkeyMonitor`, the callback's `.tapDisabledByTimeout` case and the
+watchdog's found-dead branch, both through `recoverFromTimeout`; never from
+`stop()`, a suspend, or `.tapDisabledByUserInput` (secure input, which re-enables
+without counting). At the limit the monitor:
+
+1. disables the tap and clears the shared port at once (inside the callback, where
+   invalidating the port could be unsafe), which frees input;
+2. queues the rest of the teardown on the hotkey thread's next pass, which also
+   cancels any session;
+3. latches. `start()` returns false and creates nothing until `resetGiveUp()`.
+
+Only the menu's `Restart Hotkey` item clears the latch. `applySettings` (every
+settings change, including an overlay drag), `grantAccessibility` and
+`startHotkeyIfPermitted` never do, because they call `start()` with no intent to
+re-arm. `AppDelegate` shows a notice on give-up and, while given up, the menu
+shows the notice and `Restart Hotkey` in place of `Grant Accessibility…`.
+`isTapHealthy` is false once given up. Each counted disable logs its running
+count (unified log, and the dev log in Debug). Against the incident log the rule
+gives up at 02:55:54.6, eleven seconds after the refusals began. In normal use the
+dev log shows at most one disable per launch window.
+
+**Rule 2: quit when the app's own files disappear.**
+
+| Part | Behavior |
+|---|---|
+| Launch check | First in `applicationDidFinishLaunching`, before any audio pipeline or tap. `proc_pidpath(getpid())` must resolve and name the same file as `Bundle.main.executableURL` by device and inode (not by path string, which differs through a symlinked folder); `default.metallib`, `Models` and `mlx-swift_Cmlx.bundle` must exist under `Contents/Resources`. A failure calls `failLoudly` and returns, so a test host never installs the tap. The pure function is `BundleIdentity.firstFailure`. |
+| While running | `BundleWatcher` on its own queue: a vnode watch on the executable for delete or rename (primary; catches an atomic replace, where `proc_pidpath` keeps answering) and a 2 s `proc_pidpath` poll. Renaming the whole bundle fires neither, correctly, because the identity stays resolvable. An in-place rebuild of a running Debug app replaces the executable and quits that instance; that is intended. |
+| Shutdown | In order: arm `_exit(EXIT_FAILURE)` at 5 s on its own queue (`_exit`, not `exit`, which runs atexit handlers and C++ destructors that can block on a lock a wedged thread holds); log the reason; disable the tap, latch, and queue its teardown on the hotkey thread, signalling a semaphore. If that signals within 1 s the `_exit` moves out to 60 s and the alert shows on main (dismissing it terminates). If not, the hotkey thread is wedged: the 5 s `_exit` stands and no alert is shown. Terminating covers the audio pipeline (`applicationWillTerminate`). |
+| Test host | The tap is torn down but nothing quits, matching `failLoudly`. |
+
+**Not covered.** The gave-up path and the hotkey-thread teardown need a live tap
+and are untested; `docs/manual-hotkey-tests.md` lists the hand checks. The
+`BundleWatcher` logic was exercised in a harness with no tap (delete, atomic
+replace, whole-bundle rename), not in Vizpr itself.
+
+**Next.** Option 3 of the investigation: put only the events that must be
+consumed (flagsChanged) on the active tap and move keyDown to a second,
+listen-only tap, so a wedged active tap cannot block typing. It rewrites the tap
+setup that PR #27 (`hotkey-trigger`) also changes, so it is built after #27
+merges. If #27 merges second, the rebase keeps #27's `edges.reset(isKeyDown:)` in
+`reEnableTap` and its `keyUp` in the mask, and must confirm `setSuspended` does
+not feed the disable counter.
+
 ## Environment prerequisites discovered
 
 - **Metal Toolchain** is required to build the mlx-swift dependency (it compiles

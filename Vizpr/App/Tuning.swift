@@ -13,4 +13,17 @@ enum Tuning {
     /// Audio the draft track needs before its first decode, milliseconds.
     /// Tails shorter than 1.5 s decode to junk (field-observed; a constant since 2026-10-25).
     static let draftMinTailMs = 1500
+
+    /// Timeout disables the hotkey tap tolerates inside `tapDisableWindowSeconds`
+    /// before it stops re-arming. Evidence (debug.log, 2026-07-03 to 2026-10-27):
+    /// normal use shows at most one disable per launch window (six watchdog
+    /// finds on 2026-10-21 and 2026-10-24, each 3 to 20 s after a launch), and
+    /// the 2026-10-27 incident paced three timeouts in 7.5 s (02:55:47.09,
+    /// :50.56, :54.64). A limit of 3 leaves a margin of two over anything
+    /// observed in normal use and gives up 11 s into the incident.
+    static let tapDisableLimit = 3
+
+    /// The sliding window those disables are counted in, seconds. See
+    /// `tapDisableLimit` for the measurements.
+    static let tapDisableWindowSeconds = 30
 }

@@ -52,3 +52,21 @@ tccutil reset ListenEvent com.kudzuweb.vizpr
 
 - [ ] Relaunch: menu shows `Grant Accessibility…`. Click it → System Settings
       prompt. Grant, then relaunch when prompted. Menu clears, hotkey works.
+
+## Tap safety (2026-10-27)
+
+Neither check can be automated: the first needs a live tap, the second needs a
+copy of the app that is deleted while running. Run both on a spare Mac or in a
+VM, not on a machine whose keyboard you need: they exercise a tap that holds
+input.
+
+- [ ] **Bundle deleted while running**: launch a copy of the Debug app from a
+      scratch folder, then `rm -rf` the copy. Vizpr quits within 5 s; the
+      unified log (`log show --last 1m --predicate 'subsystem == "com.kudzuweb.vizpr"'`)
+      has a `Vizpr's app files are gone` line. With the tap installed, the
+      keyboard works the whole time.
+- [ ] **Refused tap gives up**: with a tap that macOS keeps disabling, three
+      timeout disables inside 30 s end in `giving up` in the dev log, a notice,
+      and a menu showing `Restart Hotkey` instead of `Grant Accessibility…`.
+      Changing a setting (an overlay drag) does not bring the tap back; `Restart
+      Hotkey` does.
