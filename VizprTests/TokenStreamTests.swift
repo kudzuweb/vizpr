@@ -63,6 +63,19 @@ struct TokenStreamTests {
         #expect(await ts.commit() == "The meeting is set.")
     }
 
+    @Test("An empty draft for the same window clears a shown draft, so commit injects none of it")
+    func clearingDraftLeavesNothingToCommit() async {
+        // The engine drops a soft tail under the confidence bar by publishing
+        // an empty draft after the draft the user already saw.
+        let ts = stream()
+        await ts.beginSession()
+        await ts.apply(.draft(windowID: 2, text: "soft tail"))
+        #expect(await ts.draft == "soft tail")
+        await ts.apply(.draft(windowID: 2, text: ""))
+        #expect(await ts.draft.isEmpty)
+        #expect(await ts.commit().isEmpty)
+    }
+
     @Test("A draft continues the live tail with a space and repeats nothing")
     func draftContinuesLiveTail() async {
         // Drafts start at the confirmed boundary, so a draft never re-covers

@@ -997,12 +997,15 @@ stand. The decisions, by step:
 
 - **The engine's input carries pause marks.** `TranscriptionEngine.transcribe`
   takes `AsyncStream<AudioInput>`, where `AudioInput` is `.samples([Float])` or
-  `.pause`. `AudioPipeline` yields `.pause` after the gate's batches for a
+  `.pause`.
+  `AudioPipeline` yields `.pause` after the gate's batches for a
   capture batch whose VAD updates contain a `speechEnd` event, one per event.
   The mark carries no position: the gate forwards about 1 s of audio after
   speech stops and then nothing, so the engine's own sample count when the
   mark arrives is the pause. The VAD still never decides commits; a mark only
-  lets the engine close a window.
+  lets the engine close a window. *(2026-10-27: `.samples` also carries `soft`,
+  and a soft span after a speech end is forwarded until it closes, ending at
+  its own `.pause`; see "Speech that resumes soon after a pause is kept".)*
 
 - **The engine owns its windows.** `SlidingWindowAsrManager` is gone; the
   batch `AsrManager` does every decode, in one decode task per session.
@@ -1280,6 +1283,95 @@ setup that PR #27 (`hotkey-trigger`) also changes, so it is built after #27
 merges. If #27 merges second, the rebase keeps #27's `edges.reset(isKeyDown:)` in
 `reEnableTap` and its `keyUp` in the mask, and must confirm `setSuspended` does
 not feed the disable counter.
+
+## Speech that resumes soon after a pause is kept (2026-10-27)
+
+On 2026-10-26 a second sentence spoken after a short pause never reached the
+engine. Replay of the saved raw audio reproduces the gated file's length to
+0.01 s. The VAD's `triggered` state fires again only on a chunk scoring 0.85 or
+more, and this microphone scored the second sentence's chunks 0.31, 0.66, 0.49,
+0.64, 0.35, 0.16 (chunks 28 to 33). The gate forwards nothing while the VAD is
+untriggered. Its held-speech flag (0.5) marked two chunks, but the hold keeps
+only 1 s after a trigger, so those batches were trimmed before the session
+ended. Level cannot tell this speech from the room: the speech chunks had rms
+0.0080 to 0.0086 against noise at 0.0066 to 0.0107.
+
+The fix has two parts:
+
+- **A lower re-onset threshold for a window after each speech end.**
+  `SpeechGate` opens a *soft span* when, within `Tuning.reonsetWindowMs` (3,000 ms
+  of captured audio, counted from the batch that flipped the gate to inactive),
+  a completed chunk scores at least `Tuning.reonsetProbability` (0.6). The held
+  batches and the opening batch are released in order. The span forwards until
+  `Tuning.softCloseChunks` (3) consecutive completed chunks score under 0.5; the
+  batch completing the third is forwarded, then the gate reports a close, which
+  `AudioPipeline` turns into a `.pause`, so the soft span is its own pause
+  window. Nothing restarts the window and a soft span never opens one, so noise
+  cannot chain windows; a span that closes inside the window may re-open. The
+  flipping batch cannot open a span. A real VAD activation turns a soft span
+  into ordinary active audio.
+- **A confidence bar on audio only the lower threshold let in.** Every batch
+  the gate forwards carries `soft` (`AudioInput.samples([Float], soft: Bool)`).
+  `FluidAudioASR` records the soft batches as absolute sample runs
+  (`SoftRuns`, merged when contiguous, trimmed with the buffer). A final whose
+  cut span `[cutStart, cutEnd)` lies inside one run (the 2 s of left context
+  and the start tolerance are not part of the span), and a draft whose range
+  does, keeps its text only at `Tuning.softSpeechMinConfidence` (0.8) or more.
+  A final that mixes soft and ordinary audio is judged as before. A dropped
+  final is an empty cut: the window still advances and nothing re-decodes it.
+  The engine also publishes an empty draft for that window id, so a draft
+  already on screen cannot reach `TokenStream.commit()`, which returns settled
+  + live + draft. A dropped commit final yields the same empty draft directly
+  before the stream finishes, because `emitTailDraft` refuses after
+  `closeDecoding`. No entirely soft audio under the bar reaches the return
+  value of `TokenStream.commit()` by a final, a draft or a capped settle.
+  `end()` flags the batches it releases soft once the session has triggered, so
+  a trailing flagged word that decodes under 0.8 is now dropped.
+
+The bar is the noise guard, and the threshold is not: 25 of 360 logged inactive
+chunks (6.9%) scored 0.6 or more, so false soft opens are routine. Inside a
+soft span the bar never removes a word the previous build kept, because that
+audio never reached the engine. The one exception is the `end()` release
+above. Breath is guarded only by the bar.
+
+Constants, with their evidence in `Tuning.swift`:
+
+| Constant | Value | Margin or count |
+|---|---|---|
+| `reonsetProbability` | 0.6 | Room noise peaked at 0.37 (0.23 margin); the speech chunks that open it scored 0.66 and 0.64 (0.04 to 0.06). First move if a soft resumption is missed: 0.55. |
+| `reonsetWindowMs` | 3,000 | One observation: the first qualifying chunk ended 0.77 s after the flip. False opens scale with the length. |
+| `softSpeechMinConfidence` | 0.8 | Speech slices decoded at 0.944 and 0.962, noise slices at 0.10 to 0.51; 9 of 583 logged finals (1.5%) and 5 of 178 finals of three words or fewer (2.8%) are under 0.80. |
+| `softCloseChunks` | 3 | About 0.77 s, matching the VAD's 0.75 s minimum silence. On the recorded sequence it closes on chunk 34 (8.70 s), past the last word at 8.56 s; two would close at 8.50 s and clip it. |
+
+Replay of `20261026-151336-raw.wav` through the shipped gate: ordinary audio
+0.00 to 6.60 s, then a soft span from 6.60 to 8.80 s (opened by chunk 29, closed
+by chunk 34, one pause), 100% of the second sentence's words (6.96 to 8.56 s)
+forwarded, 8.80 s of 9.48 s in all.
+
+Dev log (Debug builds, numbers only): `gate: soft open (chunk N, prob 0.xx)`,
+`gate: soft close (chunk N)`, and for each entirely soft final `soft speech:
+kept (N samples)` or `soft speech: dropped (conf 0.xx, N samples)`. Drafts are
+not logged.
+
+Known limits:
+
+- FluidAudio's `tempEndSample` clears only on a 0.85 chunk, so a long sentence
+  scored entirely between 0.4 and 0.84 can still be cut after 0.75 s. Not fixed
+  here.
+- The auto-stop watchdog observes only the VAD's state
+  (`AudioPipeline.swift`), so soft speech continuing past the timeout after the
+  last real trigger is cut by auto-stop. That speech was lost before this change.
+- If the decode task is busy for the whole soft span, `WindowTracker.notePause`
+  overwrites the pending pause and the window is mixed: today's behavior plus
+  some noise audio.
+- A dropped forced window confirms through its cut, so a word straddling the
+  cut is lost as a fragment in the next window. Soft spans of 12 s are rare.
+- The constants rest on one session on one microphone.
+
+Live check: dictate a sentence, pause briefly and say a short second one, and
+confirm both land; sit silent until auto-stop and confirm nothing invented
+appears; dictate a sentence, take an audible breath, stay silent to auto-stop,
+and confirm nothing is added.
 
 ## Environment prerequisites discovered
 
