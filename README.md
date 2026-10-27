@@ -44,6 +44,9 @@ A look can use any installed font, and any `.ttf`, `.otf` or `.ttc` file you put
 Folder). Those fonts load into Vizpr only and are never installed system-wide;
 Reload Fonts picks up files added while the app is running.
 
+Each look is a JSON file. `Vizpr/Looks/README.md` documents the format and how to
+make a new look.
+
 ## Installing (for others)
 
 This app is not notarized. To run a downloaded build, macOS Sequoia requires you
