@@ -199,11 +199,14 @@ struct AudioPipelineTests {
         try #require(await drained.entries.contains("drained:4"))
 
         // The gate withholds the leading silence, so the mark sits at least a
-        // speech's length into what the engine heard.
+        // speech's length into what the engine heard. It comes from the close
+        // of the trailing span, so the silence after it is held and the mark
+        // is the last thing the engine hears.
         #expect(engine.pauses.count == 1, "expected one pause mark, got \(engine.pauses)")
         if let mark = engine.pauses.first {
             #expect(mark >= speech.count)
-            #expect(mark <= engine.totalSamples)
+            #expect(mark == engine.totalSamples)
+            #expect(engine.softBatchEnds.last == mark, "the pause did not follow the trailing span's last batch")
         }
     }
 
@@ -240,12 +243,17 @@ struct AudioPipelineTests {
         }
         try #require(await drained.entries.contains("drained:5"))
 
-        // One pause for the speech end, and one for the soft span's own close,
-        // which is the last thing the engine hears after the soft batches.
-        try #require(engine.pauses.count == 2, "expected the speech end's pause and the close's pause, got \(engine.pauses)")
+        // One pause for the trailing span's close after the speech, and one
+        // for the re-onset span's own close, which is the last thing the
+        // engine hears after the soft batches.
+        try #require(engine.pauses.count == 2, "expected a trailing close and a re-onset close, got \(engine.pauses)")
         let softEnds = engine.softBatchEnds
         try #require(!softEnds.isEmpty, "no batch reached the engine flagged soft")
-        #expect(softEnds.allSatisfy { $0 > engine.pauses[0] }, "soft audio reached the engine before the speech end")
+        #expect(softEnds.contains(engine.pauses[0]), "the first pause did not follow a soft batch")
+        let trailing = softEnds.filter { $0 <= engine.pauses[0] }
+        let reonset = softEnds.filter { $0 > engine.pauses[0] && $0 <= engine.pauses[1] }
+        #expect(!trailing.isEmpty && !reonset.isEmpty, "soft batches missing from one span")
+        #expect(trailing.count + reonset.count == softEnds.count, "soft audio reached the engine after the last pause")
         #expect(softEnds.last == engine.pauses.last, "the close's pause did not follow the last soft batch")
         #expect(engine.totalSamples == engine.pauses.last, "audio reached the engine after the soft span closed")
     }

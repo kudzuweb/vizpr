@@ -1,5 +1,5 @@
-/// Absolute sample ranges of the session that only the speech gate's lower
-/// re-onset threshold let in. The engine appends one per soft batch, so
+/// Absolute sample ranges of the session that the speech gate forwarded after
+/// the VAD went inactive (a trailing span or a re-onset span). The engine appends one per soft batch, so
 /// contiguous batches merge into one run.
 struct SoftRuns: Equatable {
     private(set) var ranges: [Range<Int>] = []
@@ -24,7 +24,7 @@ struct SoftRuns: Equatable {
     }
 }
 
-/// The confidence bar on audio that only the lower re-onset threshold let in.
+/// The confidence bar on audio forwarded after the VAD went inactive.
 /// Noise that gets through the gate decodes at low confidence, so text from an
 /// entirely soft span is kept only above `Tuning.softSpeechMinConfidence`.
 /// Audio that mixes soft and ordinary samples is judged as it always was.

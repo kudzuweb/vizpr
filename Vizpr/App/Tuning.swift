@@ -25,9 +25,12 @@ enum Tuning {
     static let reonsetProbability: Float = 0.6
 
     /// How long after a speech end a soft span may open, milliseconds of
-    /// captured audio. Rests on one observation: the second sentence's first
-    /// qualifying chunk ended 0.77 s after the speech end. False opens scale
-    /// with the window length.
+    /// captured audio, counted from the trailing span's close. That puts the
+    /// window's far edge at least 3.77 s after the VAD's flip instead of 3.0 s,
+    /// so false-open exposure is at least a quarter higher than the evidence it
+    /// was set on, which was measured from the flip. Rests on one observation:
+    /// the second sentence's first qualifying chunk ended 0.77 s after the
+    /// speech end. False opens scale with the window length.
     static let reonsetWindowMs = 3_000
 
     /// `reonsetWindowMs` in samples.
@@ -37,7 +40,10 @@ enum Tuning {
     /// 0.77 s. Matches the VAD's 0.75 s minimum silence and the silence
     /// `WindowTracker.pauseStartToleranceSamples` assumes before a pause. On the
     /// recorded sequence three closes at 8.70 s, past the last word's end at
-    /// 8.56 s; two would close at 8.50 s and clip it.
+    /// 8.56 s; two would close at 8.50 s and clip it. The same three chunks end
+    /// the trailing span after a speech end: on the 2026-10-27 recording three
+    /// close at 6.70 s, past the word's end at 6.56 s, where two would close at
+    /// 6.40 s and clip it.
     static let softCloseChunks = 3
 
     /// Decoder confidence an entirely soft final or draft needs to keep its

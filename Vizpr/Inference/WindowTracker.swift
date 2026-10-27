@@ -4,7 +4,7 @@ import FluidAudio
 /// adaptive cadence PR 13) and the commit-time decode of the unconfirmed tail.
 ///
 /// Audio before `confirmedBoundary` is final text; audio after it is not. The
-/// engine confirms a window at each pause the VAD reports (`notePause`), or on
+/// engine confirms a window at each pause the gate reports (`notePause`), or on
 /// a clock when speech runs 12 s without one. Every decode is given
 /// `leftContextSamples` of audio before its window for acoustic context, and
 /// `TimedCut` keeps only the words that start inside the window, so no decode

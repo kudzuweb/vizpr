@@ -998,8 +998,8 @@ stand. The decisions, by step:
 - **The engine's input carries pause marks.** `TranscriptionEngine.transcribe`
   takes `AsyncStream<AudioInput>`, where `AudioInput` is `.samples([Float])` or
   `.pause`.
-  `AudioPipeline` yields `.pause` after the gate's batches for a
-  capture batch whose VAD updates contain a `speechEnd` event, one per event.
+  `AudioPipeline` yields `.pause` after the gate's batches when the gate
+  reports the close of a soft span, not for each VAD `speechEnd` event.
   The mark carries no position: the gate forwards about 1 s of audio after
   speech stops and then nothing, so the engine's own sample count when the
   mark arrives is the pause. The VAD still never decides commits; a mark only
@@ -1097,9 +1097,12 @@ stand. The decisions, by step:
 
 Known limits:
 
-- A VAD `speechEnd` needs 0.75 s of silence, so a window closes only at a real
-  pause. Text turns final no sooner than 0.75 s after the pause plus the
-  decode; speech with no pauses waits for the forced 10 s window.
+- A VAD `speechEnd` needs 0.75 s of silence and the trailing span then needs
+  three quiet chunks, so a window closes only at a real pause. Text turns final
+  no sooner than about 1.5 s after speech stops (the VAD's 0.75 s countdown plus
+  the 0.77 s trailing span) plus the decode, and a sentence followed by a pause
+  shorter than that shares its window with the next sentence; speech with no
+  pauses waits for the forced 10 s window.
 - White text waits for cleanup, so the lag after a pause is the cleanup time
   above; the two-sentence backstop bounds it while cleanup lags.
 - A forced window cuts on the clock, at the widest gap between words near
@@ -1116,8 +1119,9 @@ Known limits:
   or commit decode whose cut starts at a pause (or the session's start)
   therefore keeps words starting up to 0.25 s before the boundary
   (`WindowTracker.pauseStartToleranceSamples`). That is safe because the
-  0.75 s of audio before a pause scored as silence, so no word of the previous
-  window can start inside it. A forced boundary is the end of the previous
+  0.77 s before a pause scored under 0.5 for three chunks in a row. A very soft
+  word scoring between 0.2 and 0.5 that starts in the last 0.25 s before a
+  trailing close could be kept by both windows; the risk is low and accepted. A forced boundary is the end of the previous
   window's last kept word, inside speech, so its tolerance is 0.
 - The decode task is single, so a confirm delays the next draft refresh by one
   decode, about 150 ms.
@@ -1239,16 +1243,18 @@ The fix has two parts:
 
 - **A lower re-onset threshold for a window after each speech end.**
   `SpeechGate` opens a *soft span* when, within `Tuning.reonsetWindowMs` (3,000 ms
-  of captured audio, counted from the batch that flipped the gate to inactive),
+  of captured audio, counted from the close of the trailing span below),
   a completed chunk scores at least `Tuning.reonsetProbability` (0.6). The held
   batches and the opening batch are released in order. The span forwards until
   `Tuning.softCloseChunks` (3) consecutive completed chunks score under 0.5; the
   batch completing the third is forwarded, then the gate reports a close, which
   `AudioPipeline` turns into a `.pause`, so the soft span is its own pause
-  window. Nothing restarts the window and a soft span never opens one, so noise
-  cannot chain windows; a span that closes inside the window may re-open. The
-  flipping batch cannot open a span. A real VAD activation turns a soft span
-  into ordinary active audio.
+  window. Nothing restarts the window and a re-onset span never opens one, so
+  noise cannot chain windows; a span that closes inside the window may re-open.
+  A real VAD activation turns a soft span into ordinary active audio.
+- **A trailing soft span after each speech end** (added below, 2026-10-27).
+  The batch that flips the gate to inactive opens the trailing span, and only
+  a trailing span's close opens the window.
 - **A confidence bar on audio only the lower threshold let in.** Every batch
   the gate forwards carries `soft` (`AudioInput.samples([Float], soft: Bool)`).
   `FluidAudioASR` records the soft batches as absolute sample runs
@@ -1271,7 +1277,8 @@ The bar is the noise guard, and the threshold is not: 25 of 360 logged inactive
 chunks (6.9%) scored 0.6 or more, so false soft opens are routine. Inside a
 soft span the bar never removes a word the previous build kept, because that
 audio never reached the engine. The one exception is the `end()` release
-above. Breath is guarded only by the bar.
+above. Breath inside a re-onset span is guarded only by the bar, and breath
+inside a trailing span is not guarded at all, because it joins a mixed window.
 
 Constants, with their evidence in `Tuning.swift`:
 
@@ -1295,8 +1302,8 @@ not logged.
 Known limits:
 
 - FluidAudio's `tempEndSample` clears only on a 0.85 chunk, so a long sentence
-  scored entirely between 0.4 and 0.84 can still be cut after 0.75 s. Not fixed
-  here.
+  scored entirely between 0.4 and 0.84 can still be cut after 0.75 s. The
+  trailing span below mitigates it: the pause now waits for three quiet chunks.
 - The auto-stop watchdog observes only the VAD's state
   (`AudioPipeline.swift`), so soft speech continuing past the timeout after the
   last real trigger is cut by auto-stop. That speech was lost before this change.
@@ -1311,6 +1318,77 @@ Live check: dictate a sentence, pause briefly and say a short second one, and
 confirm both land; sit silent until auto-stop and confirm nothing invented
 appears; dictate a sentence, take an audible breath, stay silent to auto-stop,
 and confirm nothing is added.
+
+## The pause waits for three quiet chunks after a speech end (2026-10-27)
+
+On 2026-10-27 the last two words of a soft sentence never reached the text.
+FluidAudio ends a sentence on the first chunk under 0.70 and only a chunk at
+0.85 or more cancels the countdown; this sentence scored 0.68, 0.58 and 0.46.
+The gate stopped forwarding at that flip and `AudioPipeline` sent the engine a
+pause in the same batch, so the window was cut at 5.80 s in a word that ran to
+6.56 s.
+
+The change: the batch that flips the gate to inactive opens a trailing soft
+span (`SpeechGate.SoftSpan.trailing`), which forwards soft audio until
+`Tuning.softCloseChunks` (3) consecutive chunks score under 0.5. The flipping
+batch's own chunk is not counted, so at least three chunks (about 0.77 s)
+follow the flip. The close sends the only end-of-speech `.pause`, and the VAD's
+`speechEnd` no longer sends one. The re-onset window is counted from that close.
+No constant changed. `samplesSinceSpeechEnd` became `samplesSinceTrailingClose`.
+
+Replay (`gate-replay`, 1,600-sample batches, shipped `SpeechGate.swift`):
+`20261027-151825-raw.wav` (the murmur) forwards 0.00 to 6.70 s with one pause at
+6.70 s, where the previous gate cut at 5.80 s; chunk 18 scores 0.35, the trailing
+span opens at chunk 16 and again at chunk 23 after a real activation at chunk 19,
+and it closes at chunk 26. `20261026-151336-raw.wav` forwards 0.00 to 8.80 s with
+one pause at 8.80 s, with the second sentence 100% forwarded. The replay does not
+cover the window-start rule, because nothing at 0.6 or more follows the close on
+either file.
+
+Dev log: `gate: trailing open (chunk N)` marks a trailing span, and a `gate: soft
+close (chunk N)` line belongs to the kind of span the preceding open line names.
+`vad event: speechEnd` is still logged but is no longer when the pause is sent,
+so latency measured from it understates the time to the pause by at least 0.77 s.
+
+Measured over `~/Documents/dictation-dev/debug.log` (logged every fourth chunk):
+
+| Item | Content |
+|---|---|
+| Absorbed resumptions | 78 of 95 resumptions (82.1%) restart within 1.34 s of the VAD's reported end, before a minimal trailing span would close, so they share the previous sentence's window instead of getting a pause just before they start. |
+| Extension exposure | Of 78 logged inactive chunks inside a trailing span's first three chunks, 10 (12.8%) scored 0.5 or more and would extend it. This is per chunk and includes real speech, so it bounds noise from above; if chunks were independent, a span would be extended at least once with probability about 34% (inferred, an upper bound). |
+| Bounds | A trailing span has no length cap of its own. It ends on three chunks under 0.5, a real activation, or the session's end: key release in hold mode, a commit, or auto-stop in a latched session (2 to 60 s). Forced windows bound the decode size, not the span. |
+
+Known limits:
+
+- Soft speech, breath or noise that arrives before the trailing span closes is
+  forwarded into the previous sentence's mixed window and kept at any
+  confidence. Applying the bar to the soft words of a mixed window, by token
+  time against the soft runs, is the remedy and is not built.
+- When the next sentence starts before the trailing span closes, no pause
+  separates them. The first sentence stays a draft until the second sentence's
+  trailing span closes or a forced window cuts, and its cleanup, and so its
+  white text, waits with it.
+- Each final arrives at least 0.77 s later than before, about 1.5 s after speech
+  stops. Drafts are unchanged.
+- At least 0.77 s of post-speech audio now reaches the decoder after every
+  sentence. On the two saved files it added no words, which is thin evidence.
+- Counted from the trailing close, the re-onset window reaches at least 3.77 s
+  after the flip, so false opens are at least a quarter more frequent than
+  under the re-onset change.
+- The auto-stop watchdog counts from the VAD's flip, so a trailing span extended
+  by soft speech past the auto-stop timeout is cut by auto-stop, as re-onset
+  spans are.
+
+Live check: dictate a normal sentence, pause, then a softer sentence that trails
+off into a murmur, and confirm the ending reaches the text; dictate a sentence,
+pause briefly, then a short soft second one, and confirm it lands; dictate two
+sentences with a pause under a second between them and watch how long the first
+stays a draft and whether any word at the join is lost or doubled; dictate one
+sentence and judge the roughly 1.5 s delay before its final text; in a latched
+session, dictate a sentence, breathe audibly right after the last word, stay
+silent to auto-stop, and confirm nothing is added, then read `debug.log` for the
+`gate: trailing open` chunk and the next `gate: soft close` chunk (a close more
+than three chunks after the open means the breath extended the span).
 
 ## Environment prerequisites discovered
 

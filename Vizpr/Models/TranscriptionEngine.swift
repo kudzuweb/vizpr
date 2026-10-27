@@ -18,9 +18,10 @@ enum TokenEvent: Sendable, Equatable {
 }
 
 /// One element of a session's audio input. `.samples` is 16 kHz mono Float32
-/// audio; `soft` marks audio that only the speech gate's lower re-onset
-/// threshold let in, whose text the engine keeps only when the decoder is
-/// confident in it. `.pause` says the speaker has paused: every sample fed before it
+/// audio; `soft` marks audio forwarded after the VAD went inactive (a trailing
+/// span after a speech end, or a re-onset span), whose text the engine keeps
+/// only when the decoder is confident in it. `.pause` comes from the gate's
+/// close of a soft span and says the speaker has paused: every sample fed before it
 /// belongs to a completed utterance, so the engine may close a window there.
 /// It carries no position because the engine's own sample count when it
 /// receives the mark is the position. An engine that does not window by
