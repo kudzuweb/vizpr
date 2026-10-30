@@ -1000,10 +1000,11 @@ stand. The decisions, by step:
   `.pause`.
   `AudioPipeline` yields `.pause` after the gate's batches when the gate
   reports the close of a soft span, not for each VAD `speechEnd` event.
-  The mark carries no position: the gate forwards about 1 s of audio after
-  speech stops and then nothing, so the engine's own sample count when the
-  mark arrives is the pause. The VAD still never decides commits; a mark only
-  lets the engine close a window. *(2026-10-27: `.samples` also carries `soft`,
+  The mark carries no position: the gate forwards audio until the trailing
+  span closes, about 1.5 s after speech stops, and then nothing, so the
+  engine's own sample count when the mark arrives is the pause. The VAD still
+  never decides commits; a mark only lets the engine close a window.
+  *(2026-10-27: `.samples` also carries `soft`,
   and a soft span after a speech end is forwarded until it closes, ending at
   its own `.pause`; see "Speech that resumes soon after a pause is kept".)*
 
@@ -1369,9 +1370,21 @@ Known limits:
   trailing span closes or a forced window cuts, and its cleanup, and so its
   white text, waits with it.
 - Each final arrives at least 0.77 s later than before, about 1.5 s after speech
-  stops. Drafts are unchanged.
+  stops. Drafts keep refreshing through the trailing span, so each sentence end
+  adds at least one draft decode, and a draft spans every sentence that shares
+  the open window.
 - At least 0.77 s of post-speech audio now reaches the decoder after every
   sentence. On the two saved files it added no words, which is thin evidence.
+- A commit that arrives between the VAD's speech end and the trailing span's
+  close, roughly 0.75 to 1.6 s after speech stops, now waits for any draft
+  decode in flight plus a commit decode of the open window, where on `main` the
+  window had usually been confirmed already. On `debug.log` that is about 0.1
+  to 0.3 s (pause-window decode median 95 ms, commit decode median 122 ms);
+  the size is inferred from those decode times, because draft decodes are not
+  timed in the log.
+- When a forced window's last kept word ends inside a trailing span, the rest
+  of that span is an entirely soft window and the bar applies to it, so a
+  murmured ending cut this way can still be dropped below 0.8 confidence.
 - Counted from the trailing close, the re-onset window reaches at least 3.77 s
   after the flip, so false opens are at least a quarter more frequent than
   under the re-onset change.
@@ -1384,8 +1397,9 @@ off into a murmur, and confirm the ending reaches the text; dictate a sentence,
 pause briefly, then a short soft second one, and confirm it lands; dictate two
 sentences with a pause under a second between them and watch how long the first
 stays a draft and whether any word at the join is lost or doubled; dictate one
-sentence and judge the roughly 1.5 s delay before its final text; in a latched
-session, dictate a sentence, breathe audibly right after the last word, stay
+sentence and judge the roughly 1.5 s delay before its final text; in a latched session,
+dictate one sentence and press commit about one second after the last word, and
+judge whether the injection feels slower; in a latched session, dictate a sentence, breathe audibly right after the last word, stay
 silent to auto-stop, and confirm nothing is added, then read `debug.log` for the
 `gate: trailing open` chunk and the next `gate: soft close` chunk (a close more
 than three chunks after the open means the breath extended the span).

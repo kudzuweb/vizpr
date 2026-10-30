@@ -46,8 +46,8 @@ actor FluidAudioASR: TranscriptionEngine {
     private var sessionBuffer: [Float] = []
     private var bufferStartSample = 0
     /// Ranges of the session audio the speech gate forwarded after the VAD went
-    /// inactive (a trailing span or a re-onset span). A decode over audio inside one range keeps its text
-    /// only above `Tuning.softSpeechMinConfidence`.
+    /// inactive (a trailing span or a re-onset span). A decode over audio
+    /// inside one range keeps its text only above `Tuning.softSpeechMinConfidence`.
     private var softRuns = SoftRuns()
     /// Windows confirmed this session, including ones that kept no word.
     /// Drafts carry it as their window id, so a draft after a confirm never

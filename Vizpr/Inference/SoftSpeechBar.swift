@@ -1,6 +1,6 @@
 /// Absolute sample ranges of the session that the speech gate forwarded after
-/// the VAD went inactive (a trailing span or a re-onset span). The engine appends one per soft batch, so
-/// contiguous batches merge into one run.
+/// the VAD went inactive (a trailing span or a re-onset span). The engine
+/// appends one per soft batch, so contiguous batches merge into one run.
 struct SoftRuns: Equatable {
     private(set) var ranges: [Range<Int>] = []
 
