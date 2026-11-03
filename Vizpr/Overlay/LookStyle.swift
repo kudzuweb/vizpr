@@ -10,6 +10,7 @@ import Foundation
 /// restyles a look the user already made. Built-in looks opt into effects
 /// explicitly.
 struct LookStyle: Codable, Equatable, Sendable {
+    var glass = GlassStyle()
     var fill = FillStyle()
     var backdrop = BackdropStyle()
     var light = LightStyle()
@@ -24,6 +25,7 @@ struct LookStyle: Codable, Equatable, Sendable {
 
     func clamped() -> LookStyle {
         LookStyle(
+            glass: glass,
             fill: fill.clamped(),
             backdrop: backdrop.clamped(),
             light: light.clamped(),
@@ -35,6 +37,16 @@ struct LookStyle: Codable, Equatable, Sendable {
             dot: dot.clamped()
         )
     }
+}
+
+/// Which system glass the glass surface draws. `regular` is the default and
+/// what every look made before this field renders; `clear` is the more
+/// transparent glass, which the system docs pair with a dimming layer behind
+/// it (`BackdropStyle`) for legible text. Other surfaces ignore it.
+struct GlassStyle: Codable, Equatable, Sendable {
+    enum Variant: String, Codable, Sendable, CaseIterable { case regular, clear }
+
+    var variant = Variant.regular
 }
 
 /// How much the surface covers what is behind it. Glass: 0 is the system

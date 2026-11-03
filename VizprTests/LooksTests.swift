@@ -159,6 +159,11 @@ struct LooksTests {
         let clamped = settings.clamped()
         #expect(clamped.looks.count == VizprSettings.maxLooks)
         #expect(!clamped.looks.contains { $0.isBuiltIn })
+
+        var shadowsLiquidGlass = OverlayLook.liquidGlass
+        shadowsLiquidGlass.name = "Impostor"
+        settings.looks = [shadowsLiquidGlass]
+        #expect(settings.clamped().looks.isEmpty)
     }
 
     @Test("A dangling active look id resolves to Glass")

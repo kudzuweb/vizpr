@@ -131,8 +131,9 @@ enum LookFiles {
     }
 
     /// Decodes one file as `load` does, without the rules that need the other
-    /// files or the built-in ids. The test of `glass.json` and `slab.json`
-    /// reads them this way, because `load` refuses a built-in id.
+    /// files or the built-in ids. The test of the built-in
+    /// files (`glass.json`, `slab.json`, `liquid-glass.json`) reads them this
+    /// way, because `load` refuses a built-in id.
     static func read(_ file: URL, template: OverlayLook = .mergeTemplate) throws -> OverlayLook {
         try read(file, over: template == .mergeTemplate ? templateObject : encodedTemplate(template))
     }

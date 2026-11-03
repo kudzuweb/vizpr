@@ -17,6 +17,11 @@ struct SurfaceSection: View {
             LookSlider("Corner radius", editor.binding(\.cornerRadius),
                        range: OverlayLook.cornerRadiusRange, format: .points())
             if look.surface == .glass {
+                Picker("Glass", selection: editor.binding(\.style.glass.variant)) {
+                    ForEach(GlassStyle.Variant.allCases, id: \.self) { variant in
+                        Text(variant.rawValue.capitalized).tag(variant)
+                    }
+                }
                 ColorPicker("Tint", selection: editor.color(\.tintHex), supportsOpacity: false)
                 LookSlider("Tint strength", editor.binding(\.tintStrength),
                            range: OverlayLook.tintStrengthRange, format: .percent)

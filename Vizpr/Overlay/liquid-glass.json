@@ -1,0 +1,87 @@
+{
+  "colorsLinked" : false,
+  "cornerRadius" : 22,
+  "fontDesign" : "rounded",
+  "fontSize" : 16,
+  "id" : "6B1E5A4C-0D2F-4C8E-9A57-3F1B7D20A003",
+  "name" : "Liquid Glass",
+  "slab" : {
+    "meshColorsHex" : [
+      "1B1726",
+      "231C35",
+      "1A1624",
+      "251E3A",
+      "30264A",
+      "221B31",
+      "18141F",
+      "201A2C",
+      "16121C"
+    ],
+    "meshDrift" : 0.06,
+    "meshLoopSeconds" : 40
+  },
+  "style" : {
+    "backdrop" : {
+      "colorHex" : "000000",
+      "enabled" : true,
+      "feather" : 18,
+      "strength" : 0.3
+    },
+    "border" : {
+      "colorHex" : "FFFFFF",
+      "enabled" : false,
+      "opacity" : 0.25,
+      "width" : 1
+    },
+    "dot" : {
+      "pulse" : false,
+      "size" : 7
+    },
+    "dropShadow" : {
+      "colorHex" : "000000",
+      "enabled" : false,
+      "opacity" : 0.25,
+      "radius" : 8,
+      "x" : 0,
+      "y" : 3
+    },
+    "fill" : {
+      "colorHex" : "1C1828",
+      "frost" : 0
+    },
+    "glass" : {
+      "variant" : "clear"
+    },
+    "light" : {
+      "bevel" : 0,
+      "edgeLight" : 0,
+      "gloss" : 0,
+      "grain" : 0,
+      "sheen" : 0,
+      "sheenSweepSeconds" : 6
+    },
+    "outerGlow" : {
+      "colorHex" : "A16FDF",
+      "enabled" : false,
+      "radius" : 12,
+      "strength" : 0.5
+    },
+    "pane" : {
+      "paddingHorizontal" : 18,
+      "paddingVertical" : 12,
+      "width" : 560
+    },
+    "text" : {
+      "glowColorHex" : "FFFFFF",
+      "glowEnabled" : false,
+      "glowRadius" : 4,
+      "lineSpacing" : 0,
+      "weight" : "regular"
+    }
+  },
+  "surface" : "glass",
+  "textBaseHex" : "F2EEF8",
+  "tintHex" : "A16FDF",
+  "tintStrength" : 0.06,
+  "wordAppearance" : "instant"
+}
