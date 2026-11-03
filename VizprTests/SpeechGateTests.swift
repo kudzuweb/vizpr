@@ -17,6 +17,15 @@ struct SpeechGateTests {
         tags(output.batches)
     }
 
+    /// Ends speech the way the detector does: the flipping batch opens a
+    /// trailing span, and three quiet chunks close it. After this the hold is
+    /// empty and the gate behaves as it did before the span.
+    private func endSpeech(_ gate: inout SpeechGate) {
+        for tag in 100...103 {
+            _ = gate.feed(batch(Float(tag)), speechActive: false, chunkProbability: tag == 100 ? 0.2 : 0.1)
+        }
+    }
+
     @Test("Activation releases the held batches before the activating batch, in arrival order")
     func activationReleasesHoldInOrder() {
         var gate = SpeechGate()
@@ -31,6 +40,7 @@ struct SpeechGateTests {
     func inactiveHoldKeepsPreRoll() {
         var gate = SpeechGate()
         _ = gate.feed(batch(0), speechActive: true, chunkProbability: 0.9)
+        endSpeech(&gate)
         // 12 batches of 1,600 = 19,200 samples; the pre-roll is 16,384, so the
         // hold keeps 11 batches (17,600) and drops the oldest one.
         for tag in 1...12 {
@@ -45,6 +55,7 @@ struct SpeechGateTests {
     func endDiscardsSilentHold() {
         var gate = SpeechGate()
         _ = gate.feed(batch(0), speechActive: true, chunkProbability: 0.9)
+        endSpeech(&gate)
         for tag in 1...5 {
             _ = gate.feed(batch(Float(tag)), speechActive: false, chunkProbability: 0.49)
         }
@@ -55,6 +66,7 @@ struct SpeechGateTests {
     func endReturnsHeldSpeech() {
         var gate = SpeechGate()
         _ = gate.feed(batch(0), speechActive: true, chunkProbability: 0.9)
+        endSpeech(&gate)
         _ = gate.feed(batch(1), speechActive: false, chunkProbability: 0.2)
         _ = gate.feed(batch(2), speechActive: false, chunkProbability: 0.5)
         _ = gate.feed(batch(3), speechActive: false, chunkProbability: 0.2)
@@ -82,6 +94,7 @@ struct SpeechGateTests {
         var gate = SpeechGate()
         _ = gate.feed(batch(1), speechActive: false, chunkProbability: 0.7)
         _ = gate.feed(batch(2), speechActive: true, chunkProbability: 0.9)
+        endSpeech(&gate)
         _ = gate.feed(batch(3), speechActive: false, chunkProbability: 0.1)
         #expect(gate.end().isEmpty)
     }
@@ -90,6 +103,7 @@ struct SpeechGateTests {
     func trimmedFlagDoesNotRelease() {
         var gate = SpeechGate()
         _ = gate.feed(batch(0), speechActive: true, chunkProbability: 0.9)
+        endSpeech(&gate)
         _ = gate.feed(batch(1), speechActive: false, chunkProbability: 0.2)
         _ = gate.feed(batch(2), speechActive: false, chunkProbability: 0.55)   // flagged, under the re-onset bar
         for tag in 3..<23 {   // 20 batches = 2 s
@@ -98,20 +112,22 @@ struct SpeechGateTests {
         #expect(gate.end().isEmpty)
     }
 
-    @Test("The batch that flips the gate to inactive never sets the flag")
-    func flippingBatchDoesNotSetFlag() {
+    @Test("The batch that flips the gate to inactive is forwarded soft and opens a trailing span")
+    func flippingBatchOpensTrailingSpan() {
         var gate = SpeechGate()
         _ = gate.feed(batch(0), speechActive: true, chunkProbability: 0.9)
         let flip = gate.feed(batch(1), speechActive: false, chunkProbability: 0.9)
-        #expect(flip == SpeechGate.Output(), "the flipping batch opens no soft span")
-        _ = gate.feed(batch(2), speechActive: false, chunkProbability: nil)
-        #expect(gate.end().isEmpty)
+        #expect(tags(flip) == [1])
+        #expect(flip.batches.allSatisfy { $0.soft })
+        #expect(flip.softTransition == .trailingOpened)
+        #expect(gate.end().isEmpty, "the flipping batch leaves nothing in the hold")
     }
 
     @Test("A batch that completed no chunk never sets the flag")
     func noChunkDoesNotSetFlag() {
         var gate = SpeechGate()
         _ = gate.feed(batch(0), speechActive: true, chunkProbability: 0.9)
+        endSpeech(&gate)
         _ = gate.feed(batch(1), speechActive: false, chunkProbability: 0.1)
         _ = gate.feed(batch(2), speechActive: false, chunkProbability: nil)
         #expect(gate.end().isEmpty)
@@ -128,11 +144,13 @@ extension SpeechGateTests {
         [Float](repeating: tag, count: Self.chunk)
     }
 
-    /// A gate that has been active and just flipped to inactive on batch 1.
-    private func gateAfterSpeechEnd() -> SpeechGate {
+    /// A gate that was active, flipped to inactive on batch 1, and closed its
+    /// trailing span on batch 4 (three quiet chunks), so its window is open.
+    private func gateAfterTrailingClose() -> SpeechGate {
         var gate = SpeechGate()
         _ = gate.feed(chunkBatch(0), speechActive: true, chunkProbability: 0.95)
         _ = gate.feed(chunkBatch(1), speechActive: false, chunkProbability: 0.2)
+        for tag in 2...4 { _ = gate.feed(chunkBatch(Float(tag)), speechActive: false, chunkProbability: 0.1) }
         return gate
     }
 
@@ -142,7 +160,57 @@ extension SpeechGateTests {
         0.36, 0.34, 0.20, 0.18, 0.31, 0.66, 0.49, 0.64, 0.35, 0.16, 0.10, 0.10, 0.08, 0.06
     ]
 
-    @Test("The recorded second sentence opens a soft span, is forwarded soft, then closes with one pause")
+    /// Chunks 12 to 34 of the 2026-10-27 recording, whose soft sentence the
+    /// detector ended at chunk 16 while it was still being spoken.
+    private static let recordedMurmur: [Float] = [
+        0.71, 0.58, 0.43, 0.49, 0.66, 0.70, 0.35, 0.96, 0.68, 0.58, 0.46, 0.32,
+        0.23, 0.18, 0.10, 0.07, 0.05, 0.04, 0.04, 0.03, 0.02, 0.02, 0.01
+    ]
+
+    @Test("A trailing span after a speech end forwards three quiet chunks soft and closes with one pause")
+    func trailingSpanFollowsSpeechEnd() {
+        var gate = SpeechGate()
+        _ = gate.feed(chunkBatch(0), speechActive: true, chunkProbability: 0.95)
+        let flip = gate.feed(chunkBatch(1), speechActive: false, chunkProbability: 0.2)
+        #expect(tags(flip) == [1])
+        #expect(flip.batches.allSatisfy { $0.soft })
+        #expect(flip.softTransition == .trailingOpened)
+        for tag in 2...4 {
+            let output = gate.feed(chunkBatch(Float(tag)), speechActive: false, chunkProbability: 0.1)
+            #expect(tags(output) == [Float(tag)])
+            #expect(output.batches.allSatisfy { $0.soft })
+            #expect(output.softTransition == (tag == 4 ? .closed : nil))
+        }
+        #expect(gate.feed(chunkBatch(5), speechActive: false, chunkProbability: 0.1) == SpeechGate.Output())
+    }
+
+    @Test("The 2026-10-27 murmur is forwarded through its last word and closes with one pause")
+    func recordedMurmur() {
+        var gate = SpeechGate()
+        var transitions: [(chunk: Int, transition: SpeechGate.SoftTransition)] = []
+        for (offset, probability) in Self.recordedMurmur.enumerated() {
+            let chunkNumber = 12 + offset
+            let active = (12...15).contains(chunkNumber) || (19...22).contains(chunkNumber)
+            let output = gate.feed(
+                chunkBatch(Float(chunkNumber)), speechActive: active, chunkProbability: probability
+            )
+            if let transition = output.softTransition { transitions.append((chunkNumber, transition)) }
+            switch chunkNumber {
+            case 12...15, 19...22:
+                #expect(tags(output) == [Float(chunkNumber)])
+                #expect(output.batches.allSatisfy { !$0.soft }, "chunk \(chunkNumber) should be ordinary")
+            case 16...18, 23...26:
+                #expect(tags(output) == [Float(chunkNumber)])
+                #expect(output.batches.allSatisfy { $0.soft }, "chunk \(chunkNumber) should be soft")
+            default:
+                #expect(output.batches.isEmpty, "chunk \(chunkNumber) should be held")
+            }
+        }
+        #expect(transitions.map(\.chunk) == [16, 23, 26])
+        #expect(transitions.map(\.transition) == [.trailingOpened, .trailingOpened, .closed])
+    }
+
+    @Test("The recorded second sentence joins the first sentence's trailing span, which closes with one pause")
     func recordedSequence() {
         var gate = SpeechGate()
         var forwarded: [Float] = []
@@ -154,77 +222,77 @@ extension SpeechGateTests {
                 chunkBatch(Float(chunkNumber)), speechActive: chunkNumber <= 25, chunkProbability: probability
             )
             forwarded += tags(output)
-            if chunkNumber > 26 {
+            if chunkNumber >= 26 {
                 #expect(output.batches.allSatisfy { $0.soft }, "chunk \(chunkNumber) forwarded as ordinary audio")
             }
             if let transition = output.softTransition { transitions.append((chunkNumber, transition)) }
         }
-        // Chunk 29 opens the span and releases the hold (26 to 28) before it;
-        // chunk 34 completes the third low chunk and is the last forwarded.
-        #expect(forwarded.suffix(9) == [26, 27, 28, 29, 30, 31, 32, 33, 34])
+        // Chunks 29 (0.66) and 31 (0.64) reset the quiet count, so chunk 34
+        // completes the third low chunk and closes the span.
+        #expect(forwarded == (24...34).map(Float.init))
         #expect(!forwarded.contains(where: { $0 >= 35 }), "chunks 35 to 37 are held")
-        #expect(transitions.map(\.chunk) == [29, 34])
-        #expect(transitions.map(\.transition) == [.opened, .closed])
+        #expect(transitions.map(\.chunk) == [26, 34])
+        #expect(transitions.map(\.transition) == [.trailingOpened, .closed])
     }
 
-    @Test("Noise under the re-onset bar after a speech end forwards nothing")
+    @Test("Noise under the re-onset bar after a trailing close forwards nothing")
     func noiseForwardsNothing() {
-        var gate = gateAfterSpeechEnd()
+        var gate = gateAfterTrailingClose()
         for index in 0..<60 {
             let probability = 0.05 + 0.32 * Float((index * 7) % 10) / 9   // 0.05 to 0.37
-            let output = gate.feed(chunkBatch(2), speechActive: false, chunkProbability: probability)
+            let output = gate.feed(chunkBatch(5), speechActive: false, chunkProbability: probability)
             #expect(output == SpeechGate.Output())
         }
         #expect(gate.end().isEmpty)
     }
 
-    @Test("A chunk after the re-onset window has expired does not open a span")
-    func windowExpiry() {
-        var inside = gateAfterSpeechEnd()
-        let nearEnd = [Float](repeating: 2, count: Tuning.reonsetWindowSamples - 2 * Self.chunk)
-        let beforeWindowEnd = inside.feed(nearEnd, speechActive: false, chunkProbability: 0.1).softTransition
-        #expect(beforeWindowEnd == nil)
-        let atWindowEnd = inside.feed(chunkBatch(3), speechActive: false, chunkProbability: 0.7).softTransition
-        #expect(atWindowEnd == .opened)
-
-        var outside = gateAfterSpeechEnd()
-        let pastEnd = [Float](repeating: 2, count: Tuning.reonsetWindowSamples + 1_600)
-        let output = outside.feed(pastEnd, speechActive: false, chunkProbability: 0.7)
-        #expect(output == SpeechGate.Output())
+    @Test("The re-onset window is counted from the trailing close: open at 2.9 s, shut at 3.1 s")
+    func windowStartsAtTrailingClose() {
+        // The filler holds the quiet audio before the chunk that arrives
+        // `seconds` after the closing batch, which the chunk's own samples end.
+        func openedChunk(arrivingAt seconds: Double) -> SpeechGate.SoftTransition? {
+            var gate = gateAfterTrailingClose()
+            let filler = [Float](repeating: 5, count: Int(seconds * 16_000) - Self.chunk)
+            _ = gate.feed(filler, speechActive: false, chunkProbability: 0.1)
+            return gate.feed(chunkBatch(6), speechActive: false, chunkProbability: 0.7).softTransition
+        }
+        #expect(openedChunk(arrivingAt: 2.9) == .opened)
+        #expect(openedChunk(arrivingAt: 3.1) == nil)
     }
 
-    @Test("A soft span never opens a window of its own, but may re-open inside the one a speech end opened")
-    func noChaining() {
-        // A span that closes inside the window may re-open.
-        var gate = gateAfterSpeechEnd()
-        let firstOpen = gate.feed(chunkBatch(2), speechActive: false, chunkProbability: 0.7).softTransition
+    @Test("A re-onset span may re-open inside the window a trailing close opened")
+    func reopensInsideWindow() {
+        var gate = gateAfterTrailingClose()
+        let firstOpen = gate.feed(chunkBatch(5), speechActive: false, chunkProbability: 0.7).softTransition
         #expect(firstOpen == .opened)
-        for _ in 0..<2 { _ = gate.feed(chunkBatch(3), speechActive: false, chunkProbability: 0.1) }
-        let closed = gate.feed(chunkBatch(4), speechActive: false, chunkProbability: 0.1).softTransition
+        for _ in 0..<2 { _ = gate.feed(chunkBatch(6), speechActive: false, chunkProbability: 0.1) }
+        let closed = gate.feed(chunkBatch(7), speechActive: false, chunkProbability: 0.1).softTransition
         #expect(closed == .closed)
-        let reopened = gate.feed(chunkBatch(5), speechActive: false, chunkProbability: 0.7).softTransition
+        let reopened = gate.feed(chunkBatch(8), speechActive: false, chunkProbability: 0.7).softTransition
         #expect(reopened == .opened)
+    }
 
-        // A span that runs past the window and then closes opens no new window.
-        var late = gateAfterSpeechEnd()
-        let lateOpen = late.feed(chunkBatch(2), speechActive: false, chunkProbability: 0.7).softTransition
-        #expect(lateOpen == .opened)
+    @Test("A re-onset span that closes after the window has expired opens no new window")
+    func reonsetCloseOpensNoWindow() {
+        var gate = gateAfterTrailingClose()
+        let open = gate.feed(chunkBatch(5), speechActive: false, chunkProbability: 0.7).softTransition
+        #expect(open == .opened)
         let chunksInWindow = Tuning.reonsetWindowSamples / Self.chunk + 2
-        for _ in 0..<chunksInWindow { _ = late.feed(chunkBatch(3), speechActive: false, chunkProbability: 0.8) }
-        for _ in 0..<2 { _ = late.feed(chunkBatch(4), speechActive: false, chunkProbability: 0.1) }
-        let lateClose = late.feed(chunkBatch(5), speechActive: false, chunkProbability: 0.1).softTransition
-        #expect(lateClose == .closed)
-        let afterClose = late.feed(chunkBatch(6), speechActive: false, chunkProbability: 0.9)
+        for _ in 0..<chunksInWindow { _ = gate.feed(chunkBatch(6), speechActive: false, chunkProbability: 0.8) }
+        for _ in 0..<2 { _ = gate.feed(chunkBatch(7), speechActive: false, chunkProbability: 0.1) }
+        let close = gate.feed(chunkBatch(8), speechActive: false, chunkProbability: 0.1).softTransition
+        #expect(close == .closed)
+        let afterClose = gate.feed(chunkBatch(9), speechActive: false, chunkProbability: 0.9)
         #expect(afterClose == SpeechGate.Output())
     }
 
     @Test("A soft span's close emits exactly one pause, after its last batch")
     func closeEmitsOnePause() {
-        var gate = gateAfterSpeechEnd()
-        _ = gate.feed(chunkBatch(2), speechActive: false, chunkProbability: 0.7)
+        var gate = gateAfterTrailingClose()
+        _ = gate.feed(chunkBatch(5), speechActive: false, chunkProbability: 0.7)
         var closings = 0
         var lastTag: Float?
-        for tag in 3...12 {
+        for tag in 6...15 {
             let output = gate.feed(chunkBatch(Float(tag)), speechActive: false, chunkProbability: 0.1)
             if output.softTransition == .closed {
                 closings += 1
@@ -234,55 +302,59 @@ extension SpeechGateTests {
             }
         }
         #expect(closings == 1)
-        #expect(lastTag == 5, "the batch completing the third low chunk is forwarded before the pause")
+        #expect(lastTag == 8, "the batch completing the third low chunk is forwarded before the pause")
     }
 
     @Test("A chunk at 0.5 or more resets the quiet count, and a batch with no chunk does not advance it")
     func closeCounting() {
-        var gate = gateAfterSpeechEnd()
-        _ = gate.feed(chunkBatch(2), speechActive: false, chunkProbability: 0.7)
-        _ = gate.feed(chunkBatch(3), speechActive: false, chunkProbability: 0.1)
-        _ = gate.feed(chunkBatch(4), speechActive: false, chunkProbability: 0.1)
-        _ = gate.feed(chunkBatch(5), speechActive: false, chunkProbability: 0.5)   // resets
+        var gate = gateAfterTrailingClose()
+        _ = gate.feed(chunkBatch(5), speechActive: false, chunkProbability: 0.7)
         _ = gate.feed(chunkBatch(6), speechActive: false, chunkProbability: 0.1)
-        _ = gate.feed(chunkBatch(7), speechActive: false, chunkProbability: nil)
-        let still = gate.feed(chunkBatch(8), speechActive: false, chunkProbability: 0.1)
+        _ = gate.feed(chunkBatch(7), speechActive: false, chunkProbability: 0.1)
+        _ = gate.feed(chunkBatch(8), speechActive: false, chunkProbability: 0.5)   // resets
+        _ = gate.feed(chunkBatch(9), speechActive: false, chunkProbability: 0.1)
+        _ = gate.feed(chunkBatch(10), speechActive: false, chunkProbability: nil)
+        let still = gate.feed(chunkBatch(11), speechActive: false, chunkProbability: 0.1)
         #expect(still.softTransition == nil)
-        let closedAfterReset = gate.feed(chunkBatch(9), speechActive: false, chunkProbability: 0.1).softTransition
+        let closedAfterReset = gate.feed(chunkBatch(12), speechActive: false, chunkProbability: 0.1).softTransition
         #expect(closedAfterReset == .closed)
     }
 
     @Test("Opening releases the held batches and the opening batch, all soft, in order")
     func openingReleasesHold() {
-        var gate = gateAfterSpeechEnd()
-        _ = gate.feed(chunkBatch(2), speechActive: false, chunkProbability: 0.2)
-        let output = gate.feed(chunkBatch(3), speechActive: false, chunkProbability: 0.9)
-        #expect(tags(output) == [1, 2, 3])
+        var gate = gateAfterTrailingClose()
+        _ = gate.feed(chunkBatch(5), speechActive: false, chunkProbability: 0.2)
+        _ = gate.feed(chunkBatch(6), speechActive: false, chunkProbability: 0.2)
+        let output = gate.feed(chunkBatch(7), speechActive: false, chunkProbability: 0.9)
+        #expect(tags(output) == [5, 6, 7])
         #expect(output.batches.allSatisfy { $0.soft })
         #expect(output.softTransition == .opened)
     }
 
     @Test("A real activation during a soft span turns the rest into ordinary audio")
     func activationEndsSoftSpan() {
-        var gate = gateAfterSpeechEnd()
-        _ = gate.feed(chunkBatch(2), speechActive: false, chunkProbability: 0.7)
-        let output = gate.feed(chunkBatch(3), speechActive: true, chunkProbability: 0.95)
-        #expect(tags(output) == [3])
+        var gate = gateAfterTrailingClose()
+        _ = gate.feed(chunkBatch(5), speechActive: false, chunkProbability: 0.7)
+        let output = gate.feed(chunkBatch(6), speechActive: true, chunkProbability: 0.95)
+        #expect(tags(output) == [6])
         #expect(output.batches.allSatisfy { !$0.soft })
-        // The next speech end is a real flip and opens a fresh window.
-        _ = gate.feed(chunkBatch(4), speechActive: false, chunkProbability: 0.2)
-        let openedAfterActivation = gate.feed(chunkBatch(5), speechActive: false, chunkProbability: 0.7).softTransition
+        // The next speech end opens a fresh trailing span, and its close a fresh window.
+        let flip = gate.feed(chunkBatch(7), speechActive: false, chunkProbability: 0.2)
+        #expect(flip.softTransition == .trailingOpened)
+        for tag in 8...9 { _ = gate.feed(chunkBatch(Float(tag)), speechActive: false, chunkProbability: 0.1) }
+        let closed = gate.feed(chunkBatch(10), speechActive: false, chunkProbability: 0.1).softTransition
+        #expect(closed == .closed)
+        let openedAfterActivation = gate.feed(chunkBatch(11), speechActive: false, chunkProbability: 0.7).softTransition
         #expect(openedAfterActivation == .opened)
     }
 
     @Test("end() flags what it releases as soft once the session has triggered")
     func endFlagsSoftAfterTrigger() {
-        var gate = SpeechGate()
-        _ = gate.feed(chunkBatch(0), speechActive: true, chunkProbability: 0.95)
-        _ = gate.feed(chunkBatch(1), speechActive: false, chunkProbability: 0.2)
-        _ = gate.feed(chunkBatch(2), speechActive: false, chunkProbability: 0.55)
+        var gate = gateAfterTrailingClose()
+        _ = gate.feed(chunkBatch(5), speechActive: false, chunkProbability: 0.2)
+        _ = gate.feed(chunkBatch(6), speechActive: false, chunkProbability: 0.55)
         let released = gate.end()
-        #expect(tags(released) == [1, 2])
+        #expect(tags(released) == [5, 6])
         #expect(released.allSatisfy { $0.soft })
     }
 }

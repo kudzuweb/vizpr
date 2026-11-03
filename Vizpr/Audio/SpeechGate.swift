@@ -8,7 +8,10 @@
 /// bar than the VAD's trigger: soft speech that resumes right after a pause
 /// scores under the trigger threshold, so the VAD never fires on it. Audio
 /// forwarded on that lower bar is flagged `soft`, and the engine keeps its
-/// text only when the decoder is confident in it.
+/// text only when the decoder is confident in it. Each speech end is itself
+/// followed by a trailing soft span, so the pause lands only after three quiet
+/// chunks: the detector ends a sentence on its first weak chunk, often while
+/// the last word is still being spoken.
 ///
 /// Pure value type: `AudioPipeline` feeds it the detector's state per batch.
 struct SpeechGate {
@@ -25,8 +28,8 @@ struct SpeechGate {
     /// stays open while chunks keep scoring at or above it.
     private static let heldSpeechProbability: Float = 0.5
 
-    /// One batch to forward. `soft` is true when only the lower re-onset
-    /// threshold let it through.
+    /// One batch to forward. `soft` is true when the detector was inactive:
+    /// the trailing span after a speech end, or a re-onset span.
     struct Batch: Equatable {
         let samples: [Float]
         let soft: Bool
@@ -35,22 +38,22 @@ struct SpeechGate {
     /// A soft span opening or closing during a batch.
     enum SoftTransition: Equatable {
         case opened, closed
+        /// A trailing span opened at a speech end; used only for the dev log.
+        case trailingOpened
     }
 
     struct Output: Equatable {
         /// The batches to forward now, in order.
         var batches: [Batch] = []
-        /// `.closed` means the speaker paused: the caller sends a pause mark
-        /// after `batches`, so the soft span becomes its own window.
+        /// `.closed` means the speaker paused, after either kind of soft span:
+        /// the caller sends a pause mark after `batches`.
         var softTransition: SoftTransition?
     }
 
     private struct HeldBatch {
         let samples: [Float]
         /// The batch completed a chunk scoring at least 0.5 while the gate was
-        /// already inactive, so it may hold a word the trigger missed. The
-        /// batch that flips the gate to inactive never earns this: its chunk
-        /// still belongs to the speech that just ended.
+        /// already inactive, so it may hold a word the trigger missed.
         let mayHoldSpeech: Bool
     }
 
@@ -58,11 +61,17 @@ struct SpeechGate {
     private var heldSampleCount = 0
     private var everActive = false
     private var wasActive = false
-    /// Captured samples since the batch that flipped the gate to inactive, or
-    /// nil when no re-onset window is open. Only a flip from active opens one;
-    /// a soft span never does, so noise cannot chain windows.
-    private var samplesSinceSpeechEnd: Int?
-    private var inSoftSpan = false
+    /// Captured samples since the closing batch of the trailing span that
+    /// followed a real speech end, or nil when no re-onset window is open.
+    /// Only a trailing close opens one; a re-onset span never does, so noise
+    /// cannot chain windows.
+    private var samplesSinceTrailingClose: Int?
+    private var softSpan: SoftSpan?
+    /// The kinds differ in what their close does: only a trailing span's close
+    /// opens the re-onset window.
+    private enum SoftSpan {
+        case trailing, reonset
+    }
     private var consecutiveLowChunks = 0
 
     /// - Parameters:
@@ -73,31 +82,34 @@ struct SpeechGate {
         if speechActive {
             everActive = true
             wasActive = true
-            samplesSinceSpeechEnd = nil
-            inSoftSpan = false
+            samplesSinceTrailingClose = nil
+            softSpan = nil
             consecutiveLowChunks = 0
             return Output(batches: release(including: samples, soft: false))
         }
 
-        let flipping = wasActive
-        wasActive = false
-        if flipping {
-            samplesSinceSpeechEnd = 0
-        } else if let elapsed = samplesSinceSpeechEnd {
-            samplesSinceSpeechEnd = elapsed + samples.count
+        if wasActive {
+            wasActive = false
+            softSpan = .trailing
+            consecutiveLowChunks = 0
+            samplesSinceTrailingClose = nil
+            return Output(batches: release(including: samples, soft: true), softTransition: .trailingOpened)
+        }
+        if let elapsed = samplesSinceTrailingClose {
+            samplesSinceTrailingClose = elapsed + samples.count
         }
 
-        if inSoftSpan {
+        if softSpan != nil {
             return feedSoftSpan(samples, chunkProbability: chunkProbability)
         }
-        if !flipping, reonsetWindowIsOpen, (chunkProbability ?? 0) >= Tuning.reonsetProbability {
-            inSoftSpan = true
+        if reonsetWindowIsOpen, (chunkProbability ?? 0) >= Tuning.reonsetProbability {
+            softSpan = .reonset
             consecutiveLowChunks = 0
             return Output(batches: release(including: samples, soft: true), softTransition: .opened)
         }
 
         let scoredSpeech = (chunkProbability ?? 0) >= Self.heldSpeechProbability
-        held.append(HeldBatch(samples: samples, mayHoldSpeech: scoredSpeech && !flipping))
+        held.append(HeldBatch(samples: samples, mayHoldSpeech: scoredSpeech))
         heldSampleCount += samples.count
         let limit = everActive ? Self.preRollSamples : Self.untriggeredHoldSamples
         while let oldest = held.first, heldSampleCount - oldest.samples.count >= limit {
@@ -118,7 +130,7 @@ struct SpeechGate {
     }
 
     private var reonsetWindowIsOpen: Bool {
-        guard let elapsed = samplesSinceSpeechEnd else { return false }
+        guard let elapsed = samplesSinceTrailingClose else { return false }
         return elapsed <= Tuning.reonsetWindowSamples
     }
 
@@ -129,7 +141,10 @@ struct SpeechGate {
         guard let probability = chunkProbability else { return output }
         consecutiveLowChunks = probability < Self.heldSpeechProbability ? consecutiveLowChunks + 1 : 0
         if consecutiveLowChunks >= Tuning.softCloseChunks {
-            inSoftSpan = false
+            if softSpan == .trailing {
+                samplesSinceTrailingClose = 0
+            }
+            softSpan = nil
             consecutiveLowChunks = 0
             output.softTransition = .closed
         }

@@ -176,17 +176,12 @@ final class AudioPipeline {
                     #if DICT_DEV_LOG
                     Self.logSoftTransition(gated.softTransition, updates: updates, chunkCount: chunkCount)
                     #endif
-                    // A soft span ends at its own pause, so the engine closes
-                    // a window there.
+                    // Every speech end reaches the engine as the close of a
+                    // soft span, so the engine closes a window there.
                     if gated.softTransition == .closed {
                         fanOut.audio?.yield(.pause)
                     }
                     for update in updates {
-                        // After the gate's batches, so the engine has every
-                        // sample of the utterance when it sees the mark.
-                        if update.event?.kind == .speechEnd {
-                            fanOut.audio?.yield(.pause)
-                        }
                         #if DICT_DEV_LOG
                         chunkCount += 1
                         Self.logUpdate(update, chunkCount: chunkCount)
@@ -337,6 +332,8 @@ final class AudioPipeline {
             VizprTranscriptLogger.note(
                 String(format: "gate: soft open (chunk %d, prob %.2f)", chunk, updates.last?.probability ?? 0)
             )
+        case .trailingOpened:
+            VizprTranscriptLogger.note("gate: trailing open (chunk \(chunk))")
         case .closed:
             VizprTranscriptLogger.note("gate: soft close (chunk \(chunk))")
         case nil:
