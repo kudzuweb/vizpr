@@ -72,8 +72,11 @@ private final class InputRecordingEngine: TranscriptionEngine, @unchecked Sendab
     private let lock = NSLock()
     private var heardSamples = 0
     private var pauseSampleCounts: [Int] = []
+    private var softSampleCounts: [Int] = []
 
     var pauses: [Int] { lock.withLock { pauseSampleCounts } }
+    /// The engine's sample count at the end of each batch flagged soft.
+    var softBatchEnds: [Int] { lock.withLock { softSampleCounts } }
     var totalSamples: Int { lock.withLock { heardSamples } }
 
     func prepare() async throws {}
@@ -84,7 +87,9 @@ private final class InputRecordingEngine: TranscriptionEngine, @unchecked Sendab
                 for await input in audio {
                     lock.withLock {
                         switch input {
-                        case let .samples(samples): heardSamples += samples.count
+                        case let .samples(samples, soft):
+                            heardSamples += samples.count
+                            if soft { softSampleCounts.append(heardSamples) }
                         case .pause: pauseSampleCounts.append(heardSamples)
                         }
                     }
@@ -200,6 +205,49 @@ struct AudioPipelineTests {
             #expect(mark >= speech.count)
             #expect(mark <= engine.totalSamples)
         }
+    }
+
+    @MainActor
+    @Test("A soft span reaches the engine flagged soft and is closed by its own pause mark")
+    func softSpanIsFlaggedAndClosedByPause() async throws {
+        let speech = try fixtureSamples()
+        // The first 0.5 s of the fixture at 1% gain scores 0.6 or more on the
+        // bundled VAD without ever activating it (checked 2026-10-27), which
+        // is a soft re-onset: no `speechEnd` event follows it.
+        let quiet = speech.prefix(8_000).map { $0 * 0.01 }
+        let silence = [Float](repeating: 0, count: 3 * 16_000)
+        let (samples, feeder) = AsyncStream.makeStream(of: [Float].self)
+        let engine = InputRecordingEngine()
+        let drained = CallbackLog()
+        let pipeline = AudioPipeline(
+            source: FakeCaptureSource(stream: samples),
+            detector: SpeechDetector(model: try SpeechDetector.loadBundledModel()),
+            engine: engine,
+            autoStopTimeout: .seconds(VizprSettings.default.autoStopSeconds),
+            onSessionDrained: { epoch in await drained.add("drained:\(epoch)") },
+            onAutoStop: {}
+        )
+
+        pipeline.start(sessionEpoch: 5)
+        let composite = speech + silence + quiet + silence
+        for start in stride(from: 0, to: composite.count, by: 4096) {
+            feeder.yield(Array(composite[start ..< min(start + 4096, composite.count)]))
+        }
+        feeder.finish()
+        for _ in 0..<500 {
+            if await drained.entries.contains("drained:5") { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        try #require(await drained.entries.contains("drained:5"))
+
+        // One pause for the speech end, and one for the soft span's own close,
+        // which is the last thing the engine hears after the soft batches.
+        try #require(engine.pauses.count == 2, "expected the speech end's pause and the close's pause, got \(engine.pauses)")
+        let softEnds = engine.softBatchEnds
+        try #require(!softEnds.isEmpty, "no batch reached the engine flagged soft")
+        #expect(softEnds.allSatisfy { $0 > engine.pauses[0] }, "soft audio reached the engine before the speech end")
+        #expect(softEnds.last == engine.pauses.last, "the close's pause did not follow the last soft batch")
+        #expect(engine.totalSamples == engine.pauses.last, "audio reached the engine after the soft span closed")
     }
 
     @MainActor

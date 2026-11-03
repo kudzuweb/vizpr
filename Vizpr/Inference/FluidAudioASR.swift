@@ -45,6 +45,10 @@ actor FluidAudioASR: TranscriptionEngine {
     private var tracker = WindowTracker(minTailSamples: FluidAudioASR.draftMinTailSamples)
     private var sessionBuffer: [Float] = []
     private var bufferStartSample = 0
+    /// Ranges of the session audio that only the speech gate's lower re-onset
+    /// threshold let in. A decode over audio inside one range keeps its text
+    /// only above `Tuning.softSpeechMinConfidence`.
+    private var softRuns = SoftRuns()
     /// Windows confirmed this session, including ones that kept no word.
     /// Drafts carry it as their window id, so a draft after a confirm never
     /// carries an id TokenStream has already passed.
@@ -69,6 +73,7 @@ actor FluidAudioASR: TranscriptionEngine {
         tracker = WindowTracker(minTailSamples: Self.draftMinTailSamples)
         sessionBuffer.removeAll(keepingCapacity: true)
         bufferStartSample = 0
+        softRuns = SoftRuns()
         windowsProcessed = 0
         lastDraftText = ""
         decodingOpen = true
@@ -83,12 +88,17 @@ actor FluidAudioASR: TranscriptionEngine {
     /// The next decode the session's decode task should run.
     private enum Work {
         case window(WindowTracker.WindowPlan, samples: [Float])
-        case draft(samples: [Float], windowID: Int)
+        /// `entirelySoft`: the whole draft range lies inside one soft run.
+        case draft(samples: [Float], windowID: Int, entirelySoft: Bool)
     }
 
     /// Ingest session audio. Buffer bookkeeping only; never decodes.
-    private func ingest(_ samples: [Float], session: Int) {
+    private func ingest(_ samples: [Float], soft: Bool, session: Int) {
         guard session == sessionCounter else { return }
+        if soft {
+            let start = tracker.totalSamples
+            softRuns.append(start ..< start + samples.count)
+        }
         sessionBuffer.append(contentsOf: samples)
         tracker.append(sampleCount: samples.count)
         trimBuffer()
@@ -114,7 +124,9 @@ actor FluidAudioASR: TranscriptionEngine {
         // after a confirmation — acceptable for display-only drafts.
         let range = max(request.draftStart, request.range.lowerBound) ..< request.range.upperBound
         guard let samples = slice(range) else { return nil }
-        return .draft(samples: samples, windowID: windowsProcessed)
+        return .draft(
+            samples: samples, windowID: windowsProcessed, entirelySoft: softRuns.covers(range)
+        )
     }
 
     /// The session audio at an absolute range, or nil when the buffer no longer
@@ -142,6 +154,7 @@ actor FluidAudioASR: TranscriptionEngine {
         if reclaimable > 0, reclaimable <= sessionBuffer.count {
             sessionBuffer.removeFirst(reclaimable)
             bufferStartSample += reclaimable
+            softRuns.trim(before: bufferStartSample)
         }
     }
 
@@ -203,9 +216,23 @@ actor FluidAudioASR: TranscriptionEngine {
                 startTolerance: plan.startTolerance
             )
             if let keptEnd = cut.keptEnd, !cut.text.isEmpty {
-                Self.yieldFinal(cut, kind: plan.kind == .forced ? "forced" : "pause", to: continuation)
-                if plan.kind == .forced {
-                    confirmedThrough = min(decodeStart + keptEnd, cutEnd)
+                let span = plan.cutStart ..< cutEnd
+                let entirelySoft = softRuns.covers(span)
+                let keeps = SoftSpeechBar.keeps(cut, entirelySoft: entirelySoft)
+                #if DICT_DEV_LOG
+                if entirelySoft {
+                    Self.logSoftSpeech(kept: keeps, confidence: cut.confidence, samples: span.count)
+                }
+                #endif
+                if keeps {
+                    Self.yieldFinal(cut, kind: plan.kind == .forced ? "forced" : "pause", to: continuation)
+                    if plan.kind == .forced {
+                        confirmedThrough = min(decodeStart + keptEnd, cutEnd)
+                    }
+                } else {
+                    // Treated as an empty cut. A draft of the window may be on
+                    // screen, so clear it before the window id moves on.
+                    continuation.yield(.draft(windowID: windowsProcessed, text: ""))
                 }
             }
         }
@@ -227,10 +254,23 @@ actor FluidAudioASR: TranscriptionEngine {
 
     /// The decode plan for the commit-time tail, or nil when nothing is
     /// unconfirmed or the session has moved.
-    private func takeCommitPlan(session: Int) -> (plan: WindowTracker.WindowPlan, samples: [Float])? {
+    private func takeCommitPlan(session: Int) -> CommitWork? {
         guard session == sessionCounter, let plan = tracker.commitPlan(),
               let samples = slice(plan.range) else { return nil }
-        return (plan, samples)
+        return CommitWork(
+            plan: plan, samples: samples, windowID: windowsProcessed,
+            entirelySoft: softRuns.covers(plan.cutStart ..< plan.cutEnd)
+        )
+    }
+
+    /// The commit decode: what to decode and what its cut is judged against.
+    private struct CommitWork {
+        let plan: WindowTracker.WindowPlan
+        let samples: [Float]
+        /// The draft window the commit final supersedes.
+        let windowID: Int
+        /// The cut span lies inside one soft run.
+        let entirelySoft: Bool
     }
 
     /// - Parameter modelsDirectory: directory holding the v2 `.mlmodelc` set.
@@ -314,8 +354,8 @@ actor FluidAudioASR: TranscriptionEngine {
                     for await input in audio {
                         try Task.checkCancellation()
                         switch input {
-                        case let .samples(samples):
-                            await self.ingest(samples, session: session)
+                        case let .samples(samples, soft):
+                            await self.ingest(samples, soft: soft, session: session)
                         case .pause:
                             await self.notePause(session: session)
                         }
@@ -334,26 +374,42 @@ actor FluidAudioASR: TranscriptionEngine {
 
                     // The tail's final text is one more decode over everything
                     // past the boundary, with left context.
-                    if let (plan, samples) = await self.takeCommitPlan(session: session) {
+                    if let work = await self.takeCommitPlan(session: session) {
                         #if DICT_DEV_LOG
                         let started = ContinuousClock.now
                         #endif
-                        let result = await self.decode(samples)
+                        let result = await self.decode(work.samples)
                         let cut = result.map {
                             TimedCut.cut(
-                                result: $0, decodeStart: plan.range.lowerBound,
-                                cutStart: plan.cutStart, cutEnd: plan.cutEnd,
-                                startTolerance: plan.startTolerance
+                                result: $0, decodeStart: work.plan.range.lowerBound,
+                                cutStart: work.plan.cutStart, cutEnd: work.plan.cutEnd,
+                                startTolerance: work.plan.startTolerance
                             )
                         }
                         #if DICT_DEV_LOG
                         let outcome = cut?.text.isEmpty == false ? "decoded" : "empty"
                         VizprTranscriptLogger.note(
-                            "commit tail: \(outcome) \(Self.milliseconds(since: started)) ms over \(samples.count) samples"
+                            "commit tail: \(outcome) \(Self.milliseconds(since: started)) ms over \(work.samples.count) samples"
                         )
                         #endif
                         if let cut, !cut.text.isEmpty {
-                            Self.yieldFinal(cut, kind: "commit", to: continuation)
+                            let keeps = SoftSpeechBar.keeps(cut, entirelySoft: work.entirelySoft)
+                            #if DICT_DEV_LOG
+                            if work.entirelySoft {
+                                Self.logSoftSpeech(
+                                    kept: keeps, confidence: cut.confidence, samples: work.plan.cutEnd - work.plan.cutStart
+                                )
+                            }
+                            #endif
+                            if keeps {
+                                Self.yieldFinal(cut, kind: "commit", to: continuation)
+                            } else {
+                                // `emitTailDraft` refuses after `closeDecoding`, and
+                                // `TokenStream.commit()` injects the last draft, so
+                                // clear it here. The id is not older than any
+                                // draft the session sent.
+                                continuation.yield(.draft(windowID: work.windowID, text: ""))
+                            }
                         }
                     } else {
                         #if DICT_DEV_LOG
@@ -393,11 +449,12 @@ actor FluidAudioASR: TranscriptionEngine {
                             plan, result: result, decodeMs: decodeMs, session: session, to: continuation
                         )
                         if !confirmed { break drain }
-                    case let .draft(samples, windowID):
+                    case let .draft(samples, windowID, entirelySoft):
                         if let result = await self.decode(samples) {
-                            await self.emitTailDraft(
-                                result.text, windowID: windowID, session: session, to: continuation
+                            let text = SoftSpeechBar.draftText(
+                                result.text, confidence: result.confidence, entirelySoft: entirelySoft
                             )
+                            await self.emitTailDraft(text, windowID: windowID, session: session, to: continuation)
                         }
                     }
                     if case .draft = work { break drain }
@@ -421,6 +478,16 @@ actor FluidAudioASR: TranscriptionEngine {
     }
 
     #if DICT_DEV_LOG
+    /// Whether an entirely soft span's text was kept, with the decoder's
+    /// confidence and the span length. Numbers only.
+    private nonisolated static func logSoftSpeech(kept: Bool, confidence: Float, samples: Int) {
+        VizprTranscriptLogger.note(
+            kept
+                ? "soft speech: kept (\(samples) samples)"
+                : String(format: "soft speech: dropped (conf %.2f, %d samples)", confidence, samples)
+        )
+    }
+
     private nonisolated static func milliseconds(since start: ContinuousClock.Instant) -> Int {
         (ContinuousClock.now - start).devLogMilliseconds
     }

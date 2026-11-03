@@ -1004,12 +1004,15 @@ stand. The decisions, by step:
 
 - **The engine's input carries pause marks.** `TranscriptionEngine.transcribe`
   takes `AsyncStream<AudioInput>`, where `AudioInput` is `.samples([Float])` or
-  `.pause`. `AudioPipeline` yields `.pause` after the gate's batches for a
+  `.pause`.
+  `AudioPipeline` yields `.pause` after the gate's batches for a
   capture batch whose VAD updates contain a `speechEnd` event, one per event.
   The mark carries no position: the gate forwards about 1 s of audio after
   speech stops and then nothing, so the engine's own sample count when the
   mark arrives is the pause. The VAD still never decides commits; a mark only
-  lets the engine close a window.
+  lets the engine close a window. *(2026-10-27: `.samples` also carries `soft`,
+  and a soft span after a speech end is forwarded until it closes, ending at
+  its own `.pause`; see "Speech that resumes soon after a pause is kept".)*
 
 - **The engine owns its windows.** `SlidingWindowAsrManager` is gone; the
   batch `AsrManager` does every decode, in one decode task per session.
@@ -1259,6 +1262,156 @@ refraction or thickness, so the variant is the only glass knob a look can have.
   mode. Looks on the regular variant render as before with the setting on or off.
 - **Not verified here.** The appearance cannot be captured from the build shell
   (no Screen Recording permission); the live check is by eye.
+
+## Tap safety: give up a refused tap, quit when the bundle disappears (2026-10-27)
+
+**Incident.** On 2026-10-27 a Debug Vizpr whose bundle had been deleted while it
+ran blocked the keyboard for eight minutes. The tap is an active `defaultTap`, so
+keystrokes pass through Vizpr and are re-posted on its behalf. Once the
+executable was gone, `tccd` could not resolve the process to a path
+(`proc_pidpath_audittoken() failed ... No such file or directory`), and from
+02:55:43 WindowServer refused Vizpr's events ("Sender is prohibited from
+synthesizing events"). The tap timed out 17 times; each time the callback and the
+2 s watchdog re-enabled it at once, so input flowed only in the instants between
+(the two keyDowns delivered in eight minutes landed in the same millisecond as the
+first two timeout log lines). The hotkey thread stayed healthy, and `isTapHealthy`
+reported healthy throughout. Evidence: `debug.log` and the unified log for
+02:40 to 03:15 CDT.
+
+**Rule 1: a tap the system keeps disabling is given up.** `TapDisablePolicy`
+(pure) counts timeout disables in a sliding window: `Tuning.tapDisableLimit` (3)
+inside `Tuning.tapDisableWindowSeconds` (30). The counter is fed at exactly two
+sites in `HotkeyMonitor`, the callback's `.tapDisabledByTimeout` case and the
+watchdog's found-dead branch, both through `recoverFromTimeout`; never from
+`stop()`, a suspend, or `.tapDisabledByUserInput` (secure input, which re-enables
+without counting). At the limit the monitor:
+
+1. disables the tap and clears the shared port at once (inside the callback, where
+   invalidating the port could be unsafe), which frees input;
+2. queues the rest of the teardown on the hotkey thread's next pass, which also
+   cancels any session;
+3. latches. `start()` returns false and creates nothing until `resetGiveUp()`.
+
+Only the menu's `Restart Hotkey` item clears the latch. `applySettings` (every
+settings change, including an overlay drag), `grantAccessibility` and
+`startHotkeyIfPermitted` never do, because they call `start()` with no intent to
+re-arm. `AppDelegate` shows a notice on give-up and, while given up, the menu
+shows the notice and `Restart Hotkey` in place of `Grant Accessibility…`.
+`isTapHealthy` is false once given up. Each counted disable logs its running
+count (unified log, and the dev log in Debug). Against the incident log the rule
+gives up at 02:55:54.6, eleven seconds after the refusals began. In normal use the
+dev log shows at most one disable per launch window.
+
+**Rule 2: quit when the app's own files disappear.**
+
+| Part | Behavior |
+|---|---|
+| Launch check | First in `applicationDidFinishLaunching`, before any audio pipeline or tap. `proc_pidpath(getpid())` must resolve and name the same file as `Bundle.main.executableURL` by device and inode (not by path string, which differs through a symlinked folder); `default.metallib`, `Models` and `mlx-swift_Cmlx.bundle` must exist under `Contents/Resources`. A failure calls `failLoudly` and returns, so a test host never installs the tap. The pure function is `BundleIdentity.firstFailure`. |
+| While running | `BundleWatcher` on its own queue: a vnode watch on the executable for delete or rename (primary; catches an atomic replace, where `proc_pidpath` keeps answering) and a 2 s `proc_pidpath` poll. Renaming the whole bundle fires neither, correctly, because the identity stays resolvable. An in-place rebuild of a running Debug app replaces the executable and quits that instance; that is intended. |
+| Shutdown | In order: arm `_exit(EXIT_FAILURE)` at 5 s on its own queue (`_exit`, not `exit`, which runs atexit handlers and C++ destructors that can block on a lock a wedged thread holds); log the reason; disable the tap, latch, and queue its teardown on the hotkey thread, signalling a semaphore. If that signals within 1 s the `_exit` moves out to 60 s and the alert shows on main (dismissing it terminates). If not, the hotkey thread is wedged: the 5 s `_exit` stands and no alert is shown. Terminating covers the audio pipeline (`applicationWillTerminate`). |
+| Test host | The tap is torn down but nothing quits, matching `failLoudly`. |
+
+**Not covered.** The gave-up path and the hotkey-thread teardown need a live tap
+and are untested; `docs/manual-hotkey-tests.md` lists the hand checks. The
+`BundleWatcher` logic was exercised in a harness with no tap (delete, atomic
+replace, whole-bundle rename), not in Vizpr itself.
+
+**Next.** Option 3 of the investigation: put only the events that must be
+consumed (flagsChanged) on the active tap and move keyDown to a second,
+listen-only tap, so a wedged active tap cannot block typing. It rewrites the tap
+setup that PR #27 (`hotkey-trigger`) also changes, so it is built after #27
+merges. If #27 merges second, the rebase keeps #27's `edges.reset(isKeyDown:)` in
+`reEnableTap` and its `keyUp` in the mask, and must confirm `setSuspended` does
+not feed the disable counter.
+
+## Speech that resumes soon after a pause is kept (2026-10-27)
+
+On 2026-10-26 a second sentence spoken after a short pause never reached the
+engine. Replay of the saved raw audio reproduces the gated file's length to
+0.01 s. The VAD's `triggered` state fires again only on a chunk scoring 0.85 or
+more, and this microphone scored the second sentence's chunks 0.31, 0.66, 0.49,
+0.64, 0.35, 0.16 (chunks 28 to 33). The gate forwards nothing while the VAD is
+untriggered. Its held-speech flag (0.5) marked two chunks, but the hold keeps
+only 1 s after a trigger, so those batches were trimmed before the session
+ended. Level cannot tell this speech from the room: the speech chunks had rms
+0.0080 to 0.0086 against noise at 0.0066 to 0.0107.
+
+The fix has two parts:
+
+- **A lower re-onset threshold for a window after each speech end.**
+  `SpeechGate` opens a *soft span* when, within `Tuning.reonsetWindowMs` (3,000 ms
+  of captured audio, counted from the batch that flipped the gate to inactive),
+  a completed chunk scores at least `Tuning.reonsetProbability` (0.6). The held
+  batches and the opening batch are released in order. The span forwards until
+  `Tuning.softCloseChunks` (3) consecutive completed chunks score under 0.5; the
+  batch completing the third is forwarded, then the gate reports a close, which
+  `AudioPipeline` turns into a `.pause`, so the soft span is its own pause
+  window. Nothing restarts the window and a soft span never opens one, so noise
+  cannot chain windows; a span that closes inside the window may re-open. The
+  flipping batch cannot open a span. A real VAD activation turns a soft span
+  into ordinary active audio.
+- **A confidence bar on audio only the lower threshold let in.** Every batch
+  the gate forwards carries `soft` (`AudioInput.samples([Float], soft: Bool)`).
+  `FluidAudioASR` records the soft batches as absolute sample runs
+  (`SoftRuns`, merged when contiguous, trimmed with the buffer). A final whose
+  cut span `[cutStart, cutEnd)` lies inside one run (the 2 s of left context
+  and the start tolerance are not part of the span), and a draft whose range
+  does, keeps its text only at `Tuning.softSpeechMinConfidence` (0.8) or more.
+  A final that mixes soft and ordinary audio is judged as before. A dropped
+  final is an empty cut: the window still advances and nothing re-decodes it.
+  The engine also publishes an empty draft for that window id, so a draft
+  already on screen cannot reach `TokenStream.commit()`, which returns settled
+  + live + draft. A dropped commit final yields the same empty draft directly
+  before the stream finishes, because `emitTailDraft` refuses after
+  `closeDecoding`. No entirely soft audio under the bar reaches the return
+  value of `TokenStream.commit()` by a final, a draft or a capped settle.
+  `end()` flags the batches it releases soft once the session has triggered, so
+  a trailing flagged word that decodes under 0.8 is now dropped.
+
+The bar is the noise guard, and the threshold is not: 25 of 360 logged inactive
+chunks (6.9%) scored 0.6 or more, so false soft opens are routine. Inside a
+soft span the bar never removes a word the previous build kept, because that
+audio never reached the engine. The one exception is the `end()` release
+above. Breath is guarded only by the bar.
+
+Constants, with their evidence in `Tuning.swift`:
+
+| Constant | Value | Margin or count |
+|---|---|---|
+| `reonsetProbability` | 0.6 | Room noise peaked at 0.37 (0.23 margin); the speech chunks that open it scored 0.66 and 0.64 (0.04 to 0.06). First move if a soft resumption is missed: 0.55. |
+| `reonsetWindowMs` | 3,000 | One observation: the first qualifying chunk ended 0.77 s after the flip. False opens scale with the length. |
+| `softSpeechMinConfidence` | 0.8 | Speech slices decoded at 0.944 and 0.962, noise slices at 0.10 to 0.51; 9 of 583 logged finals (1.5%) and 5 of 178 finals of three words or fewer (2.8%) are under 0.80. |
+| `softCloseChunks` | 3 | About 0.77 s, matching the VAD's 0.75 s minimum silence. On the recorded sequence it closes on chunk 34 (8.70 s), past the last word at 8.56 s; two would close at 8.50 s and clip it. |
+
+Replay of `20261026-151336-raw.wav` through the shipped gate: ordinary audio
+0.00 to 6.60 s, then a soft span from 6.60 to 8.80 s (opened by chunk 29, closed
+by chunk 34, one pause), 100% of the second sentence's words (6.96 to 8.56 s)
+forwarded, 8.80 s of 9.48 s in all.
+
+Dev log (Debug builds, numbers only): `gate: soft open (chunk N, prob 0.xx)`,
+`gate: soft close (chunk N)`, and for each entirely soft final `soft speech:
+kept (N samples)` or `soft speech: dropped (conf 0.xx, N samples)`. Drafts are
+not logged.
+
+Known limits:
+
+- FluidAudio's `tempEndSample` clears only on a 0.85 chunk, so a long sentence
+  scored entirely between 0.4 and 0.84 can still be cut after 0.75 s. Not fixed
+  here.
+- The auto-stop watchdog observes only the VAD's state
+  (`AudioPipeline.swift`), so soft speech continuing past the timeout after the
+  last real trigger is cut by auto-stop. That speech was lost before this change.
+- If the decode task is busy for the whole soft span, `WindowTracker.notePause`
+  overwrites the pending pause and the window is mixed: today's behavior plus
+  some noise audio.
+- A dropped forced window confirms through its cut, so a word straddling the
+  cut is lost as a fragment in the next window. Soft spans of 12 s are rare.
+- The constants rest on one session on one microphone.
+
+Live check: dictate a sentence, pause briefly and say a short second one, and
+confirm both land; sit silent until auto-stop and confirm nothing invented
+appears; dictate a sentence, take an audible breath, stay silent to auto-stop,
+and confirm nothing is added.
 
 ## Environment prerequisites discovered
 
